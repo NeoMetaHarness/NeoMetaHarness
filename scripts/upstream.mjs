@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Upstream drift checker. Read-only against GitHub/npm; writes only the local lock file.
-//   pnpm upstream:check                 report latest vs pinned, and fork drift
+//   pnpm upstream:check                 report latest vs pinned (source repos, no forks)
 //   pnpm upstream:check --write-lock    pin everything to what is current now
 //   pnpm upstream:check --only <name>   one upstream
 import { execFileSync } from 'node:child_process'
@@ -50,15 +50,6 @@ function resolveLatest(u) {
   return commit ? { kind: 'commit', ref: commit.sha.slice(0, 12), date: commit.commit.committer.date } : { kind: 'error', ref: 'unreachable' }
 }
 
-function forkDrift(u) {
-  if (!u.fork) return null
-  const up = gh(`repos/${u.upstream}`), fk = gh(`repos/${u.fork}`)
-  if (!up || !fk) return 'unreachable'
-  const [owner, name] = u.fork.split('/')
-  const cmp = gh(`repos/${u.upstream}/compare/${up.default_branch}...${owner}:${name}:${fk.default_branch}`)
-  return cmp ? `${cmp.ahead_by} ahead / ${cmp.behind_by} behind` : 'compare failed'
-}
-
 const rows = []
 const entries = [
   ...Object.entries(reg.upstreams ?? {}),
@@ -69,13 +60,11 @@ for (const [name, u] of entries) {
   const latest = resolveLatest(u)
   const pin = lock.pins[name]
   const status = latest.kind === 'error' ? 'ERROR' : !pin ? 'unpinned' : pin.ref === latest.ref ? 'current' : u.adopted ? 'review' : 'bump available'
-  rows.push({ name, channel: u.channel, pinned: pin?.ref ?? '-', latest: latest.ref, status, fork: forkDrift(u) ?? '-' })
+  rows.push({ name, channel: u.channel, pinned: pin?.ref ?? '-', latest: latest.ref, status })
   if (writeLock && latest.kind !== 'error') lock.pins[name] = { kind: latest.kind, ref: latest.ref, upstream: u.upstream, pinned_on: new Date().toISOString().slice(0, 10) }
 }
 
 console.table(rows)
-const forkWarn = rows.filter(r => /^[1-9]\d* ahead/.test(r.fork))
-if (forkWarn.length) console.warn(`⚠ forks with commits ahead of upstream (forks must stay mirrors): ${forkWarn.map(r => r.name).join(', ')}`)
 if (writeLock) {
   lock.updated = new Date().toISOString()
   writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n')

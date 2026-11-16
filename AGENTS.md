@@ -3,7 +3,7 @@
 Read first: `docs/02-architecture.md`, `docs/05-extension-system.md`, `machine/readiness.json`.
 
 ## Invariants
-- **Engines are consumed unmodified.** DeepSeek Harness, dsh-superagent, Hermes, T3 Code, Honcho and Panda Router are reached only through the seams listed in `upstream/registry.yaml`. Never patch an engine and never commit to an engine fork. If a seam is missing, open an upstream issue or PR.
+- **Engines are consumed unmodified.** DeepSeek Harness, dsh-superagent, Hermes, T3 Code, Honcho and Panda Router are reached only through the seams listed in `upstream/registry.yaml`. Engines come from their source repos at the pinned ref. Never patch an engine and never vendor-modify one. If a seam is missing, open an upstream issue or PR.
 - **Everything is an extension.** New features go in `extensions/<name>` with a `neo.extension.json`. Disabling any extension must leave the rest healthy.
 - **One design.** UI uses `@neometaharness/ui` (Astryx) only. No other component libraries, and no embedded upstream UIs.
 - **Thin shell.** The Tauri Rust shell handles OS concerns only. Business logic lives in the Gateway, so web and PWA behave the same.

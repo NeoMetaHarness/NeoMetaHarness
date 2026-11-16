@@ -12,8 +12,8 @@
   "p0_tasks": {
     "P0-1": {
       "title": "Org repos per docs/06",
-      "status": "blocked",
-      "blocker": "neosmartuiux org membership is pending (role member); needs owner access to create repos"
+      "status": "in_progress",
+      "note": "neosmartuiux is org owner (verified via API 2026-11-17); repos created in paced batches per guardrails"
     },
     "P0-2": {
       "title": "Monorepo scaffold + local check pipeline",
@@ -44,11 +44,6 @@
     "v1.0": "2027-03-23"
   },
   "findings": {
-    "fork_drift_2026-11-17": {
-      "ubermensch-site/deepseek-harness": "0 ahead / 5814 behind",
-      "ubermensch-site/t3code": "0 ahead / 111 behind",
-      "ubermensch-site/astryx-meta-design-system": "0 ahead / 354 behind",
-      "note": "forks are clean mirrors (0 ahead) but stale; syncing them is a GitHub write on ubermensch-site and needs approval"
-    }
+    "2026-11-17": "Personal ubermensch-site forks retired; engines consumed from source repos (they were 0 ahead, so nothing was lost)."
   }
 }

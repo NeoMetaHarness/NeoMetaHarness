@@ -233,7 +233,7 @@ The org follows the BrowserHarness GitHub guardrails: **no GitHub Actions**, loc
 - `upstream/registry.yaml` + `upstream.lock.json` pin each engine.
 - `neo upstream check` (local) fetches upstream releases and SHAs. `neo upstream bump <name>` installs the new version into a scratch profile, runs the **contract tests** for every seam plus the extension tests, and writes a local branch with the lock change and a changelog digest. Pushing is one write.
 - The super agent runs `upstream check` as a **cron Source** and opens a Ticket when a bump is ready or a contract breaks. Neo maintains itself.
-- Forks are synced with `gh repo sync` from the same local job (one write per fork) and are never committed to.
+- No personal forks: engines are fetched from their **source repos** at the pinned ref. A fork is created only if we must send an upstream PR.
 - DSH / dsh-superagent (developer preview) are bumped weekly; the others follow stable releases.
 - bot-hq: adopted. Upstream changes are reviewed monthly and copied by hand.
 

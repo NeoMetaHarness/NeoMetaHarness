@@ -8,19 +8,19 @@ Neo Meta Harness (NMH) builds very little from scratch. Most of the code already
 
 ## 1. Component inventory
 
-| # | Diagram box | Repo (our fork → upstream) | Lang | Role in NMH | Extension seam we use |
+| # | Diagram box | Source repo (consumed directly; old `ubermensch-site` forks retired) | Lang | Role in NMH | Extension seam we use |
 |---|---|---|---|---|---|
-| 1 | Super agent | `ubermensch-site/dsh-superagent-prototype` → `deepseek-ai/dsh-superagent-prototype` | TS | Always-on orchestrator: Sources → Triggers → Eval → Tickets → Executor | A **DSH bundle**. New **Source** kinds (documented in cookbook 008), Cordis patch rows, worker preset patch |
+| 1 | Super agent | `deepseek-ai/dsh-superagent-prototype` | TS | Always-on orchestrator: Sources → Triggers → Eval → Tickets → Executor | A **DSH bundle**. New **Source** kinds (documented in cookbook 008), Cordis patch rows, worker preset patch |
 | 2 | Permanent memory | `plastic-labs/honcho` (self-hosted) | Py | Super agent's long-term memory, user/agent modelling, dialectic recall | REST API + SDKs; `@honcho-ai/harness-plugin-core` (TS), `hermes-plugin-honcho`, OpenClaw Honcho plugin |
-| 3 | Coding harness backend | `ubermensch-site/deepseek-harness` → `deepseek-ai/deepseek-harness` | TS | Agent runtime for coding: everything-is-a-plugin (Cordis) | Plugins, bundles, profiles, `cordis.patch.yml`, ACP profile, SDK JSON-RPC |
-| 4 | Coding harness frontend | `ubermensch-site/t3code` → `pingdotgg/t3code` | TS | Desktop/web/phone control plane, threads, worktrees, git/PR | **Local ACP command provider** (`dsh --profile acp`), MCP server (`/mcp`) for outside agents, T3 Connect / Tailscale |
+| 3 | Coding harness backend | `deepseek-ai/deepseek-harness` | TS | Agent runtime for coding: everything-is-a-plugin (Cordis) | Plugins, bundles, profiles, `cordis.patch.yml`, ACP profile, SDK JSON-RPC |
+| 4 | Coding harness frontend | `pingdotgg/t3code` | TS | Desktop/web/phone control plane, threads, worktrees, git/PR | **Local ACP command provider** (`dsh --profile acp`), MCP server (`/mcp`) for outside agents, T3 Connect / Tailscale |
 | 5 | Agent harness runtime | `NousResearch/hermes-agent` | Py | General agent: messaging gateway, skills learning loop, cron, subagents, many backends | `plugins/` (memory, platforms, model-providers, cron_providers, delegation…), skills, `acp_adapter`, gateway `/v1/responses` |
-| 6 | Agent fleet UX | `ubermensch-site/bot-hq` → `nickvasilescu/bot-hq` | TS | **Adopted** into `packages/agents`, generalised to expose all of Hermes on any computer | First-party code (MIT, attribution kept); upstream reviewed monthly |
+| 6 | Agent fleet UX | `nickvasilescu/bot-hq` | TS | **Adopted** into `packages/agents`, generalised to expose all of Hermes on any computer | First-party code (MIT, attribution kept); upstream reviewed monthly |
 | 7 | OpenClaw capabilities | `openclaw/openclaw` | TS | Ideas only (no code, no runtime): SOUL.md, workspace memory files, dreaming, standing intents, 20+ channels, device nodes | Plugin SDK, ClawHub skills, agent-runtime harnesses, Honcho memory plugin |
 | 8 | Agent memory (local) | `ubermensch-site/Hermes-Agents-Local-Memory` (**ours**) | Py | Fast local memory shared by all agents: SQLite + FTS, facts, cards, markdown export | We own it, so we change it directly: add an MCP server, a Honcho sync, soul files |
-| 9 | Design system | `ubermensch-site/astryx-meta-design-system` → `meta/astryx` | TS | One design for the whole Neo App (React 19 + StyleX, 150+ components, CSS-variable themes) | npm `@astryxdesign/*` + Neo theme |
+| 9 | Design system | `meta/astryx` | TS | One design for the whole Neo App (React 19 + StyleX, 150+ components, CSS-variable themes) | npm `@astryxdesign/*` + Neo theme |
 
-Fork health (2026-11-16): the `t3code`, `bot-hq` and `dsh-superagent-prototype` forks are **0 commits ahead** of upstream. They are clean mirrors and should stay that way (see [02 Architecture §6](02-architecture.md#6-upstream-strategy-plugins-only)).
+We consume the **source repos directly**; the older `ubermensch-site/*` forks are no longer part of the build (decision 2026-11-17).
 
 ## 2. Feature map by layer
 
