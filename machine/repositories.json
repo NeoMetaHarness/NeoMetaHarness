@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "org": "NeoMetaHarness",
+  "note": "Canonical list of org repositories. ROUTER.md in Progress-Memory and scaffolds are generated from this file (scripts/org/scaffold.mjs).",
+  "repositories": [
+    {"name": "NeoMetaHarness", "visibility": "public", "owns": "Product monorepo: App, Gateway, kernel, SDKs, official extensions, upstream registry, deploy, roadmap", "need": "Product/runtime/roadmap", "rules": ["Engines are consumed unmodified through seams in upstream/registry.yaml.", "Everything ships as an extension; nothing may break when an extension is disabled.", "UI uses @neometaharness/ui (Astryx) only.", "No business logic in the Tauri Rust shell."]},
+    {"name": "NeoMetaHarness-Progress-Memory", "visibility": "public", "owns": "Current task, blockers, handoffs, workstreams", "need": "Current task/blocker/handoff", "rules": ["Maintain continuity without duplicating canonical specifications.", "Update live state only from evidence; tool-call success is not proof of completion.", "If machine state and prose disagree, machine state wins until reconciled.", "Every handoff ends with one precise next action."]},
+    {"name": "NeoMetaHarness-Extensions", "visibility": "public", "owns": "Extension registry index, guidelines, review rubric, templates", "need": "Extension listing/review", "rules": ["Every listed extension declares permissions and a Neo API range.", "Third-party extensions run as process extensions unless reviewed."]},
+    {"name": "NeoMetaHarness-Skills", "visibility": "public", "owns": "Published skill packs (agentskills.io), skills registry, promotion and eval rules", "need": "Reusable capability", "rules": ["Promote Skills from validated evidence.", "Every Skill has an autonomy ceiling agents cannot silently exceed.", "Skill improvement creates a candidate version, runs evaluations, and preserves rollback."]},
+    {"name": "NeoMetaHarness-Agent-Registry", "visibility": "public", "owns": "Agent/bot templates, roles, teams, SOUL presets", "need": "Agent role/team", "rules": ["Templates reference Skills by id and version; they never inline them."]},
+    {"name": "NeoMetaHarness-Workflows", "visibility": "public", "owns": "Procedures and learned workflows", "need": "Procedure/demonstrated workflow", "rules": ["A workflow records the evidence that it worked."]},
+    {"name": "NeoMetaHarness-Automation", "visibility": "public", "owns": "Scheduled/triggered orchestration definitions (super-agent routines)", "need": "Scheduled/triggered orchestration", "rules": ["Schedules run on Neo nodes, never on GitHub."]},
+    {"name": "NeoMetaHarness-design-system", "visibility": "public", "owns": "Neo theme on Astryx, tokens, UX patterns, @neometaharness/ui guidance", "need": "UI/UX system", "rules": ["Astryx first; a Neo component exists only when Astryx has no equivalent.", "Every pattern documents light and dark."]},
+    {"name": "NeoMetaHarness-Security-Trust", "visibility": "public", "owns": "Threat model, permissions model, extension review, disclosure policy", "need": "Security/privacy/permissions/trust", "rules": ["Never store secrets or private user data."]},
+    {"name": "NeoMetaHarness-Docs", "visibility": "public", "owns": "Public documentation site source", "need": "Public documentation", "rules": ["Docs describe shipped behaviour; plans live in the product repo."]},
+    {"name": "NeoMetaHarness-Website", "visibility": "public", "owns": "Commercial/landing site", "need": "Commercial web implementation", "rules": []},
+    {"name": "NeoMetaHarness.github.io", "visibility": "public", "owns": "Thin Pages surface", "need": "Thin public Pages surface", "rules": ["No commercial production on Pages without approval."]},
+    {"name": "NeoMetaHarness-Brand", "visibility": "public", "owns": "Identity, voice, assets", "need": "Identity/positioning/voice", "rules": []},
+    {"name": "NeoMetaHarness-Data-Analytics", "visibility": "public", "owns": "Metrics, events, opt-in telemetry schema", "need": "Metrics/events/reporting", "rules": ["Telemetry is opt-in and documented field by field."]},
+    {"name": "NeoMetaHarness-Monetization", "visibility": "public", "owns": "Pricing/packaging (future hosted offering)", "need": "Pricing/packaging/economics", "rules": []},
+    {"name": "NeoMetaHarness-Marketing", "visibility": "public", "owns": "GTM, campaigns", "need": "GTM/campaign/growth strategy", "rules": []},
+    {"name": "NeoMetaHarness-Content", "visibility": "public", "owns": "Content assets", "need": "Content asset", "rules": []},
+    {"name": "NeoMetaHarness-Competitor-Analysis", "visibility": "public", "owns": "Competitive intelligence", "need": "Competitor intelligence", "rules": []},
+    {"name": "NeoMetaHarness-AI-Tool-Intelligence", "visibility": "public", "owns": "Model/tool/framework intelligence; feeds upstream/registry.yaml", "need": "Model/tool/framework intelligence", "rules": []},
+    {"name": "NeoMetaHarness-Customer-Ops", "visibility": "public", "owns": "Onboarding, support, feedback", "need": "Onboarding/support/feedback", "rules": []},
+    {"name": "NeoMetaHarness-Knowledgebase", "visibility": "private", "owns": "Internal knowledge", "need": "Internal knowledge", "rules": []},
+    {"name": ".github", "visibility": "private", "owns": "Org defaults, profile", "need": "Org GitHub defaults", "rules": ["Never add workflows."]}
+  ]
+}

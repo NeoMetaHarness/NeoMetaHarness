@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "phase": "P0-foundation",
+  "updated": "2026-11-17",
+  "decisions": {
+    "upstream_strategy": "engines unmodified via seams; bot-hq adopted first-party",
+    "ui": "one Neo App on Astryx",
+    "desktop_shell": "Tauri 2 (ADR 0001, accepted 2026-11-17)",
+    "product_model": "OSS MIT, self-hosted, team-ready",
+    "model_router": "Panda Router default picker; API model for Eval in v1"
+  },
+  "p0_tasks": {
+    "P0-1": {
+      "title": "Org repos per docs/06",
+      "status": "blocked",
+      "blocker": "neosmartuiux org membership is pending (role member); needs owner access to create repos"
+    },
+    "P0-2": {
+      "title": "Monorepo scaffold + local check pipeline",
+      "status": "done",
+      "evidence": "pnpm check passes; negative test catches workflows + broken links"
+    },
+    "P0-3": {
+      "title": "Seam spikes a-g",
+      "status": "todo"
+    },
+    "P0-4": {
+      "title": "Upstream registry + lock + local upstream check",
+      "status": "done",
+      "evidence": "scripts/upstream.mjs pinned 8 upstreams in upstream.lock.json; fork drift reported"
+    },
+    "P0-5": {
+      "title": "ADRs: kernel, API style, DB layer, auth",
+      "status": "todo"
+    }
+  },
+  "milestones": {
+    "M0": "2026-12-01",
+    "M1": "2026-12-22",
+    "M2": "2027-01-19",
+    "M3": "2027-01-26",
+    "M4": "2027-02-09",
+    "M5": "2027-03-09",
+    "v1.0": "2027-03-23"
+  },
+  "findings": {
+    "fork_drift_2026-11-17": {
+      "ubermensch-site/deepseek-harness": "0 ahead / 5814 behind",
+      "ubermensch-site/t3code": "0 ahead / 111 behind",
+      "ubermensch-site/astryx-meta-design-system": "0 ahead / 354 behind",
+      "note": "forks are clean mirrors (0 ahead) but stale; syncing them is a GitHub write on ubermensch-site and needs approval"
+    }
+  }
+}

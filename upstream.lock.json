@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "pins": {
+    "deepseek-harness": {
+      "kind": "npm",
+      "ref": "0.2.2-rc.1",
+      "upstream": "deepseek-ai/deepseek-harness",
+      "pinned_on": "2026-11-16"
+    },
+    "hermes-agent": {
+      "kind": "release",
+      "ref": "v0.23.2",
+      "upstream": "NousResearch/hermes-agent",
+      "pinned_on": "2026-11-16"
+    },
+    "t3code": {
+      "kind": "release",
+      "ref": "v0.1.9",
+      "upstream": "pingdotgg/t3code",
+      "pinned_on": "2026-11-16"
+    },
+    "honcho": {
+      "kind": "release",
+      "ref": "v3.6.1",
+      "upstream": "plastic-labs/honcho",
+      "pinned_on": "2026-11-16"
+    },
+    "astryx": {
+      "kind": "npm",
+      "ref": "0.7.16",
+      "upstream": "meta/astryx",
+      "pinned_on": "2026-11-16"
+    },
+    "panda-router": {
+      "kind": "commit",
+      "ref": "83e408c794ef",
+      "upstream": "aicodeking/PandaOrchestrator",
+      "pinned_on": "2026-11-16"
+    },
+    "bot-hq": {
+      "kind": "commit",
+      "ref": "decf9a215cdd",
+      "upstream": "nickvasilescu/bot-hq",
+      "pinned_on": "2026-11-16"
+    },
+    "dsh-superagent": {
+      "kind": "commit",
+      "ref": "8c32a9dc5d72",
+      "upstream": "deepseek-ai/dsh-superagent-prototype",
+      "pinned_on": "2026-11-16"
+    }
+  },
+  "updated": "2026-11-16T23:38:39.219Z"
+}

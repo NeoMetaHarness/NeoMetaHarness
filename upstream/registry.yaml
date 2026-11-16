@@ -1,0 +1,86 @@
+# Upstream catalog for Neo Meta Harness.
+# Engines are consumed unmodified through the listed seams. Forks are mirrors: never commit to them.
+# Sync and bumps run LOCALLY (`neo upstream check|bump`): org guardrail local_only_no_actions, no GitHub Actions.
+upstreams:
+  deepseek-harness:
+    upstream: deepseek-ai/deepseek-harness
+    fork: ubermensch-site/deepseek-harness
+    lang: ts
+    package: "@deepseek-ai/dsh"
+    channel: npm-latest          # developer preview, breaking changes expected
+    bump: weekly
+    role: [coding-runtime, orchestrator-host]
+    seams: [cordis-plugin, profile-patch, acp-profile, sdk-jsonrpc, agent-instructions, computer-use-provider, browser-use-provider, skill]
+  dsh-superagent:
+    upstream: deepseek-ai/dsh-superagent-prototype
+    fork: ubermensch-site/dsh-superagent-prototype
+    lang: ts
+    channel: main                # research prototype, no releases
+    bump: weekly
+    role: [orchestrator]
+    seams: [cordis-bundle, source-kind, worker-preset-patch]
+  hermes-agent:
+    upstream: NousResearch/hermes-agent
+    fork: null
+    lang: py
+    channel: stable-release
+    bump: nightly
+    role: [agent-runtime]
+    seams: [api-server-v1, dashboard-backend-api, dashboard-backend-plugin, plugin-loader, memory-provider-plugin, platform-plugin, model-provider-plugin, computer-use, bot-screen, skills-dir, cron, kanban, acp-adapter]
+  t3code:
+    upstream: pingdotgg/t3code
+    fork: ubermensch-site/t3code
+    lang: ts
+    channel: stable-release
+    bump: nightly
+    role: [coding-control-plane]
+    seams: [server-rpc-contract, packages/contracts, packages/client-runtime, acp-local-command, mcp-outside-agents]
+    consume: source              # pinned checkout in upstream/sources; headless packages linked into the workspace
+  honcho:
+    upstream: plastic-labs/honcho
+    fork: null
+    lang: py
+    channel: stable-release
+    bump: weekly
+    role: [memory-l2]
+    seams: [rest-v3, harness-plugin-core-config, hermes-plugin-honcho]
+  astryx:
+    upstream: meta/astryx
+    fork: ubermensch-site/astryx-meta-design-system
+    lang: ts
+    package: "@astryxdesign/core"
+    channel: npm-latest          # beta
+    bump: weekly
+    role: [design-system]
+    seams: [components, themes-css-vars, cli]
+  panda-router:
+    upstream: aicodeking/PandaOrchestrator
+    fork: null
+    lang: py
+    channel: main
+    bump: weekly
+    role: [model-router]
+    seams: [mcp-stdio, http-route-escalate-outcome, model-cards-json]
+adopted:                         # first-party code derived from upstream; changes copied by hand
+  bot-hq:
+    upstream: nickvasilescu/bot-hq
+    fork: ubermensch-site/bot-hq
+    into: packages/agents
+    review: monthly
+reference_only:                  # we port ideas, not code
+  pandacode:
+    upstream: aicodeking/pandacode
+    ideas: [tauri-thin-shell, delta-coalescing, render-bench, account-pools, tiled-threads, quick-launcher, btw-threads, turn-checks]
+  pandaos:
+    upstream: aicodeking/pandaos
+    ideas: [agent-user-isolation, cgroup-per-task, checkpoints, mcp-registry-projection, episode-log, cu-safety-defaults, boat-api]
+  dsh-superagent-gui:
+    upstream: aicodeking/dsh-superagent-gui
+    ideas: [report-contract, accept-modes-observe-act, suggestions, comment-and-check-sources, ticket-stages, autonomy-matrix, worktree-or-copy]
+  openclaw:
+    upstream: openclaw/openclaw
+    ideas: [soul-md, user-memory-files, daily-notes, dreaming, standing-intents, memory-provenance, channel-trust]
+owned:
+  local-memory:
+    repo: ubermensch-site/Hermes-Agents-Local-Memory   # move into NeoMetaHarness org at P0
+    lang: py
