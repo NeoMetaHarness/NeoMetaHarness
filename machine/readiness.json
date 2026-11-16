@@ -13,7 +13,15 @@
     "P0-1": {
       "title": "Org repos per docs/06",
       "status": "in_progress",
-      "note": "neosmartuiux is org owner (verified via API 2026-11-17); repos created in paced batches per guardrails"
+      "note": "neosmartuiux is org owner (verified via API 2026-11-17); repos created in paced batches per guardrails",
+      "batch_1_done_2026_11_17": [
+        "NeoMetaHarness",
+        "NeoMetaHarness-Progress-Memory",
+        "NeoMetaHarness-Extensions",
+        "NeoMetaHarness-Skills",
+        "NeoMetaHarness-design-system"
+      ],
+      "remaining": "17 repos, scaffolded locally in ../NeoMetaHarness-org, created in later batches"
     },
     "P0-2": {
       "title": "Monorepo scaffold + local check pipeline",
