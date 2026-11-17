@@ -30,7 +30,7 @@
     },
     "P0-3": {
       "title": "Seam spikes a-g",
-      "status": "in_progress",
+      "status": "done",
       "g": {
         "status": "done",
         "owner": "PM",
@@ -44,35 +44,52 @@
         "verified_by_pm": "independent live_e2e=PASS on isolated T3 2026-11-17"
       },
       "b": {
-        "status": "rework",
+        "status": "done",
         "owner": "antigravity",
-        "note": "rework: write/streaming paths + exact auth (requested twice)"
+        "evidence": "spikes/P0-3b-hermes-api/README.md",
+        "verified_by_pm": "independent rerun by PM 2026-11-17: reads, profile/cron/kanban writes, /v1/runs SSE + approval deny + stop PASS",
+        "primary_surfaces": "FastAPI dashboard backend (X-Hermes-Session-Token) for profiles/cron/kanban/skills/memory/platforms; aiohttp api_server (Bearer API_SERVER_KEY, /p/<profile>/ prefix) for runs/SSE/approvals",
+        "follow_up": "contract test must bootstrap a clean HERMES_HOME (fails 503 session store not initialized otherwise) and wait for a terminal state after /stop"
       },
       "c": {
-        "status": "rework",
+        "status": "done",
         "owner": "antigravity",
-        "finding": "Bot Screen is Linux-only; computer_use provider plugin seam exists",
-        "note": "runtime proof via stub provider + upstream pytest; option B (_open_rfb) rejected as a patch"
+        "evidence": "spikes/P0-3c-hermes-screen/README.md",
+        "verified_by_pm": "independent rerun by PM 2026-11-17: upstream test_computer_use_backend_plugins.py 5 passed; neo_vnc stub got start/click/capture in a real agent turn",
+        "finding": "Bot Screen is Linux-only; computer_use provider plugin seam works on Windows. Neo serves its own viewer (no _open_rfb)."
       },
       "d": {
-        "status": "todo",
-        "owner": "codex"
+        "status": "done",
+        "owner": "codex",
+        "evidence": "spikes/P0-3d-dsh-seams/README.md",
+        "verified_by_pm": "independent rerun by PM 2026-11-17: published DSH CLI --profile sdk --patch, computerUse/browserUse registry lifecycle + SDK JSON-RPC session PASS",
+        "finding": "llm.registerAdapter is the same Cordis seam: Neo model routing can plug into DSH as a plugin. Plugin entries must be file URLs from the extension install root."
       },
       "e": {
-        "status": "todo",
-        "owner": "codex"
+        "status": "done",
+        "owner": "codex",
+        "evidence": "spikes/P0-3e-superagent-mcp/README.md",
+        "verified_by_pm": "independent rerun by PM 2026-11-17: Source registry/ingest/state/policy + preset-scoped stdio MCP PASS",
+        "finding": "Superagent Source API is application source, not a published package: consume by building the pinned source, behind a NeoSourceAdapter with contract tests.",
+        "follow_up": "replace hard-coded ../../../../nmh-upstream-cache path with a resolver from upstream.lock.json"
       },
       "f": {
-        "status": "rework",
+        "status": "done",
         "owner": "antigravity",
-        "finding": "Hermes allows ONE external memory provider (memory_manager.py:285)",
-        "note": "prove a real turn triggers prefetch + sync"
-      }
+        "evidence": "spikes/P0-3f-hermes-memory/README.md",
+        "verified_by_pm": "independent rerun by PM 2026-11-17: real /v1/runs turn -> prefetch, <memory-context> injected into model request, turn write recorded",
+        "finding": "Hermes allows ONE external memory provider (memory_manager.py:285): neo memory plugin fronts L1 + Honcho."
+      },
+      "open_for_integration": [
+        "DSH engine on Node >=24.9 (spikes ran on 22.23)",
+        "Hermes contract tests from a clean home",
+        "full Superagent Engine -> ticket -> DSH worker test"
+      ]
     },
     "P0-4": {
       "title": "Upstream registry + lock + local upstream check",
       "status": "done",
-      "evidence": "scripts/upstream.mjs pinned 8 upstreams in upstream.lock.json; fork drift reported"
+      "evidence": "scripts/upstream.mjs pinned 8 upstreams in upstream.lock.json (source repos, no forks)"
     },
     "P0-5": {
       "title": "ADRs: kernel, API style, DB layer, auth",

@@ -61,7 +61,7 @@ flowchart TB
 | Layer | What | Tech (swappable) |
 |---|---|---|
 | **Clients** | Neo App: one codebase for web, PWA and the desktop app ([ADR 0001](adr/0001-desktop-shell.md)) | React 19, Astryx, StyleX, TanStack Router; hot streams rendered outside React; desktop = **Tauri 2** shell over the OS webview, with the gateway as a sidecar; shell APIs behind `@neometaharness/shell` |
-| **Gateway** | Neo Gateway: extension host, Neo API, auth/teams, agents service, registries, vault | Node 22+, TypeScript, **Cordis** as the in-process plugin kernel (already proven by DSH), SQLite by default / Postgres for teams |
+| **Gateway** | Neo Gateway: extension host, Neo API, auth/teams, agents service, registries, vault | Node 24 LTS (DSH needs ≥ 24.9; one runtime for gateway and engines), TypeScript, **Cordis** as the in-process plugin kernel (already proven by DSH), SQLite by default / Postgres for teams |
 | **Engines** | DSH + superagent bundle, Hermes, T3 server: each wrapped by an *engine extension* | as upstream ships them (TS / Python) |
 | **Capabilities** | computers, channels, models, memory, skills, tools, sources: interfaces plus provider extensions | any language, via in-process TS or out-of-process JSON-RPC/MCP |
 | **Data** | L1 local memory, L2 Honcho, skill registry, gateway DB, artifacts | SQLite/FTS5, Postgres + pgvector, git-backed skill repo, filesystem / S3-compatible |
@@ -71,9 +71,9 @@ flowchart TB
 
 | Engine | We take | Integration seam | Wrapped by |
 |---|---|---|---|
-| **DeepSeek Harness** | Agent loop, tools, subagents, workflow, MCP client, computer-use / browser-use provider seams, Cordis | `dsh` profiles + `cordis.patch.yml`, SDK JSON-RPC (`sdk` profile), ACP (`acp` profile), Neo DSH plugins | `engine-dsh` |
-| **dsh-superagent** | Orchestration domain (Source → Trigger → Eval → Ticket → Assignment), Policy and Mandates, panel logic | DSH bundle, new Source kinds, worker preset patch | `engine-superagent` |
-| **Hermes Agent** | Everything bot-hq should expose: 26 channels, 40+ model providers + credential pools + subscription proxy, skills + `/learn` + curator + learning graph + Skills Hub, memory providers, cron, kanban, delegation, hosted rooms, Bot Screen, computer use, voice/TTS, goals, loops, hooks, MCP | `api_server` (OpenAI-style `/v1/*`, runs, cron, memory sessions), dashboard backend API + **dashboard backend plugins** (FastAPI routers), Hermes plugins, ACP adapter | `engine-hermes` |
+| **DeepSeek Harness** | Agent loop, tools, subagents, workflow, MCP client, computer-use / browser-use provider seams, Cordis | `dsh` profiles + `cordis.patch.yml`, SDK JSON-RPC (`sdk` profile: `initialize`, `session/prompt`, `session.event`, `session/wait`, `shutdown`), ACP (`acp` profile), Neo DSH plugins. `computerUse` / `browserUse` are exclusive named registries; models plug in through `llm.registerAdapter` (same Cordis seam). Plugin entries are file URLs resolved from the extension's install root. Needs Node ≥ 24.9 ([spike d](../spikes/P0-3d-dsh-seams/README.md)) | `engine-dsh` |
+| **dsh-superagent** | Orchestration domain (Source → Trigger → Eval → Ticket → Assignment), Policy and Mandates, panel logic | DSH bundle, new Source kinds (`SourceRegistry.register`, `sourceContextOf`), worker preset patch adding one scoped `mcp-client` per worker preset. The Source API is application source, not a published package: built from the pinned ref behind a `NeoSourceAdapter` with contract tests ([spike e](../spikes/P0-3e-superagent-mcp/README.md)) | `engine-superagent` |
+| **Hermes Agent** | Everything bot-hq should expose: 26 channels, 40+ model providers + credential pools + subscription proxy, skills + `/learn` + curator + learning graph + Skills Hub, memory providers, cron, kanban, delegation, hosted rooms, Bot Screen, computer use, voice/TTS, goals, loops, hooks, MCP | **Two surfaces** ([spike b](../spikes/P0-3b-hermes-api/README.md)): the dashboard backend (FastAPI, `X-Hermes-Session-Token`) for management (profiles, cron, kanban, skills/curator/learning graph, memory providers, platforms, credential pools) + **dashboard backend plugins**; the `api_server` (aiohttp, Bearer `API_SERVER_KEY`, per-profile `/p/<profile>/`) for runs: `/v1/runs` → SSE events → `/approval` → `/stop`. Avoid `GET /v1/skills` (upstream 500 bug). Hermes plugins (memory provider, `computer_use` backend), ACP adapter | `engine-hermes` |
 | **T3 Code** | Provider orchestration (Claude Code, Codex, Cursor, OpenCode, any ACP agent incl. DSH), threads, checkpoints, worktrees, git/PR, terminals, remote environments | T3 **server** over its authenticated WebSocket RPC (orchestration protocol v2, Effect schemas) through a **thin Neo RPC client** in `engine-t3` (validated against the pinned `packages/contracts` schemas). Both T3 client packages are `private` and are not consumed as an SDK ([spike a](../spikes/P0-3a-t3-headless-client/README.md)). Neo authenticates with a scoped session (`t3 auth session issue` / pairing). T3 `/mcp` for agents | `engine-t3` |
 | **bot-hq** *(adopted)* | Bot-team UX: chat that shows the work, screen per bot, takeover, routines, tasks, Library, approvals, voice, bot-to-bot | Code moved into `packages/agents` and generalised (see §5) | first-party |
 | **Honcho** | Permanent memory, dialectic user/agent modelling | REST v3, `harness-plugin-core`, `hermes-plugin-honcho` | `memory-honcho` |
@@ -150,7 +150,7 @@ interface Computer {
 - resource isolation per task;
 - a checkpoint or snapshot before risky runs.
 
-**Projection into engines:** the provider registers itself in Hermes (the computer-use / browser / screen backend for the bot's profile) and in DSH (`ctx.computerUse` and `ctx.browserUse` provider seams). The same computer then works for a Hermes bot, a DSH session or the super agent. *Hermes' exact seam for an external screen is to be verified in P0.*
+**Projection into engines:** the provider registers itself in Hermes (the computer-use / browser / screen backend for the bot's profile) and in DSH (`ctx.computerUse` and `ctx.browserUse` provider seams). The same computer then works for a Hermes bot, a DSH session or the super agent. Verified in [spike c](../spikes/P0-3c-hermes-screen/README.md): Hermes `computer_use` backend plugins (`register_computer_use_provider`, selected per profile by `computer_use.backend`) receive real agent tool calls, on Windows too. Hermes Bot Screen itself is Linux-only, and its viewer socket is private, so **Neo serves its own viewer** from `Computer.screen()`; it never reaches into Hermes internals.
 
 ## 7. Skills fabric (learned skills; how the super agent improves)
 
@@ -184,7 +184,7 @@ flowchart LR
 ## 8. Memory fabric
 
 As in v0.1, now model-agnostic and per-bot configurable:
-- **L1 Neo Local Memory** (`memory-local`): fast, shared by every agent and engine, with markdown export of SOUL.md, USER.md, MEMORY.md and daily notes (OpenClaw conventions). It plugs in as a Hermes memory provider and a DSH context plugin.
+- **L1 Neo Local Memory** (`memory-local`): fast, shared by every agent and engine, with markdown export of SOUL.md, USER.md, MEMORY.md and daily notes (OpenClaw conventions). It plugs in as a Hermes memory provider and a DSH context plugin. Hermes allows **one** external memory provider per profile, so the single `neo` provider fronts L1 and Honcho together (proven in a real `/v1/runs` turn: prefetch → `<memory-context>` injection → turn write, [spike f](../spikes/P0-3f-hermes-memory/README.md)).
 - **L2 Honcho** (`memory-honcho`, self-hosted): permanent memory plus dialectic modelling for the super agent and any bot that opts in.
 - **Dreaming** (nightly): promote, retract and dedupe candidate facts with provenance; sync L1 ↔ L2; write a DREAMS.md report for review.
 - **Episodes:** task-level records (goal, attempts, models, outcome, lessons), with a git-backed export; the main input to skill learning and router training.
