@@ -46,11 +46,13 @@
       "b": {
         "status": "rework",
         "owner": "antigravity",
-        "note": "prove write/streaming paths with fake model server"
+        "note": "rework: write/streaming paths + exact auth (requested twice)"
       },
       "c": {
-        "status": "todo",
-        "owner": "antigravity"
+        "status": "rework",
+        "owner": "antigravity",
+        "finding": "Bot Screen is Linux-only; computer_use provider plugin seam exists",
+        "note": "runtime proof via stub provider + upstream pytest; option B (_open_rfb) rejected as a patch"
       },
       "d": {
         "status": "todo",
@@ -61,8 +63,10 @@
         "owner": "codex"
       },
       "f": {
-        "status": "todo",
-        "owner": "antigravity"
+        "status": "rework",
+        "owner": "antigravity",
+        "finding": "Hermes allows ONE external memory provider (memory_manager.py:285)",
+        "note": "prove a real turn triggers prefetch + sync"
       }
     },
     "P0-4": {
