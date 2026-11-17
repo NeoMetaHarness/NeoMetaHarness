@@ -48,6 +48,18 @@ export async function startGateway(options: GatewayOptions) {
   const wsRPC = new WSRPCHandler(router);
   const http = createServer(async (req, res) => {
     try {
+      const origin = req.headers.origin;
+      // The web/PWA shell runs on a separate localhost port during development.
+      if (origin && /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] ?? 'content-type');
+        if (req.headers['access-control-request-private-network'] === 'true') {
+          res.setHeader('Access-Control-Allow-Private-Network', 'true');
+        }
+      }
+      if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
       const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
       if (kernel.hasRoute(path)) {
         if (req.method !== 'GET') {
