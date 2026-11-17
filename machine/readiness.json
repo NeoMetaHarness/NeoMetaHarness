@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "phase": "P0-foundation",
+  "phase": "P1-kernel-and-app",
   "updated": "2026-11-18",
   "decisions": {
     "upstream_strategy": "engines unmodified via seams; bot-hq adopted first-party",
@@ -10,7 +10,8 @@
     "model_router": "Panda Router default picker; API model for Eval in v1",
     "api": "oRPC contract-first (ADR 0002)",
     "db": "Kysely, SQLite/Postgres (ADR 0003)",
-    "kernel": "Cordis via @neometaharness/kernel (ADR 0004)"
+    "kernel": "Cordis via @neometaharness/kernel (ADR 0004)",
+    "auth": "Better Auth on Kysely; Neo enforces engine access (ADR 0005)"
   },
   "p0_tasks": {
     "P0-1": {
@@ -103,7 +104,7 @@
     },
     "P0-5": {
       "title": "ADRs: kernel, API style, DB layer, auth",
-      "status": "in_progress",
+      "status": "done",
       "api_style": {
         "status": "accepted",
         "adr": "docs/adr/0002-api-style.md",
@@ -123,8 +124,10 @@
         "evidence": "spikes d/e; @deepseek-ai/cordis 4.1.0 = DSH vendor build of MIT cordiverse/cordis"
       },
       "auth": {
-        "status": "in_progress",
-        "owner": "antigravity (draft)"
+        "status": "accepted",
+        "adr": "docs/adr/0005-auth.md",
+        "owner": "antigravity",
+        "verified_by_pm": "Better Auth proof x2 from clean copy 10/10 PASS (viewer 403 via org hasPermission); corrected: API tokens via @better-auth/api-key@1.7.25"
       }
     }
   },
@@ -171,6 +174,11 @@
       "evidence": "pnpm --dir extensions/engine-t3 test",
       "verified_by_pm": "2026-11-18 on main x2: wire schemas vs pinned contracts, isolated T3 (temp base-dir, random port, 15m scoped session, fake ACP), 45 ordered events, 33ms coalescing by message id, approval declined, settled, socket closed, disable=404, sample healthy; p1 + p1-2 regressions PASS",
       "follow_up": "assert installed T3 desktop server version == pinned v0.1.9 (T3 app auto-updates)"
+    },
+    "P1-6": {
+      "title": "Auth in the gateway (Better Auth, roles on vault + engine routes, api-key, desktop bootstrap)",
+      "status": "in_progress",
+      "owner": "antigravity"
     }
   }
 }
