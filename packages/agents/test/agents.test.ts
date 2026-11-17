@@ -45,7 +45,7 @@ test('P2-1 bots, queues, room fanout, approvals, tasks, routines, SQLite restart
     assert.equal(fake.started[2]!.request.input, 'second');
     fake.finish(fake.started[2]!.runId, 'A2');
     await a2.done;
-    assert.deepEqual((await db.agents.turnEvents(a1.turnId)).map((e) => e.kind), ['delta', 'completed']);
+    assert.deepEqual((await db.agents.turnEvents(a1.turnId)).map((e) => e.kind), ['delta', 'completed', 'turn.status']);
     assert.equal((await db.agents.getTurn(a2.turnId))?.status, 'completed');
 
     fake.setMode(alpha.id, 'instant');
@@ -87,6 +87,7 @@ test('P2-1 bots, queues, room fanout, approvals, tasks, routines, SQLite restart
     const routine = await service.createRoutine(beta.id, 'Morning sync', 'Summarize inbox', '0 9 * * *', 'Asia/Kolkata');
     assert.deepEqual(fake.schedules.get(routine.id)?.routine, {
       id: routine.id, botId: beta.id, schedule: '0 9 * * *', timezone: 'Asia/Kolkata',
+      prompt: 'Summarize inbox',
     });
     await fake.fireRoutine(routine.id);
     assert.equal((await db.agents.getRoutine(routine.id))?.last_run_at === null, false);

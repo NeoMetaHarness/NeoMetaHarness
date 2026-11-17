@@ -123,6 +123,29 @@ export class AgentRecords {
   async listBots(): Promise<AgentBot[]> {
     return this.db.selectFrom('agent_bot').selectAll().orderBy('created_at').execute();
   }
+  async updateBot(id: string, name: string): Promise<AgentBot | undefined> {
+    await this.db.updateTable('agent_bot').set({ name }).where('id', '=', id).execute();
+    return this.getBot(id);
+  }
+  async deleteBot(id: string): Promise<boolean> {
+    return this.db.transaction().execute(async (trx) => {
+      const present = await trx.selectFrom('agent_bot').select('id').where('id', '=', id).executeTakeFirst();
+      if (!present) return false;
+      const turns = trx.selectFrom('agent_turn').select('id').where('bot_id', '=', id);
+      await trx.deleteFrom('agent_approval').where('turn_id', 'in', turns).execute();
+      await trx.deleteFrom('agent_event').where('turn_id', 'in', turns).execute();
+      await trx.deleteFrom('agent_turn').where('bot_id', '=', id).execute();
+      await trx.deleteFrom('agent_task').where('bot_id', '=', id).execute();
+      await trx.deleteFrom('agent_routine').where('bot_id', '=', id).execute();
+      await trx.deleteFrom('agent_room_member').where('bot_id', '=', id).execute();
+      await trx.deleteFrom('agent_room_message').where('author_id', '=', id).execute();
+      await trx.deleteFrom('agent_bot').where('id', '=', id).execute();
+      return true;
+    });
+  }
+  async listRooms(): Promise<AgentRoom[]> {
+    return this.db.selectFrom('agent_room').selectAll().orderBy('created_at').execute();
+  }
   async createRoom(room: AgentRoom, members: string[]): Promise<void> {
     await this.db.transaction().execute(async (trx) => {
       await trx.insertInto('agent_room').values(room).execute();
@@ -159,6 +182,19 @@ export class AgentRecords {
     await this.db.updateTable('agent_turn').set({ status, updated_at: Date.now() })
       .where('id', '=', id).execute();
   }
+  /** Persist the terminal state and its notification together for resumable streams. */
+  async finishTurn(id: string, status: TurnStatus): Promise<boolean> {
+    return this.db.transaction().execute(async (trx) => {
+      const updated = await trx.updateTable('agent_turn').set({ status, updated_at: Date.now() })
+        .where('id', '=', id).where('status', 'in', ['queued', 'running', 'awaiting_approval'])
+        .executeTakeFirst();
+      if (updated.numUpdatedRows === 0n) return false;
+      await trx.insertInto('agent_event').values({
+        turn_id: id, kind: 'turn.status', payload: JSON.stringify({ status }), created_at: Date.now(),
+      }).execute();
+      return true;
+    });
+  }
   async setAwaitingApproval(id: string): Promise<boolean> {
     const result = await this.db.updateTable('agent_turn')
       .set({ status: 'awaiting_approval', updated_at: Date.now() })
@@ -171,12 +207,19 @@ export class AgentRecords {
       .where('id', '=', id).where('status', '=', 'awaiting_approval').executeTakeFirst();
     return result.numUpdatedRows === 1n;
   }
-  async appendEvent(turnId: string, kind: string, payload: string): Promise<void> {
-    await this.db.insertInto('agent_event').values({ turn_id: turnId, kind, payload, created_at: Date.now() }).execute();
+  async appendEvent(turnId: string, kind: string, payload: string): Promise<number> {
+    const row = await this.db.insertInto('agent_event')
+      .values({ turn_id: turnId, kind, payload, created_at: Date.now() })
+      .returning('seq').executeTakeFirstOrThrow();
+    return row.seq;
   }
   async turnEvents(turnId: string): Promise<Array<{ seq: number; kind: string; payload: string }>> {
     return this.db.selectFrom('agent_event').select(['seq', 'kind', 'payload'])
       .where('turn_id', '=', turnId).orderBy('seq').execute();
+  }
+  async turnEventsSince(turnId: string, after: number): Promise<Array<{ seq: number; kind: string; payload: string }>> {
+    return this.db.selectFrom('agent_event').select(['seq', 'kind', 'payload'])
+      .where('turn_id', '=', turnId).where('seq', '>', after).orderBy('seq').execute();
   }
   async createApproval(approval: AgentApproval): Promise<void> {
     await this.db.insertInto('agent_approval').values(approval).execute();

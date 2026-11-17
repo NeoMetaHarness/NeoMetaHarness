@@ -13,6 +13,8 @@ export class AgentService {
   private readonly active = new Map<string, { runId: string; controller: AbortController }>();
   private readonly approvals = new Map<string, (decision: Decision) => void>();
   private readonly cronIds = new Set<string>();
+  private readonly turnListeners = new Set<(turnId: string) => void>();
+  private readonly roomListeners = new Set<(roomId: string) => void>();
 
   constructor(readonly records: AgentRecords, readonly runtime: AgentRuntime) {}
 
@@ -35,6 +37,93 @@ export class AgentService {
     const bot = { id: randomUUID(), name: name.trim(), created_at: Date.now() };
     await this.records.createBot(bot);
     return bot;
+  }
+
+  async updateBot(id: string, name: string): Promise<AgentBot | undefined> {
+    if (!name.trim()) throw new Error('Bot name required');
+    return this.records.updateBot(id, name.trim());
+  }
+
+  async deleteBot(id: string): Promise<boolean> {
+    if (!await this.records.getBot(id)) return false;
+    for (const turn of await this.records.listTurns(id)) await this.stopTurn(turn.id);
+    await this.queues.get(id);
+    for (const routine of await this.records.listRoutines()) {
+      if (routine.bot_id === id && this.cronIds.has(routine.id)) {
+        await this.runtime.cron.unregister(routine.id);
+        this.cronIds.delete(routine.id);
+      }
+    }
+    return this.records.deleteBot(id);
+  }
+
+  private async appendEvent(turnId: string, kind: string, payload: unknown): Promise<void> {
+    await this.records.appendEvent(turnId, kind, JSON.stringify(payload));
+    for (const listener of this.turnListeners) listener(turnId);
+  }
+
+  private async finishTurn(turnId: string, status: AgentTurn['status']): Promise<void> {
+    if (await this.records.finishTurn(turnId, status)) {
+      for (const listener of this.turnListeners) listener(turnId);
+    }
+  }
+
+  async *events(turnId: string, since = 0, signal?: AbortSignal): AsyncGenerator<{ seq: number; kind: string; payload: string }> {
+    if (!await this.records.getTurn(turnId)) throw new Error('Unknown turn ' + turnId);
+    let wake: (() => void) | undefined;
+    let changed = false;
+    const notify = (id: string) => { if (id === turnId) { changed = true; wake?.(); } };
+    const abort = () => { changed = true; wake?.(); };
+    this.turnListeners.add(notify);
+    signal?.addEventListener('abort', abort);
+    let cursor = since;
+    try {
+      while (!signal?.aborted) {
+        changed = false;
+        // Check status before the event query, so a terminal transaction's
+        // final event cannot land between a read and the exit decision.
+        const turn = await this.records.getTurn(turnId);
+        for (const event of await this.records.turnEventsSince(turnId, cursor)) {
+          cursor = event.seq;
+          yield event;
+        }
+        if (!turn || !['queued', 'running', 'awaiting_approval'].includes(turn.status)) return;
+        if (changed || signal?.aborted) continue;
+        await new Promise<void>((resolve) => { wake = resolve; });
+        wake = undefined;
+      }
+    } finally {
+      this.turnListeners.delete(notify);
+      signal?.removeEventListener('abort', abort);
+    }
+  }
+
+  async *roomEvents(roomId: string, after?: string, signal?: AbortSignal): AsyncGenerator<import('@neometaharness/db').AgentRoomMessage> {
+    if (!await this.records.getRoom(roomId)) throw new Error('Unknown room ' + roomId);
+    let wake: (() => void) | undefined;
+    let changed = false;
+    const notify = (id: string) => { if (id === roomId) { changed = true; wake?.(); } };
+    const abort = () => { changed = true; wake?.(); };
+    this.roomListeners.add(notify);
+    signal?.addEventListener('abort', abort);
+    let cursor = after;
+    try {
+      while (!signal?.aborted) {
+        changed = false;
+        const messages = await this.records.roomMessages(roomId);
+        const index = cursor ? messages.findIndex((msg) => msg.id === cursor) : -1;
+        for (const message of messages.slice(index + 1)) {
+          cursor = message.id;
+          yield message;
+        }
+        if (changed || signal?.aborted) continue;
+        await new Promise<void>((resolve) => { wake = resolve; });
+        wake = undefined;
+      }
+    } finally {
+      this.roomListeners.delete(notify);
+      signal?.removeEventListener('abort', abort);
+    }
   }
 
   async createRoom(name: string, memberIds: string[]): Promise<AgentRoom> {
@@ -73,6 +162,7 @@ export class AgentService {
     const room = await this.records.getRoom(roomId);
     if (!room) throw new Error(`Unknown room ${roomId}`);
     await this.records.createRoomMessage({ id: randomUUID(), room_id: roomId, author_id: authorId, body: text, created_at: Date.now() });
+    for (const notify of this.roomListeners) notify(roomId);
     const members = await this.records.roomMembers(roomId);
     return Promise.all(members.map((bot) => this.send(bot.id, `[Room ${room.name}] ${text}`, 'room', roomId)));
   }
@@ -81,6 +171,7 @@ export class AgentService {
     const members = await this.records.roomMembers(roomId);
     if (!members.some((member) => member.id === botId)) throw new Error('Bot is not a room member');
     await this.records.createRoomMessage({ id: randomUUID(), room_id: roomId, author_id: botId, body: text, created_at: Date.now() });
+    for (const notify of this.roomListeners) notify(roomId);
   }
 
   private async runTurn(turn: AgentTurn): Promise<void> {
@@ -100,7 +191,7 @@ export class AgentService {
         return;
       }
       for await (const event of this.runtime.streamEvents(runId, controller.signal)) {
-        await this.records.appendEvent(turn.id, event.type, JSON.stringify(event));
+        await this.appendEvent(turn.id, event.type, event);
         if (event.type === 'approval_requested') {
           const decision = await this.waitForApproval(turn.id, event);
           if (decision === 'stop') { finalStatus = 'stopped'; break; }
@@ -122,13 +213,9 @@ export class AgentService {
         }
       }
       if (!completed && finalStatus === 'completed') finalStatus = 'interrupted';
-      if ((await this.records.getTurn(turn.id))?.status !== 'stopped') {
-        await this.records.setTurnStatus(turn.id, finalStatus);
-      }
+      await this.finishTurn(turn.id, finalStatus);
     } catch (error) {
-      if ((await this.records.getTurn(turn.id))?.status !== 'stopped') {
-        await this.records.setTurnStatus(turn.id, 'failed');
-      }
+      await this.finishTurn(turn.id, 'failed');
       throw error;
     } finally {
       await this.records.interruptApprovals(turn.id);
@@ -152,7 +239,7 @@ export class AgentService {
       if (this.active.get(turnId)?.controller.signal.aborted) resolve('stop');
     });
     this.approvals.delete(approval.id);
-    await this.records.appendEvent(turnId, 'approval_resolved', JSON.stringify({ approvalId: approval.id, decision }));
+    await this.appendEvent(turnId, 'approval_resolved', { approvalId: approval.id, decision });
     return decision;
   }
 
@@ -167,7 +254,7 @@ export class AgentService {
   async stopTurn(turnId: string): Promise<void> {
     const turn = await this.records.getTurn(turnId);
     if (!turn || !['queued', 'running', 'awaiting_approval'].includes(turn.status)) return;
-    await this.records.setTurnStatus(turnId, 'stopped');
+    await this.finishTurn(turnId, 'stopped');
     await this.records.interruptApprovals(turnId);
     for (const approval of await this.records.approvalsForTurn(turnId)) {
       this.approvals.get(approval.id)?.('stop');
@@ -222,7 +309,8 @@ export class AgentService {
 
   private async registerCron(routine: AgentRoutine): Promise<void> {
     await this.runtime.cron.register({
-      id: routine.id, botId: routine.bot_id, schedule: routine.schedule, timezone: routine.timezone,
+      id: routine.id, botId: routine.bot_id, schedule: routine.schedule,
+      timezone: routine.timezone, prompt: routine.prompt,
     }, async () => { const handle = await this.runRoutine(routine.id); await handle.done; });
     this.cronIds.add(routine.id);
   }

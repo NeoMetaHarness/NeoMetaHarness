@@ -18,6 +18,7 @@ export interface CronRegistration {
   botId: string;
   schedule: string;
   timezone: string;
+  prompt?: string;
 }
 
 export interface AgentRuntime {
