@@ -37,3 +37,11 @@ End your chat turn with the report block:
 | **f** Hermes memory provider | Antigravity | Write a stub Hermes memory-provider plugin (installed by path, no Hermes edits) that serves context from a fake L1 HTTP endpoint and records writes. Prove Hermes calls it. |
 | **c** Hermes external screen | Antigravity | Read-only research: how Bot Screen and `computer_use` (cua-driver) pick their display/backend. Can an external computer (a VNC host, Orgo, boat) be plugged in through a plugin or config, without editing Hermes? Cite the files. |
 | **g** Astryx in Tauri + PWA | PM | Done by the PM (needs the Rust toolchain). |
+
+## Helpers and current work (2026-11-18)
+| Helper | Worktree / branch | Current task |
+|---|---|---|
+| Codex (Sol-6) | `nmh-wt/codex` · `spike/codex` | P1-2 Neo App shell + Extensions page |
+| Antigravity (Gemini 3.8) | `nmh-wt/gemini` · `spike/gemini` | P0-5 auth: Better Auth proof |
+| Sol-A (Sol-6) | `nmh-wt/sol-a` · `work/sol-a` | P1-3 `@neometaharness/vault` + Hermes/DSH projectors |
+| Sol-B (Sol-6) | `nmh-wt/sol-b` · `work/sol-b` | `extensions/engine-t3` thin T3 RPC client |
