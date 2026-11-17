@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "probe": "node probe.mjs",
-    "probe:live": "node probe.mjs --live"
+    "probe:live": "node probe.mjs --live",
+    "fake:smoke": "node fake-acp-smoke.mjs",
+    "live:compile": "node run-live.mjs --compile-only",
+    "live:e2e": "node run-live.mjs"
   },
   "dependencies": {
     "effect": "4.1.2"
