@@ -153,11 +153,11 @@
     },
     "P1-2": {
       "title": "Neo App shell on Astryx + Extensions page over the gateway",
-      "status": "done_with_followup",
+      "status": "done",
       "owner": "codex",
       "evidence": "pnpm test:p1-2",
       "verified_by_pm": "2026-11-18: 2 runs x 2 Chrome trials PASS (rows=2, live events, sample-ts 404/200, PWA 200), tsc clean",
-      "follow_up": "startup budget: entry+modulepreload = 349 KB gzip JS (> 300 KB); astryx-navigation chunk 166 KB gzip. Gate must sum all startup chunks."
+      "follow_up": "startup JS 253 KB gzip (gate now sums all startup chunks, limit 300 KB); astryx-navigation chunk still 164 KB gzip -> investigate before P3"
     },
     "P1-3": {
       "title": "Vault + engine projectors",
@@ -179,6 +179,13 @@
       "title": "Auth in the gateway (Better Auth, roles on vault + engine routes, api-key, desktop bootstrap)",
       "status": "in_progress",
       "owner": "antigravity"
+    },
+    "P1-5": {
+      "title": "Tauri 2 desktop shell (gateway sidecar, tray, clean exit)",
+      "status": "done",
+      "owner": "codex",
+      "evidence": "pnpm test:p1-5",
+      "verified_by_pm": "2026-11-18 x2: real Tauri build, WebView2 shows all extensions, live toggle 404/200, python ok, no SW, clean exit, no leftover processes; Rust shell 158 LOC (thin)"
     }
   }
 }
