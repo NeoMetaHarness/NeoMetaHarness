@@ -13,7 +13,8 @@
     "upstream:check": "node scripts/upstream.mjs",
     "org:scaffold": "node scripts/org/scaffold.mjs",
     "test:p1": "pnpm --dir apps/gateway test:p1",
-    "test:p1-2": "pnpm --dir apps/neo-app test:p1-2"
+    "test:p1-2": "pnpm --dir apps/neo-app test:p1-2",
+    "test:p1-5": "pnpm --dir apps/neo-app test:p1-5"
   },
   "devDependencies": {
     "yaml": "^2.8.1"
