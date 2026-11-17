@@ -9,6 +9,35 @@ export type { MemoryStore, MemoryEntry, MemoryDraft, MemoryQuery, MemorySubject,
 export { AgentRecords } from './agent-records.js';
 export type { AgentBot, AgentRoom, AgentRoomMessage, AgentTurn, AgentEvent, AgentApproval, AgentTask, AgentRoutine, TurnStatus, ApprovalStatus } from './agent-records.js';
 
+export function createNodeSqliteDatabase(sqlite: DatabaseSync) {
+  return {
+    prepare(sql: string) {
+      const statement = sqlite.prepare(sql);
+      return {
+        reader: statement.columns().length > 0,
+        run: (parameters: unknown[]) => statement.run(...(parameters as SQLInputValue[])),
+        all: (parameters: unknown[]) => statement.all(...(parameters as SQLInputValue[])),
+        iterate: (parameters: unknown[]) => statement.iterate(...(parameters as SQLInputValue[])),
+      };
+    },
+    close() {
+      sqlite.close();
+    },
+  };
+}
+
+export function createNodeSqliteDialect(sqlite: DatabaseSync): SqliteDialect {
+  return new SqliteDialect({
+    database: createNodeSqliteDatabase(sqlite),
+  });
+}
+
+export function createNodeSqliteKysely<T = any>(sqlite: DatabaseSync): Kysely<T> {
+  return new Kysely<T>({
+    dialect: createNodeSqliteDialect(sqlite),
+  });
+}
+
 interface ExtensionStateTable {
   id: string;
   enabled: number;
@@ -53,19 +82,33 @@ export interface VaultRecordStore {
 
 function fromVaultRow(row: VaultSecretTable): VaultStoredSecret {
   return {
-    id: row.id, scopeKind: row.scope_kind, workspaceId: row.workspace_id,
-    subjectId: row.subject_id, name: row.name, iv: row.iv, tag: row.tag,
-    ciphertext: row.ciphertext, version: row.version,
-    createdAt: row.created_at, updatedAt: row.updated_at,
+    id: row.id,
+    scopeKind: row.scope_kind,
+    workspaceId: row.workspace_id,
+    subjectId: row.subject_id,
+    name: row.name,
+    iv: row.iv,
+    tag: row.tag,
+    ciphertext: row.ciphertext,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
 function toVaultRow(record: VaultStoredSecret): VaultSecretTable {
   return {
-    id: record.id, scope_kind: record.scopeKind, workspace_id: record.workspaceId,
-    subject_id: record.subjectId, name: record.name, iv: record.iv, tag: record.tag,
-    ciphertext: record.ciphertext, version: record.version,
-    created_at: record.createdAt, updated_at: record.updatedAt,
+    id: record.id,
+    scope_kind: record.scopeKind,
+    workspace_id: record.workspaceId,
+    subject_id: record.subjectId,
+    name: record.name,
+    iv: record.iv,
+    tag: record.tag,
+    ciphertext: record.ciphertext,
+    version: record.version,
+    created_at: record.createdAt,
+    updated_at: record.updatedAt,
   };
 }
 export interface NeoTables extends AgentTables {
@@ -83,31 +126,21 @@ export interface DatabaseProvider {
 }
 
 export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStore {
-  private readonly db: Kysely<NeoTables>;
+  public readonly sqlite: DatabaseSync;
+  public readonly db: Kysely<NeoTables>;
   readonly agents: AgentRecords;
   readonly memories: MemoryRecords;
 
   constructor(filename: string) {
     if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true });
-    const sqlite = new DatabaseSync(filename);
-    this.db = new Kysely<NeoTables>({
-      dialect: new SqliteDialect({
-        database: {
-          prepare(sql) {
-            const statement = sqlite.prepare(sql);
-            return {
-              reader: statement.columns().length > 0,
-              run: (parameters) => statement.run(...parameters as SQLInputValue[]),
-              all: (parameters) => statement.all(...parameters as SQLInputValue[]),
-              iterate: (parameters) => statement.iterate(...parameters as SQLInputValue[]),
-            };
-          },
-          close() { sqlite.close(); },
-        },
-      }),
-    });
+    this.sqlite = new DatabaseSync(filename);
+    this.db = createNodeSqliteKysely<NeoTables>(this.sqlite);
     this.agents = new AgentRecords(this.db);
     this.memories = new MemoryRecords(this.db);
+  }
+
+  getKysely(): Kysely<NeoTables> {
+    return this.db;
   }
 
   async migrate(): Promise<void> {
@@ -176,6 +209,7 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
     const result = await this.db.deleteFrom('vault_secret').where('id', '=', id).executeTakeFirst();
     return result.numDeletedRows > 0n;
   }
+
   async close(): Promise<void> {
     await this.db.destroy();
   }
