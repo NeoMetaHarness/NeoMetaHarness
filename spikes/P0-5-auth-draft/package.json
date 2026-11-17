@@ -1,0 +1,11 @@
+﻿{
+  "name": "P0-5-auth-draft",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@better-auth/kysely-adapter": "1.7.25",
+    "better-auth": "1.7.25",
+    "kysely": "0.28.8"
+  }
+}

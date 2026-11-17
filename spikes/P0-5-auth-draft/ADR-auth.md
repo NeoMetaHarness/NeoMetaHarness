@@ -1,51 +1,116 @@
-# P0-5 ADR draft — Neo Auth, Teams, and Engine Credential Projection
+﻿# Architectural Decision Record (ADR): Neo Gateway Authentication, Tenancy & Engine Credential Projection
 
-Status: **PROPOSED**; PM review required. Date: 2026-11-18.
-
-## Context
-
-Neo Gateway sits between user interfaces (desktop app, Tauri webview, PWA, CLI) and underlying execution engines (Hermes Agent, T3 Code, DeepSeek Harness). As specified in `docs/02-architecture.md` §4 ("Auth and teams") and §14 ("Security"):
-- **Workspace Hierarchy**: `Workspace` → `Members` → `Roles` (`owner`, `admin`, `member`, `viewer`) → `Scoped Resources` (bots, projects, computers, channels, skills).
-- **Dual Deployment Modes**:
-  1. *Single-user local desktop*: Zero-setup, instant friction-free bootstrap (auto-provisioned local workspace and admin session, loopback trust, optional local password/passkey).
-  2. *VPS team mode*: Multi-tenant collaboration, member invitations, strict role-based access control (RBAC), and scoped bearer API tokens for remote CLI and background automations.
-- **Identity Evolution**: Local accounts and passkeys in v1, with a clean upgrade path to external OIDC / Enterprise SSO (Google, GitHub, Okta) without schema rewrites.
-- **Engine Credential Projection**: No external client or web UI talks directly to execution engines. The Gateway Vault securely holds engine credentials, projects them in each engine's expected wire format, and enforces tenant/workspace isolation that engines natively lack.
-
-The architectural question is: which authentication and team authorization architecture best satisfies both the local desktop and VPS team requirements, and how are engine credentials securely minted, scoped, rotated, and mapped across T3, Hermes, and DSH?
+- **Status**: Proposed
+- **Date**: 2026-11-17
+- **Author**: Gemini (Spike P0-5 Helper)
+- **Scope**: Core Gateway Architecture, Engine Integration Seams, Multi-Tenancy & Authorization
 
 ---
 
-## Options Comparison
+## Context and Problem Statement
 
-| Criterion | Option 1: Better Auth (v1.2+) | Option 2: Hand-Rolled Minimal Core (Lucia-style) | Option 3: OIDC-Centric Stack (openid-client + custom) |
+Neo Meta Harness operates as a unified super-agent harness coordinating multiple heterogeneous upstream engines:
+- **Hermes Agent** (`v0.23.2`) for autonomous tool execution, subagent delegation, skill learning, and cron/kanban operations;
+- **T3 Code Engine** (`v0.1.9`) for headless orchestration, code editing, diffing, and terminal execution;
+- **DeepSeek Harness (DSH)** (`0.2.2-rc.1`) for local desktop automation, browser control, and computer-use tools.
+
+None of these downstream engines natively understand multi-tenant isolation, workspaces, team roles (`owner`, `admin`, `member`, `viewer`), or unified user identity:
+- **Hermes Dashboard API** (`web_server.py:657`) uses a single global `X-Hermes-Session-Token` with all-or-nothing admin access.
+- **Hermes Runtime API** (`api_server.py:756`) uses per-profile `API_SERVER_KEY` bearer tokens, but lacks tenant scoping or role-based access control.
+- **T3 Code Engine** (`EnvironmentAuth.ts:182`) enforces 17 fine-grained RPC scopes (`AuthEnvironmentScope`), but has no concept of multi-user organizations or workspaces.
+- **DeepSeek Harness** relies entirely on OS-level process boundaries and injected environment credentials (`DEEPSEEK_API_KEY`).
+
+Furthermore, Neo Meta Harness must operate seamlessly across two distinct operational form factors:
+1. **Single-User Local Desktop Mode (Tauri 2)**: Zero-friction setup, local offline-first SQLite database, no forced cloud logins, and automatic loopback session bootstrapping.
+2. **Multi-User / Team Mode (Self-Hosted VPS & Cloud)**: Multi-tenancy, workspace isolation, team invitations, role-based access control (`owner`, `admin`, `member`, `viewer`), scoped API tokens for CI/CD, and an evolutionary path to enterprise OIDC/SSO.
+
+We must select and validate the authentication, authorization, and credential projection architecture for Neo Gateway.
+
+---
+
+## Decision Drivers
+
+1. **Local Desktop Zero-Setup vs VPS Multi-Tenancy**: The solution must support instant offline local execution (no setup wizard or mandatory cloud connection) while scaling to team deployments without re-architecting the database or API surface.
+2. **Team RBAC & Workspace Isolation**: Native support for organizations/workspaces with roles (`owner`, `admin`, `member`, `viewer`) where `viewer` role cannot mutate workspace resources (returns `403 Forbidden`).
+3. **Revocable Scoped API Tokens**: Ability to mint personal access tokens (PATs) or CI/CD robot credentials scoped to specific workspaces, with instant revocation (`401 Unauthorized`).
+4. **Database Alignment (Kysely + SQLite)**: Conformance with ADR 0003 (Kysely query builder) over Node 22 native `node:sqlite` or `better-sqlite3`.
+5. **Engine Credential Projection**: Clean architectural boundary where Neo Gateway mints, securely stores, and projects ephemeral or scoped credentials to downstream engines (Hermes, T3, DSH) without exposing raw engine control planes to clients.
+6. **Future-Proofing for OIDC & Passkeys**: Standardized architecture allowing drop-in upgrades to Passkeys (WebAuthn) and OIDC/SSO (Okta, GitHub, Google Workspace) in Phase 1 and Phase 2.
+
+---
+
+## Evaluated Options
+
+### Option 1: Better Auth (v1.7.25) with Kysely Adapter and Plugins
+A modern TypeScript-first authentication framework designed for multi-tenant, modular authentication:
+- **Architecture**: Core library with modular plugins (`organization`, `bearer`, `admin`, `two-factor`, `passkey`).
+- **Database**: Native adapter ecosystem supporting Kysely (`@better-auth/kysely-adapter@1.7.25`), Drizzle, and Prisma over SQLite and PostgreSQL.
+- **Team RBAC**: The `organization()` plugin provides workspace/team hierarchies, invitations, and customizable access control rules (`hasPermission`).
+- **Token Management**: The `bearer()` plugin enables Bearer header authentication (`Authorization: Bearer <token>`). Scoped API tokens and personal access tokens (PATs) can be issued as persistent sessions or dedicated tokens and instantly revoked.
+- **Desktop Zero-Setup**: In desktop mode (`NEO_MODE=desktop`), an auto-bootstrap routine initializes an admin user and default workspace on first run, returning a persistent loopback token.
+
+### Option 2: Hand-Rolled Minimal Core (`node:sqlite` + `crypto.scryptSync`)
+A lightweight, zero-dependency session and RBAC implementation directly in Node 22:
+- **Architecture**: Minimal custom tables (`users`, `sessions`, `workspaces`, `workspace_members`, `api_tokens`).
+- **Security**: Built using Node standard libraries (`node:crypto` for scrypt password hashing, timing-safe equality checks, and SHA-256 session token hashing).
+- **Control**: 100% bespoke code (~200 lines), zero external npm dependencies, direct SQL execution.
+- **Tradeoffs**: Entire maintenance burden (session rotation, rate limiting, brute force protection, CSRF, cookie handling, passkeys, WebAuthn) falls entirely on the Neo core team.
+
+### Option 3: OIDC-Centric Stack (`openid-client`) + External IdP
+Delegate all authentication to an external OpenID Connect identity provider (Keycloak, Authentik, Dex, or Auth0):
+- **Architecture**: Neo Gateway acts purely as an OIDC Relying Party (RP).
+- **Tradeoffs**: Catastrophic for single-user local desktop mode; requires running a heavy external Docker container or mandatory cloud connection just to use the desktop application locally.
+
+---
+
+## Comparison Matrix
+
+| Evaluation Dimension | Option 1: Better Auth (v1.7.25 + Kysely) | Option 2: Hand-Rolled Minimal Core | Option 3: OIDC Stack (`openid-client`) |
 |---|---|---|---|
-| **Local Accounts** | Built-in email/password with secure password hashing (scrypt/argon2), email verification hooks. | Custom implementation required (~150 LOC for password hashing, salts, rate-limiting). | External IdP focus; local account fallback requires building custom local credential provider. |
-| **Passkeys (WebAuthn)** | First-class `@better-auth/passkey` plugin (SimpleWebAuthn integration). | Hand-roll WebAuthn registration/assertion ceremonies, challenge stores, and counter checks. | Dependent on external IdP WebAuthn support or custom plugin. |
-| **Team Roles & Workspaces** | Built-in `organization` plugin with workspaces, invitations, dynamic membership, and predefined/custom roles (`owner`, `admin`, `member`, `viewer`). | Custom database tables (`workspaces`, `workspace_members`, `invitations`) and authorization middleware. | Organization concept mapped externally or custom-authored in application database. |
-| **API Tokens (CLI/Remote)** | Built-in `bearer` / `apiKey` plugin with token hashing (SHA-256), prefixes, scopes, and expiration. | Custom token generator (`crypto.randomBytes`), database hash table, and bearer middleware. | Token issuance requires custom token service or OAuth2 Authorization Server extension. |
-| **OIDC / SSO Upgrade Path** | Native `genericOAuth` / `oidcProvider` plugins; accounts link directly to existing local user records via `account` table. | Requires implementing OIDC authorization code flow, PKCE, token verification, and profile mapping. | Native and robust; built directly on standards-compliant OpenID Connect specifications. |
-| **Desktop Zero-Setup** | Configurable auto-login / loopback bypass in desktop mode; can use SQLite in-memory or single-file storage. | Extremely lightweight; desktop mode can initialize a bypass session with zero external framework overhead. | Heavyweight for desktop; requires local mock IdP or local token endpoint. |
-| **Database Portability** | Supports Kysely, Drizzle, and raw SQLite/PostgreSQL dialects out of the box. | Native to whatever query layer Neo chooses (Kysely/SQLite/Postgres). | Decoupled from database, but requires custom persistence adapters. |
-| **Maintenance & Security** | Active community, comprehensive security tests, handles session fixation, CSRF, cookie prefixes, and rotation. | Full maintenance burden on the Neo team (session timing attacks, cookie flags, WebAuthn edge cases). | Core protocol is standards-compliant, but glue code and local auth must be maintained internally. |
+| **Local Account Management** | Out of the box (email/password with scrypt/argon2, verification flows). | Implemented manually via `node:crypto.scryptSync`. | Delegated to external identity provider. |
+| **Passkey (WebAuthn) Ready** | Supported via official `@better-auth/passkey` plugin. | Requires implementing FIDO2/WebAuthn challenge-response and attestation validation. | Supported if external IdP supports WebAuthn. |
+| **Team Roles & Tenancy** | Built-in via `organization()` plugin (`owner`, `admin`, `member`, custom roles). | Implemented via custom SQL joins and role check middleware. | Delegated via OIDC claims or external SCIM directory. |
+| **Revocable API Tokens** | Supported via `bearer()` plugin and persistent session tokens; revoked via `auth.api.revokeSession`. | Implemented via `api_tokens` table with SHA-256 hashed tokens. | Requires OAuth2 token introspection endpoint (RFC 7662). |
+| **OIDC / SSO Upgrade Path** | Drop-in `genericOAuth` / `oidcProvider` plugins without altering core schema. | Requires writing custom OIDC authorization code flow, PKCE, and JWKS verification. | Native; already built on OIDC. |
+| **Desktop Zero-Setup** | Supported via auto-bootstrap bootstrap script on first boot. | Trivial; direct loopback session insert. | Poor; requires mock local IdP or internet connectivity. |
+| **Database Portability** | Native Kysely adapter (`@better-auth/kysely-adapter`). | Native to whatever raw SQL or query builder is used. | Decoupled from application database. |
+| **Maintenance Burden** | Maintained by active open-source community; continuous security patches. | 100% internal maintenance burden on the Neo team. | Medium (glue code and IdP orchestration). |
 
 ---
 
-## Decision (proposed)
+## Decision
 
-Adopt **Better Auth** with the **Organization**, **Passkey**, and **API Key** plugins as the foundation for the Neo Gateway auth subsystem, paired with a **Desktop Auto-Bootstrap Middleware** for zero-setup single-user environments.
+Adopt **Better Auth (pinned to `v1.7.25`)** with the **Kysely Adapter (`@better-auth/kysely-adapter@1.7.25`)**, **`organization()`**, and **`bearer()`** plugins for Neo Gateway multi-tenant authentication and authorization, paired with:
+1. A **15-line Kysely Dialect Driver Bridge** for Node 22 native `node:sqlite` (`stmt.columns().length > 0`).
+2. An **Auto-Bootstrap Loopback Routine** for single-user desktop zero-setup.
+3. The **Hand-Rolled Minimal Core (`auth-proof.mjs`)** preserved as an architectural reference and zero-dependency baseline.
 
-### Rationale
-1. **Covers the full v1 and v2 scope out of the box**: Better Auth provides email/password, passkeys, multi-tenant workspace/organization hierarchies, member invitations, and revocable API tokens in a single modular TypeScript architecture.
-2. **Schema and Database Alignment**: Better Auth natively generates and accepts Kysely and SQLite/PostgreSQL schemas, matching Neo's database layer decision (`spikes/P0-5-adr-drafts/ADR-db-layer.md`).
-3. **Seamless OIDC Evolution**: Transitioning from v1 local accounts to v2 enterprise SSO requires adding the `oidcProvider` or OAuth plugins without altering the core `user`, `session`, `workspace`, or `role` tables.
-4. **Desktop Zero-Setup Accommodation**: When running in `NEO_MODE=desktop`, the Gateway bypasses registration friction by auto-generating a local default workspace and loopback administrator session token during the first start.
+### Detailed Technical Findings & Implementation Notes
+
+During spike verification against Node 22 native `node:sqlite` (`DatabaseSync`), several critical architectural details were proven:
+
+1. **Kysely `SqliteDialect` with Node 22 `node:sqlite`**:
+   - Kysely's `SqliteDialect` was originally designed for `better-sqlite3`, where prepared statements expose a `.reader` getter (`true` if the statement yields rows).
+   - In Node 22 native `node:sqlite`, `StatementSync` does not expose `.reader`.
+   - Naive checks such as `query.trimStart().toLowerCase().startsWith('select')` fail because Better Auth uses CTE queries (`with "table_list" as ...`), `pragma table_info(...)`, and SQLite 3.35+ `RETURNING *` clauses (`insert into "user" ... returning *`).
+   - If `reader` is false, Kysely dispatches the statement to `stmt.run()` instead of `stmt.all()`, discarding returned rows. This triggers `SchemaMismatchError` during migration checks and `FAILED_TO_CREATE_USER` during signup.
+   - **Resolution**: Setting `reader: stmt.columns().length > 0` resolves this completely. In `node:sqlite`, `stmt.columns()` returns column definitions if and only if the statement yields rows.
+
+2. **Better Auth Plugin Availability**:
+   - In `better-auth@1.7.25`, there is no standalone plugin named `apiKey` in `better-auth/plugins`.
+   - API tokens / Personal Access Tokens (PATs) are issued as persistent, scoped bearer tokens or custom session tokens, and authenticated via the official `bearer()` plugin (`headers: { authorization: 'Bearer <token>' }`).
+   - Revocation is handled cleanly via `auth.api.revokeSession({ body: { token } })`.
+
+3. **Organization Custom Roles & Permissions**:
+   - When supplying custom roles to `organization({ roles: { ... } })`, Better Auth overwrites default roles unless explicitly merged: `{ ...defaultRoles, viewer: viewerRole }`.
+   - Defining `viewerRole = defaultAc.newRole({ organization: [], member: [], invitation: [], team: [], ac: ['read'] })` guarantees that mutations (`organization: ['update', 'delete']`) are denied.
+   - The `auth.api.hasPermission` API expects `body: { permissions: { resource: [action] } }` (plural `permissions`).
 
 ---
 
 ## Engine Credential Map
 
-Neo Gateway acts as the central credential custodian and security perimeter. Below is the exact operational map detailing how credentials for Hermes Agent, T3 Code, and DeepSeek Harness are minted, stored in the Neo Vault, rotated, and scoped, contrasting what upstream engines enforce against what Neo must enforce itself.
+Neo Gateway acts as the central credential custodian and security perimeter. Downstream engines (Hermes, T3, DSH) have no concept of workspaces or team RBAC. Below is the operational map detailing credential projection:
 
 | Engine Surface | Pinned Upstream Ref & Source File | Credential Type & Wire Transport | Minting Mechanism | Vault Storage & Rotation | Upstream Engine Enforcement | Neo Gateway Responsibility |
 |---|---|---|---|---|---|---|
@@ -59,17 +124,20 @@ Neo Gateway acts as the central credential custodian and security perimeter. Bel
 ## Consequences
 
 ### Positive
-- **Unified Security Model**: Web clients, desktop wrappers, mobile apps, and remote CLIs authenticate against one standardized Gateway surface with role-aware permissions.
-- **Zero-Trust Engine Isolation**: Downstream engines (Hermes, T3, DSH) never directly face the network or untrusted users; all RBAC and tenancy checks happen upstream in Neo.
-- **Auditable Credentials**: Engine tokens and vault keys are ephemeral or revocable, avoiding static plaintext credentials scattered across disk.
-- **Frictionless Developer Experience**: Single-user desktop mode requires zero credentials or login screens, while production team deployments gain enterprise-grade access control.
+- **Standardized, Hardened Auth Stack**: Using Better Auth eliminates custom cryptography, session fixation vulnerabilities, and hand-rolled password hashing logic.
+- **Full Tenancy & RBAC Coverage**: Native support for organizations, member roles (`owner`, `admin`, `member`, `viewer`), and permissions.
+- **Seamless Engine Shielding**: All downstream engines are fully shielded behind Gateway authentication and role checks.
+- **Zero-Setup Desktop Compatibility**: Local desktop single-user workflow remains friction-free via auto-bootstrap loopback sessions.
 
 ### Negative & Operational Tradeoffs
-- **Gateway as Single Point of Policy**: If the Gateway RBAC layer has a defect, underlying engines like Hermes will execute any command since Hermes treats the Gateway's token as fully privileged.
-- **Token Synchronization Overhead**: T3 Code sessions require TTL tracking and proactive re-issuance before expiration to prevent WebSocket connection drops during long turns.
+- **Kysely Node:SQLite Shim Requirement**: Requires maintaining the ~15-line `reader: stmt.columns().length > 0` adapter bridge when running on Node 22 native `node:sqlite`.
+- **Framework Overhead**: Better Auth generates multiple tables (`user`, `session`, `account`, `verification`, `organization`, `member`, `invitation`), which is heavier than a bespoke 3-table schema, but warranted by team/multi-tenant requirements.
 
 ---
 
 ## Evidence
 
-Refer to the accompanying runnable test suite in `spikes/P0-5-auth-draft/auth-proof.mjs` and verification results in `spikes/P0-5-auth-draft/README.md`.
+The architecture is proven by two runnable test suites in `spikes/P0-5-auth-draft`:
+1. `auth-proof-better-auth.mjs`: Real Better Auth implementation with Kysely on Node 22 `node:sqlite` passing all 10 checks.
+2. `auth-proof.mjs`: Hand-rolled baseline reference implementation passing all 10 checks.
+See `spikes/P0-5-auth-draft/README.md` for full test execution logs.
