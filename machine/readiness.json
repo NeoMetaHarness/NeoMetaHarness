@@ -201,8 +201,10 @@
     },
     "P2-0": {
       "title": "bot-hq domain core ported to packages/agents",
-      "status": "in_progress",
-      "owner": "codex"
+      "status": "done",
+      "owner": "codex",
+      "evidence": "pnpm --dir packages/agents test; packages/agents/PORTING.md",
+      "verified_by_pm": "2026-11-18 x2: per-bot serial / cross-bot parallel queues, room fan-out, approvals, tasks, routines->runtime cron, SQLite restart (orphaned runs interrupted); regressions green; MIT notice added verbatim"
     },
     "P2-2": {
       "title": "extensions/engine-dsh (pinned DSH SDK, isolated DSH_HOME, vault-projected env, Neo Cordis providers)",
@@ -211,6 +213,11 @@
       "evidence": "pnpm --dir extensions/engine-dsh test",
       "verified_by_pm": "2026-11-18 x2 on main: 2 parallel isolated sessions, coalesced ordered stream, cancel, disable -> 404 + process tree (6) gone, sample healthy; all other suites green",
       "follow_up": "run on Node >=24.9 (upstream requirement); real LLM adapter via model hub; computer/browser providers are stubs"
+    },
+    "P2-4": {
+      "title": "agents service in gateway + Hermes AgentRuntime adapter",
+      "status": "in_progress",
+      "owner": "codex"
     }
   },
   "known_risks": [
