@@ -1,0 +1,10 @@
+﻿import { build } from 'esbuild';
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+const root = resolve(import.meta.dirname);
+const upstream = resolve(root, '../../../../nmh-upstream-cache/dsh-superagent@8c32a9dc5d72/src');
+await mkdir(resolve(root, 'dist'), {recursive:true});
+const q = p => JSON.stringify(resolve(upstream, p).replaceAll('\\', '/'));
+const entry = `export { SourceRegistry } from ${q('sources/registry.ts')};\nexport { HealthBoard } from ${q('infra/health.ts')};\nexport { sourceContextOf } from ${q('app/source-context.ts')};\nexport { assessmentOutcome, directionAllowed } from ${q('policy.ts')};\nexport { key } from ${q('core/ids.ts')};\n`;
+await build({stdin:{contents:entry, resolveDir:root, sourcefile:'superagent-pinned-entry.ts', loader:'ts'},bundle:true,platform:'node',format:'esm',packages:'external',target:'node22',outfile:resolve(root, 'dist/superagent.mjs'),logLevel:'warning'});
+console.log('SUPERAGENT_BUILD pinned source 8c32a9dc5d72 PASS');
