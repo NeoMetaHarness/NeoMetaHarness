@@ -1,0 +1,17 @@
+{
+  "name": "@neometaharness/kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@neometaharness/contracts": "workspace:*",
+    "@neometaharness/db": "workspace:*",
+    "ajv": "8.17.1",
+    "semver": "7.7.3"
+  },
+  "devDependencies": {
+    "@types/semver": "7.7.1"
+  }
+}
