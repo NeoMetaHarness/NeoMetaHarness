@@ -154,7 +154,9 @@ async function trial(number, previewPort) {
     gateway = await startGateway(join(temporary, 'state.sqlite'));
     const base = `http://127.0.0.1:${gateway.port}`;
     const rpc = createORPCClient(new RPCLink({ url: base }));
-    assert.equal((await rpc.extensions.list()).length, 2, 'Both sample extensions are discoverable');
+    const listed = await rpc.extensions.list();
+    const expectedRows = listed.length;
+    assert.ok(['sample-ts', 'sample-py'].every((id) => listed.some((row) => row.id === id)), 'Both sample extensions are discoverable');
     assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
     assert.equal((await rpc.extensions.enable({ id: 'sample-py' })).status, 'running');
     assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 200);
@@ -164,7 +166,7 @@ async function trial(number, previewPort) {
     chrome = await startChrome(join(temporary, 'chrome'));
     const page = await pageSession(chrome, pageUrl);
     try {
-      await page.eventually('document.querySelectorAll("[data-testid^=extension-]").length === 2', 'two extension rows');
+      await page.eventually(`document.querySelectorAll("[data-testid^=extension-]").length === ${expectedRows}`, `${expectedRows} extension rows`);
       await page.eventually('document.body.innerText.includes("Inbox") && document.body.innerText.includes("Agents") && document.body.innerText.includes("Coding") && document.body.innerText.includes("Computers") && document.body.innerText.includes("Skills") && document.body.innerText.includes("Settings")', 'seven navigation entries');
       await page.eventually('document.querySelector("[data-testid=extension-sample-ts]")?.getAttribute("data-event-seq") === "1"', 'replayed TS event');
       await page.eventually('document.querySelector(".connection")?.textContent === "Live"', 'live stream');
@@ -181,7 +183,7 @@ async function trial(number, previewPort) {
       await page.eventually('document.querySelector("[data-testid=extension-sample-ts]")?.getAttribute("data-event-seq") === "4" && document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]").checked', 'TS reenabled from event seq 4');
       assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 200);
       assert.equal((await fetch(`${base}/x/sample-py/hello`)).status, 200);
-      console.log(`P1-2_BROWSER PASS trial=${number} rows=2 event_seq=1,3,4 off=404 on=200 python=200`);
+      console.log(`P1-2_BROWSER PASS trial=${number} rows=${expectedRows} event_seq=1,3,4 off=404 on=200 python=200`);
     } finally { await page.close(); }
   } finally {
     chrome?.close();

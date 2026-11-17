@@ -163,8 +163,11 @@
     },
     "P1-4": {
       "title": "engine-t3 extension (thin T3 RPC client)",
-      "status": "in_progress",
-      "owner": "sol-b"
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "pnpm --dir extensions/engine-t3 test",
+      "verified_by_pm": "2026-11-18 on main x2: wire schemas vs pinned contracts, isolated T3 (temp base-dir, random port, 15m scoped session, fake ACP), 45 ordered events, 33ms coalescing by message id, approval declined, settled, socket closed, disable=404, sample healthy; p1 + p1-2 regressions PASS",
+      "follow_up": "assert installed T3 desktop server version == pinned v0.1.9 (T3 app auto-updates)"
     }
   }
 }
