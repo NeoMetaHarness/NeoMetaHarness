@@ -1,0 +1,4 @@
+.venv/
+.hermes-home/
+__pycache__/
+*.pyc
