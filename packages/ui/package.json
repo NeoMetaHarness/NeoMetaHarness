@@ -1,0 +1,20 @@
+{
+  "name": "@neometaharness/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./StreamView": "./src/StreamView.tsx",
+    "./styles.css": "./src/styles.css"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "0.7.16",
+    "@astryxdesign/theme-neutral": "0.7.16",
+    "react": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "typescript": "5.9.3"
+  }
+}
