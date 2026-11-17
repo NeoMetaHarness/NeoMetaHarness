@@ -96,7 +96,7 @@ export async function startGateway(options: GatewayOptions) {
     try {
       const origin = req.headers.origin;
       // The web/PWA shell runs on a separate localhost port during development.
-      if (origin && /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin)) {
+      if (origin && /^(?:https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?|https?:\/\/tauri\.localhost|tauri:\/\/localhost)$/.test(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Vary', 'Origin');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');

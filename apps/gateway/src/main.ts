@@ -1,4 +1,5 @@
 import { startGateway } from './server.js';
+import { createInterface } from 'node:readline';
 
 const gateway = await startGateway({
   databaseFile: process.env.NMH_DB_PATH ?? './.cache/neo.sqlite',
@@ -17,3 +18,6 @@ async function close(): Promise<void> {
 process.on('SIGINT', () => { void close(); });
 process.on('SIGTERM', () => { void close(); });
 process.on('message', (message) => { if (message === 'shutdown') void close(); });
+createInterface({ input: process.stdin }).on('line', (line) => {
+  if (line.trim() === 'shutdown') void close();
+});
