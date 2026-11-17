@@ -158,8 +158,11 @@
     },
     "P1-3": {
       "title": "Vault + engine projectors",
-      "status": "in_progress",
-      "owner": "sol-a"
+      "status": "done",
+      "owner": "sol-a",
+      "evidence": "pnpm --dir packages/vault test; apps/gateway/test/vault-rpc.test.ts",
+      "verified_by_pm": "2026-11-18 on main x2: AES-GCM round-trip, tamper detection, rotate rewrites Hermes .env, owned-key delete, DSH env has no parent secrets, injection rejected; vault RPC deny-by-default (authorizeVault hook for auth); all suites green",
+      "fixed_by_pm": "System32 whoami/icacls absolute paths (Git Bash shadowed whoami)"
     },
     "P1-4": {
       "title": "engine-t3 extension (thin T3 RPC client)",
