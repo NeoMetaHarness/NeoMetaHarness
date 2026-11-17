@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
 const root = resolve(import.meta.dirname);
-const state = await mkdtemp(join(tmpdir(), 'nmh-dsh-sdk-'));
+await mkdir(join(root, '.cache'), { recursive: true });
+const state = await mkdtemp(join(root, '.cache', 'nmh-dsh-sdk-'));
 const cwd = join(state, 'workspace');
 await mkdir(cwd);
 const cli = resolve(root, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
