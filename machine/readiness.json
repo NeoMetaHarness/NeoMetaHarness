@@ -187,5 +187,25 @@
       "evidence": "pnpm test:p1-5",
       "verified_by_pm": "2026-11-18 x2: real Tauri build, WebView2 shows all extensions, live toggle 404/200, python ok, no SW, clean exit, no leftover processes; Rust shell 158 LOC (thin)"
     }
+  },
+  "p2_tasks": {
+    "P2-1": {
+      "title": "extensions/engine-hermes (pinned Hermes, isolated home, runs/approvals/stop/cron via gateway)",
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "pnpm --dir extensions/engine-hermes test",
+      "verified_by_pm": "2026-11-18 x2 on main incl. fresh venv build: profiles, 8 streamed coalesced events, deny->completed, stop->cancelled, cron, disable -> processes gone + 404, sample healthy; all regressions green; no leftovers",
+      "follow_up": "spawn Hermes with vault-projected allowlisted env instead of ...process.env; plug vault into CredentialSource"
+    },
+    "P2-0": {
+      "title": "bot-hq domain core ported to packages/agents",
+      "status": "in_progress",
+      "owner": "codex"
+    },
+    "P2-2": {
+      "title": "extensions/engine-dsh",
+      "status": "in_progress",
+      "owner": "sol-a"
+    }
   }
 }
