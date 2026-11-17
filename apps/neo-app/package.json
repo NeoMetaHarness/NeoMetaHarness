@@ -9,7 +9,8 @@
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "test:p1-2": "node test/p1-2.mjs",
-    "test:p1-5": "node test/p1-5.mjs"
+    "test:p1-5": "node test/p1-5.mjs",
+    "test:p2-3": "node test/p2-3.mjs"
   },
   "dependencies": {
     "@neometaharness/ui": "workspace:*",
