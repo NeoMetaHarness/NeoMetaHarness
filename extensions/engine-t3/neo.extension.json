@@ -1,0 +1,7 @@
+{
+  "id": "engine-t3",
+  "version": "0.1.0",
+  "displayName": "T3 coding control plane",
+  "kind": ["engine"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}

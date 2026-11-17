@@ -85,7 +85,7 @@ async function trial(index: number): Promise<void> {
     try {
       const http = createORPCClient<Client>(new HttpLink({ url: `http://127.0.0.1:${gateway.port}` }));
       const before = await http.extensions.list();
-      assert.equal(before.length, 2);
+      assert.equal(before.length, 3);
       assert.ok(before.every((extension) => extension.status === 'disabled'));
 
       const seen: GatewayEvent[] = [];
@@ -130,7 +130,7 @@ async function trial(index: number): Promise<void> {
     const connection = connected(gateway.port);
     try {
       const statuses = await connection.client.extensions.list();
-      assert.deepEqual(statuses.map((row) => row.status), ['running', 'running']);
+      assert.deepEqual(statuses.filter((row) => row.id.startsWith('sample-')).map((row) => row.status), ['running', 'running']);
       assert.deepEqual(await (await route(gateway.port, 'sample-ts')).json(), { message: 'Hello from TypeScript' });
       assert.deepEqual(await (await route(gateway.port, 'sample-py')).json(), { message: 'Hello from Python' });
       console.log(`P1_PERSISTENCE PASS trial=${index} enabled=2`);
