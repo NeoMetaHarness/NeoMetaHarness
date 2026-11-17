@@ -104,7 +104,7 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 ### 5.7 Coding
 | ID | Requirement | P |
 |---|---|---|
-| CD-1 | Coding section on T3's server + headless client runtime: projects, threads, composer, approvals, diff, checkpoints, worktrees, terminal, commit / push / PR | P0 |
+| CD-1 | Coding section on T3's server through Neo's thin RPC client (pinned protocol v2): projects, threads, composer, approvals, diff, checkpoints, worktrees, terminal, commit / push / PR | P0 |
 | CD-2 | Providers: DSH (default), Claude Code, Codex, Cursor, OpenCode, any ACP agent | P0 |
 | CD-3 | DSH with Neo memory, soul, skills and reporting plugins | P0 |
 | CD-4 | Super-agent-delegated threads appear in the same UI | P0 |
@@ -142,7 +142,7 @@ Native mobile apps, a hosted SaaS, billing, a public extension marketplace with 
 ## 7. Risks
 | Risk | Mitigation |
 |---|---|
-| Rebuilding T3-quality coding UI in Astryx is large | Reuse T3's headless client runtime; P0 spike; ship the coding MVP first, then reach parity in steps |
+| Rebuilding T3-quality coding UI in Astryx is large | Thin Neo RPC client over T3's pinned Effect schemas (~200–400 LOC, spike a); a live contract test with a fake ACP agent; P0 spike; ship the coding MVP first, then reach parity in steps |
 | DSH developer-preview breaking changes | Pin, weekly bumps, contract tests, thin plugin surface |
 | Hermes is huge and moves fast; App exposes a lot of it | Engine extension maps Hermes APIs to the Neo API; contract tests per used endpoint; expose features in waves |
 | Astryx is beta (React 19); bot-hq / DSH web are React 18 | Only Neo App code uses Astryx; adopted bot-hq UI is rewritten anyway |

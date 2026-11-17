@@ -30,8 +30,8 @@ upstreams:
     channel: stable-release
     bump: nightly
     role: [coding-control-plane]
-    seams: [server-rpc-contract, packages/contracts, packages/client-runtime, acp-local-command, mcp-outside-agents]
-    consume: source              # pinned checkout in upstream/sources; headless packages linked into the workspace
+    seams: [ws-rpc-orchestration-v2, contracts-schemas-for-validation, auth-session-issue, acp-local-command, mcp-outside-agents]
+    consume: server-binary       # client packages are private: Neo ships a thin RPC client, contract-tested (spike a)
   honcho:
     upstream: plastic-labs/honcho
     lang: py

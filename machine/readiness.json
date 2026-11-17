@@ -38,9 +38,10 @@
         "result": "WORKS; per-section streaming -89% script; Tauri vs Electron equal runtime on Windows, Tauri 100x smaller"
       },
       "a": {
-        "status": "rework",
+        "status": "done",
         "owner": "codex",
-        "note": "finish authenticated live E2E with fake ACP agent"
+        "evidence": "spikes/P0-3a-t3-headless-client/README.md",
+        "verified_by_pm": "independent live_e2e=PASS on isolated T3 2026-11-17"
       },
       "b": {
         "status": "rework",

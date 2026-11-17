@@ -74,7 +74,7 @@ flowchart TB
 | **DeepSeek Harness** | Agent loop, tools, subagents, workflow, MCP client, computer-use / browser-use provider seams, Cordis | `dsh` profiles + `cordis.patch.yml`, SDK JSON-RPC (`sdk` profile), ACP (`acp` profile), Neo DSH plugins | `engine-dsh` |
 | **dsh-superagent** | Orchestration domain (Source → Trigger → Eval → Ticket → Assignment), Policy and Mandates, panel logic | DSH bundle, new Source kinds, worker preset patch | `engine-superagent` |
 | **Hermes Agent** | Everything bot-hq should expose: 26 channels, 40+ model providers + credential pools + subscription proxy, skills + `/learn` + curator + learning graph + Skills Hub, memory providers, cron, kanban, delegation, hosted rooms, Bot Screen, computer use, voice/TTS, goals, loops, hooks, MCP | `api_server` (OpenAI-style `/v1/*`, runs, cron, memory sessions), dashboard backend API + **dashboard backend plugins** (FastAPI routers), Hermes plugins, ACP adapter | `engine-hermes` |
-| **T3 Code** | Provider orchestration (Claude Code, Codex, Cursor, OpenCode, any ACP agent incl. DSH), threads, checkpoints, worktrees, git/PR, terminals, remote environments | T3 **server** over its RPC contract; Neo App uses T3's headless `packages/contracts` and `packages/client-runtime` from the pinned upstream source; T3 `/mcp` for agents | `engine-t3` |
+| **T3 Code** | Provider orchestration (Claude Code, Codex, Cursor, OpenCode, any ACP agent incl. DSH), threads, checkpoints, worktrees, git/PR, terminals, remote environments | T3 **server** over its authenticated WebSocket RPC (orchestration protocol v2, Effect schemas) through a **thin Neo RPC client** in `engine-t3` (validated against the pinned `packages/contracts` schemas). Both T3 client packages are `private` and are not consumed as an SDK ([spike a](../spikes/P0-3a-t3-headless-client/README.md)). Neo authenticates with a scoped session (`t3 auth session issue` / pairing). T3 `/mcp` for agents | `engine-t3` |
 | **bot-hq** *(adopted)* | Bot-team UX: chat that shows the work, screen per bot, takeover, routines, tasks, Library, approvals, voice, bot-to-bot | Code moved into `packages/agents` and generalised (see §5) | first-party |
 | **Honcho** | Permanent memory, dialectic user/agent modelling | REST v3, `harness-plugin-core`, `hermes-plugin-honcho` | `memory-honcho` |
 | **Hermes-Agents-Local-Memory** *(ours)* | L1 memory: SQLite facts / cards / summaries, markdown export | REST + MCP (to add) | `memory-local` |
@@ -199,7 +199,7 @@ As in v0.1, now model-agnostic and per-bot configurable:
 
 ## 10. Coding (inside the Neo App)
 
-- The **Coding** section is built in Astryx on T3's headless client runtime: projects, threads, composer, provider/model picker, approvals, diff review, checkpoints, worktrees, terminal, commit / push / PR.
+- The **Coding** section is built in Astryx on Neo's thin T3 RPC client (`thread.create`, `message.dispatch`, `subscribeThread`, `runtime-request.respond`, `thread.settle`; proven live in spike a): projects, threads, composer, provider/model picker, approvals, diff review, checkpoints, worktrees, terminal, commit / push / PR.
 - Providers come from T3: **DSH** (`dsh --profile neo-coding`, the default), Claude Code, Codex, Cursor, OpenCode, any ACP agent.
 - DSH sessions get Neo plugins: `neo-dsh-memory`, `neo-dsh-soul`, `neo-dsh-report`, plus `neo-dsh-skills` (registry projection).
 - The super agent drives coding through T3's MCP (start/message threads), so coding delegated by the orchestrator shows up in the same Coding UI.
