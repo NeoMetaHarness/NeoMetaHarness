@@ -5,7 +5,7 @@ import { WebSocketServer } from 'ws';
 import { RPCHandler as WSRPCHandler } from '@orpc/server/ws';
 import { RPCHandler as HttpRPCHandler } from '@orpc/server/node';
 import { implement, ORPCError } from '@orpc/server';
-import { neoContract, type T3Event, type HermesEvent, type VaultOperation } from '@neometaharness/contracts';
+import { neoContract, type T3Event, type HermesEvent, type DshEvent, type VaultOperation } from '@neometaharness/contracts';
 import { VaultService, KeyFileProvider, type KeyProvider, type VaultScope } from '@neometaharness/vault';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
 import { NeoKernel } from '@neometaharness/kernel';
@@ -24,10 +24,13 @@ const defaultExtensions = fileURLToPath(new URL('../../../extensions/', import.m
 
 export async function startGateway(options: GatewayOptions) {
   const db = new SqliteDatabaseProvider(options.databaseFile);
-  const kernel = new NeoKernel(db);
   const vault = new VaultService(db, options.vaultKeyProvider ?? new KeyFileProvider(
     options.vaultKeyFile ?? join(dirname(resolve(options.databaseFile)), 'vault-keys', 'master.key'),
   ));
+  const kernel = new NeoKernel(db, {
+    vault,
+    extensionDataDir: join(dirname(resolve(options.databaseFile)), 'extensions'),
+  });
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope) => {
     if (await options.authorizeVault?.(operation, scope) !== true) {
       throw new ORPCError('UNAUTHORIZED', { message: 'Vault access denied' });
@@ -51,12 +54,27 @@ export async function startGateway(options: GatewayOptions) {
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Hermes extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const invokeDsh = async (route: string, body: unknown) => {
+    const path = `/x/engine-dsh/${route}`;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'DSH extension is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   const withHealth = async (id: string) => {
     const health = await kernel.health(id).catch(() => ({ ok: false }));
     return { ...kernel.status(id), ...(health ? { health } : {}) };
   };
   const router = {
-    x: { 'engine-t3': {
+    x: { 'engine-dsh': {
+      create: os.x['engine-dsh'].create.handler(async ({ input }) => invokeDsh('create', input) as Promise<{ sessionId: string; pid: number }>),
+      prompt: os.x['engine-dsh'].prompt.handler(async ({ input }) => invokeDsh('prompt', input) as Promise<{ messageId: string }>),
+      events: os.x['engine-dsh'].events.handler(async function* ({ input, signal }) {
+        const stream = await invokeDsh('events', { ...input, signal }) as AsyncIterable<DshEvent>;
+        yield* coalesceText(stream);
+      }),
+      wait: os.x['engine-dsh'].wait.handler(async ({ input }) => invokeDsh('wait', input) as Promise<{ status: 'settled' }>),
+      cancel: os.x['engine-dsh'].cancel.handler(async ({ input }) => invokeDsh('cancel', input) as Promise<{ cancelled: boolean }>),
+      shutdown: os.x['engine-dsh'].shutdown.handler(async ({ input }) => invokeDsh('shutdown', input) as Promise<{ stopped: boolean }>),
+    }, 'engine-t3': {
       create: os.x['engine-t3'].create.handler(async ({ input }) => invokeT3('create', input) as Promise<{ sequence: number }>),
       send: os.x['engine-t3'].send.handler(async ({ input }) => invokeT3('send', input) as Promise<{ sequence: number }>),
       events: os.x['engine-t3'].events.handler(async function* ({ input, signal }) {
@@ -132,7 +150,7 @@ export async function startGateway(options: GatewayOptions) {
       }
       if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
       const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/')) {
+      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/')) {
         if (!kernel.hasRoute(path)) { res.writeHead(404).end(); return; }
         const matched = await httpRPC.handle(req, res);
         if (!matched.matched) res.writeHead(404).end();

@@ -88,7 +88,7 @@ export class NeoKernel {
   private operation: Promise<unknown> = Promise.resolve();
   private order: string[] = [];
 
-  constructor(private readonly db: DatabaseProvider) {}
+  constructor(private readonly db: DatabaseProvider, private readonly services: Readonly<Record<string, unknown>> = {}) {}
 
   async discover(root: string): Promise<void> {
     for (const dirent of await readdir(root, { withFileTypes: true })) {
@@ -235,7 +235,7 @@ export class NeoKernel {
         apply: async (cordisContext) => {
           const ctx: ExtensionContext = {
             provide: (name, value) => { cordisContext.provide(name, value); },
-            inject: <T>(name: string) => cordisContext.reflect.get(name) as T | undefined,
+            inject: <T>(name: string) => (cordisContext.reflect.get(name) ?? this.services[name]) as T | undefined,
             effect: (register) => { cordisContext.effect(register); },
             route: (path, handler) => { cordisContext.effect(() => this.addRoute(id, path, handler)); },
             contribute: (kind, value) => { cordisContext.effect(() => this.addContribution(id, kind, value)); },

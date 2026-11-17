@@ -44,6 +44,23 @@ export const t3Contract = {
   settle: oc.input(z.object({ threadId: z.string().min(1) })).output(z.object({ sequence: z.number().int() })),
 };
 
+export const dshEventSchema = t3EventSchema;
+export type DshEvent = z.infer<typeof dshEventSchema>;
+export const dshContract = {
+  create: oc.input(z.object({ workspaceId: z.string().min(1), cwd: z.string().min(1) }))
+    .output(z.object({ sessionId: z.string(), pid: z.number().int().positive() })),
+  prompt: oc.input(z.object({ sessionId: z.string(), text: z.string().min(1) }))
+    .output(z.object({ messageId: z.string() })),
+  events: oc.input(z.object({ sessionId: z.string().min(1) }))
+    .output(eventIterator(dshEventSchema)),
+  wait: oc.input(z.object({ sessionId: z.string().min(1) }))
+    .output(z.object({ status: z.literal('settled') })),
+  cancel: oc.input(z.object({ sessionId: z.string().min(1) }))
+    .output(z.object({ cancelled: z.boolean() })),
+  shutdown: oc.input(z.object({ sessionId: z.string().min(1) }))
+    .output(z.object({ stopped: z.boolean() })),
+};
+
 export const vaultScopeSchema = z.object({
   kind: z.enum(['workspace', 'bot', 'engine']),
   workspaceId: z.string().min(1),
@@ -94,7 +111,7 @@ export const hermesContract = {
 };
 
 export const neoContract = {
-  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract },
+  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
