@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "phase": "P0-foundation",
-  "updated": "2026-11-17",
+  "updated": "2026-11-18",
   "decisions": {
     "upstream_strategy": "engines unmodified via seams; bot-hq adopted first-party",
     "ui": "one Neo App on Astryx",
@@ -84,7 +84,14 @@
         "DSH engine on Node >=24.9 (spikes ran on 22.23)",
         "Hermes contract tests from a clean home",
         "full Superagent Engine -> ticket -> DSH worker test"
-      ]
+      ],
+      "h": {
+        "status": "done",
+        "owner": "antigravity",
+        "evidence": "spikes/P0-3h-hermes-contract/README.md",
+        "verified_by_pm": "2 consecutive runs from a clean copy 2026-11-18: 8/8 PASS (auth, profile, cron, kanban, runs SSE+deny, stop->cancelled, memory turn, computer_use turn)",
+        "follow_up": "temp HERMES_HOME cleanup uses ignore_errors and can leak on Windows file locks; close log handlers + retry; drop hard-coded worktree fallback"
+      }
     },
     "P0-4": {
       "title": "Upstream registry + lock + local upstream check",
@@ -93,7 +100,28 @@
     },
     "P0-5": {
       "title": "ADRs: kernel, API style, DB layer, auth",
-      "status": "todo"
+      "status": "in_progress",
+      "api_style": {
+        "status": "proposed",
+        "owner": "codex",
+        "evidence": "spikes/P0-5-adr-drafts/ADR-api-style.md",
+        "proposal": "oRPC v1 contract-first (Zod) over WS + HTTP; T3 Effect RPC stays inside engine-t3",
+        "verified_by_pm": "benchmark reproduced 2026-11-18 (effect 9.7 ms / orpc 53 ms per 2,000 deltas incl. connect; orpc gap is connection setup, streaming body ~8 ms both)"
+      },
+      "db_layer": {
+        "status": "blocked_partial",
+        "owner": "codex",
+        "proposal": "Kysely",
+        "note": "SQLite proven; Postgres not run (no Docker on this machine): use PGlite / embedded Postgres"
+      },
+      "kernel": {
+        "status": "todo",
+        "owner": "PM"
+      },
+      "auth": {
+        "status": "todo",
+        "owner": "antigravity (draft)"
+      }
     }
   },
   "milestones": {
