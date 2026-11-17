@@ -1,0 +1,5 @@
+name: neo_l1
+version: 1.0.0
+description: "Neo L1 local memory provider stub serving context over HTTP"
+config_keys:
+  - memory.neo_l1
