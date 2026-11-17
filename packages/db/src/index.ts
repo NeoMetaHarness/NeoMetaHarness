@@ -2,6 +2,9 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { Kysely, SqliteDialect } from 'kysely';
+import { AgentRecords, type AgentTables } from './agent-records.js';
+export { AgentRecords } from './agent-records.js';
+export type { AgentBot, AgentRoom, AgentRoomMessage, AgentTurn, AgentEvent, AgentApproval, AgentTask, AgentRoutine, TurnStatus, ApprovalStatus } from './agent-records.js';
 
 interface ExtensionStateTable {
   id: string;
@@ -62,7 +65,7 @@ function toVaultRow(record: VaultStoredSecret): VaultSecretTable {
     created_at: record.createdAt, updated_at: record.updatedAt,
   };
 }
-interface NeoTables {
+export interface NeoTables extends AgentTables {
   extension_state: ExtensionStateTable;
   vault_secret: VaultSecretTable;
 }
@@ -77,6 +80,7 @@ export interface DatabaseProvider {
 
 export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStore {
   private readonly db: Kysely<NeoTables>;
+  readonly agents: AgentRecords;
 
   constructor(filename: string) {
     if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true });
@@ -97,6 +101,7 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
         },
       }),
     });
+    this.agents = new AgentRecords(this.db);
   }
 
   async migrate(): Promise<void> {
@@ -117,6 +122,7 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
       .addColumn('created_at', 'integer', (column) => column.notNull())
       .addColumn('updated_at', 'integer', (column) => column.notNull())
       .execute();
+    await this.agents.migrate();
   }
 
   async getEnabled(id: string): Promise<boolean> {
