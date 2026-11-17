@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
-    "test:p1": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts && tsc --noEmit"
+    "test:p1": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts test/vault-rpc.test.ts && tsc --noEmit"
   },
   "dependencies": {
     "@neometaharness/contracts": "workspace:*",
     "@neometaharness/db": "workspace:*",
     "@neometaharness/kernel": "workspace:*",
+    "@neometaharness/vault": "workspace:*",
     "@orpc/contract": "1.16.2",
     "@orpc/server": "1.16.2",
     "@orpc/client": "1.16.2",

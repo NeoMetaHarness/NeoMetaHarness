@@ -44,12 +44,38 @@ export const t3Contract = {
   settle: oc.input(z.object({ threadId: z.string().min(1) })).output(z.object({ sequence: z.number().int() })),
 };
 
+export const vaultScopeSchema = z.object({
+  kind: z.enum(['workspace', 'bot', 'engine']),
+  workspaceId: z.string().min(1),
+  subjectId: z.string().min(1).optional(),
+}).refine((scope) => scope.kind === 'workspace' ? scope.subjectId === undefined : !!scope.subjectId, {
+  message: 'Scope subjectId required for bot/engine and forbidden for workspace',
+});
+
+export const vaultMetadataSchema = z.object({
+  scope: vaultScopeSchema,
+  name: z.string(),
+  version: z.number().int().positive(),
+  createdAt: z.number().int(),
+  updatedAt: z.number().int(),
+});
+
+const vaultNameSchema = z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/);
+const vaultSelectorSchema = z.object({ scope: vaultScopeSchema, name: vaultNameSchema });
+const vaultWriteSchema = vaultSelectorSchema.extend({ value: z.string().min(1) });
+export type VaultOperation = 'list' | 'put' | 'rotate' | 'delete';
 export const neoContract = {
   x: { 'engine-t3': t3Contract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
     disable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
+  },
+  vault: {
+    list: oc.input(z.object({ scope: vaultScopeSchema })).output(z.array(vaultMetadataSchema)),
+    put: oc.input(vaultWriteSchema).output(vaultMetadataSchema),
+    rotate: oc.input(vaultWriteSchema).output(vaultMetadataSchema),
+    delete: oc.input(vaultSelectorSchema).output(z.object({ deleted: z.boolean() })),
   },
   events: {
     subscribe: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))

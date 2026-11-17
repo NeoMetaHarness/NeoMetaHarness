@@ -1,11 +1,12 @@
 import { createServer } from 'node:http';
-import { resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { RPCHandler as WSRPCHandler } from '@orpc/server/ws';
 import { RPCHandler as HttpRPCHandler } from '@orpc/server/node';
 import { implement, ORPCError } from '@orpc/server';
-import { neoContract, type T3Event } from '@neometaharness/contracts';
+import { neoContract, type T3Event, type VaultOperation } from '@neometaharness/contracts';
+import { VaultService, KeyFileProvider, type KeyProvider, type VaultScope } from '@neometaharness/vault';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
 import { NeoKernel } from '@neometaharness/kernel';
 import { coalesceText } from './coalesce.js';
@@ -14,6 +15,9 @@ export interface GatewayOptions {
   databaseFile: string;
   extensionsDir?: string;
   port?: number;
+  vaultKeyFile?: string;
+  vaultKeyProvider?: KeyProvider;
+  authorizeVault?: (operation: VaultOperation, scope: VaultScope) => boolean | Promise<boolean>;
 }
 
 const defaultExtensions = fileURLToPath(new URL('../../../extensions/', import.meta.url));
@@ -21,6 +25,14 @@ const defaultExtensions = fileURLToPath(new URL('../../../extensions/', import.m
 export async function startGateway(options: GatewayOptions) {
   const db = new SqliteDatabaseProvider(options.databaseFile);
   const kernel = new NeoKernel(db);
+  const vault = new VaultService(db, options.vaultKeyProvider ?? new KeyFileProvider(
+    options.vaultKeyFile ?? join(dirname(resolve(options.databaseFile)), 'vault-keys', 'master.key'),
+  ));
+  const authorizeVault = async (operation: VaultOperation, scope: VaultScope) => {
+    if (await options.authorizeVault?.(operation, scope) !== true) {
+      throw new ORPCError('UNAUTHORIZED', { message: 'Vault access denied' });
+    }
+  };
   try {
     await kernel.discover(resolve(options.extensionsDir ?? defaultExtensions));
   } catch (error) {
@@ -53,6 +65,24 @@ export async function startGateway(options: GatewayOptions) {
       list: os.extensions.list.handler(async () => Promise.all(kernel.list().map((extension) => withHealth(extension.id)))),
       enable: os.extensions.enable.handler(async ({ input }) => { await kernel.enable(input.id); return withHealth(input.id); }),
       disable: os.extensions.disable.handler(async ({ input }) => { await kernel.disable(input.id); return withHealth(input.id); }),
+    },
+    vault: {
+      list: os.vault.list.handler(async ({ input }) => {
+        await authorizeVault('list', input.scope);
+        return vault.list(input.scope);
+      }),
+      put: os.vault.put.handler(async ({ input }) => {
+        await authorizeVault('put', input.scope);
+        return vault.put(input.scope, input.name, input.value);
+      }),
+      rotate: os.vault.rotate.handler(async ({ input }) => {
+        await authorizeVault('rotate', input.scope);
+        return vault.rotate(input.scope, input.name, input.value);
+      }),
+      delete: os.vault.delete.handler(async ({ input }) => {
+        await authorizeVault('delete', input.scope);
+        return { deleted: await vault.delete(input.scope, input.name) };
+      }),
     },
     events: {
       subscribe: os.events.subscribe.handler(async function* ({ input, signal }) {
@@ -124,6 +154,7 @@ export async function startGateway(options: GatewayOptions) {
   return {
     port: address.port,
     kernel,
+    vault,
     async close() {
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((done) => wss.close(() => done()));

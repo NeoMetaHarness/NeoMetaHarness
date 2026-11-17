@@ -16,6 +16,7 @@
     "../../packages/contracts/src/**/*.ts",
     "../../packages/kernel/src/**/*.ts",
     "../../packages/db/src/**/*.ts",
+    "../../packages/vault/src/**/*.ts",
     "../../extensions/sample-ts/src/**/*.ts"
   ]
 }

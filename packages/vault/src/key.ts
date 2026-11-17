@@ -1,10 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
 import { link, lstat, mkdir, open, readFile, unlink } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
+// Absolute System32 paths: under Git Bash/MSYS, PATH resolves `whoami` to a Unix tool.
+const system32 = (exe: string) => join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', exe);
 
 export interface KeyProvider {
   getKey(): Promise<Buffer>;
@@ -13,10 +15,10 @@ export interface KeyProvider {
 /** Restricts a credential file to the current user. Windows uses the user's SID in its DACL. */
 export async function restrictPrivatePath(path: string): Promise<void> {
   if (process.platform === 'win32') {
-    const { stdout } = await execFile('whoami', ['/user', '/fo', 'csv', '/nh']);
+    const { stdout } = await execFile(system32('whoami.exe'), ['/user', '/fo', 'csv', '/nh']);
     const sid = stdout.match(/S-\d+(?:-\d+)+/)?.[0];
     if (!sid) throw new Error('Cannot determine Windows user SID for private file ACL');
-    await execFile('icacls', [path, '/inheritance:r', '/grant:r', '*' + sid + ':(F)']);
+    await execFile(system32('icacls.exe'), [path, '/inheritance:r', '/grant:r', '*' + sid + ':(F)']);
   } else {
     const { chmod } = await import('node:fs/promises');
     await chmod(path, (await lstat(path)).isDirectory() ? 0o700 : 0o600);
