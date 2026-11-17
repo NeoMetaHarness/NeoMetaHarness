@@ -21,6 +21,7 @@ import logging
 import os
 os.environ["HERMES_EXEC_ASK"] = "1"
 os.environ["API_SERVER_ENABLED"] = "true"
+os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
 import shutil
 import socketserver
 import sys
@@ -39,9 +40,7 @@ from typing import Dict, List, Optional, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCK_PATH = REPO_ROOT / "upstream.lock.json"
 if not LOCK_PATH.exists():
-    # Fallback if running from scratch directory
-    REPO_ROOT = Path(r"C:\Users\Neo\Desktop\nmh-wt\gemini")
-    LOCK_PATH = REPO_ROOT / "upstream.lock.json"
+    raise FileNotFoundError(f"Critical: upstream.lock.json not found at {LOCK_PATH}")
 
 with open(LOCK_PATH, "r", encoding="utf-8") as f:
     LOCK_DATA = json.load(f)
@@ -564,6 +563,10 @@ async def run_suite() -> bool:
                     agent_res = agent.run_conversation("trigger_computer_use click the Submit button")
                     assert agent_res.get("completed") is True
                 finally:
+                    try:
+                        agent.close()
+                    except Exception:
+                        pass
                     cu_tool.set_approval_callback(None)
                     os.environ.pop("HERMES_INTERACTIVE", None)
 
@@ -587,15 +590,63 @@ async def run_suite() -> bool:
         l1_http_server.shutdown()
         l1_http_server.server_close()
 
-        # Teardown logging and delete temporary HERMES_HOME
+        # 1. Close SessionDB registry handles & clear caches
+        try:
+            from hermes_state_registry import close_all, close_all_under
+            close_all_under(temp_home)
+            close_all()
+        except Exception:
+            pass
+
+        try:
+            from hermes_cli import goals
+            goals._DB_CACHE.clear()
+        except Exception:
+            pass
+
+        # 2. Release Hermes profile log handlers & tear down async logging queue
+        try:
+            import hermes_logging
+            hermes_logging.release_profile_log_handlers(temp_home)
+            hermes_logging._reset_queued_handlers()
+        except Exception:
+            pass
+
+        # 3. Shutdown standard logging and close all open handlers across all loggers
         logging.shutdown()
-        for h in list(logging.root.handlers):
-            logging.root.removeHandler(h)
+        for logger in [logging.root] + list(logging.Logger.manager.loggerDict.values()):
+            if hasattr(logger, "handlers"):
+                for h in list(logger.handlers):
+                    try:
+                        h.flush()
+                        h.close()
+                    except Exception:
+                        pass
+                    try:
+                        logger.removeHandler(h)
+                    except Exception:
+                        pass
+
+        import gc
+        gc.collect()
+
+        # 4. Retry rmtree with backoff
+        cleanup_passed = False
+        for attempt in range(10):
             try:
-                h.close()
-            except Exception:
-                pass
-        shutil.rmtree(temp_home, ignore_errors=True)
+                if os.path.exists(temp_home):
+                    shutil.rmtree(temp_home)
+                cleanup_passed = True
+                break
+            except Exception as e:
+                print(f"Cleanup attempt {attempt} failed: {e}")
+                time.sleep(0.3)
+                gc.collect()
+
+        if not cleanup_passed:
+            cleanup_passed = not os.path.exists(temp_home)
+
+        print(f"CLEANUP {'PASS' if cleanup_passed else 'FAIL'}: {temp_home}")
 
     # Print Report
     print("\n--- Hermes Contract Test Results ---")
