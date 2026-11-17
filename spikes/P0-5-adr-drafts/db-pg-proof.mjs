@@ -11,7 +11,7 @@ import { upstreamPath } from './upstream-path.mjs';
 
 assert.ok(fs.existsSync(upstreamPath('t3code','packages/contracts/src/rpc.ts')));
 if (process.env.NMH_PG_ISOLATED !== '1' || !process.env.NMH_PG_TEST_URL) {
-  console.log('DB_POSTGRES BLOCKED (requires disposable local Docker PostgreSQL; set NMH_PG_ISOLATED=1 and NMH_PG_TEST_URL)');
+  console.log('DB_POSTGRES_EXTERNAL SKIPPED (optional isolated localhost server; set NMH_PG_ISOLATED=1 and NMH_PG_TEST_URL)');
   process.exit(0);
 }
 const url = new URL(process.env.NMH_PG_TEST_URL);

@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { OpenAPIGenerator } from '@orpc/openapi';
+import { ZodToJsonSchemaConverter } from '@orpc/zod/zod4';
+import { contract } from './api-contract-orpc.mjs';
+const spec = await new OpenAPIGenerator({schemaConverters:[new ZodToJsonSchemaConverter()]}).generate(contract,{info:{title:'Neo RPC proof',version:'0.0.0'}});
+const endpoint = spec.paths?.['/subscribe']?.post;
+assert.equal(endpoint?.requestBody?.content?.['application/json']?.schema?.properties?.count?.type, 'integer');
+assert.equal(endpoint?.responses?.['200']?.content?.['text/event-stream']?.schema?.oneOf?.[0]?.properties?.data?.properties?.kind?.type, 'string');
+const output = JSON.stringify(spec,null,2) + '\n';
+await mkdir('.cache',{recursive:true});
+await writeFile('.cache/neo-openapi.json',output);
+console.log('ORPC_OPENAPI PASS version=' + spec.openapi + ' paths=' + Object.keys(spec.paths).join(',') + ' bytes=' + Buffer.byteLength(output));

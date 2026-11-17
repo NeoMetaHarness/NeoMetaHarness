@@ -1,71 +1,85 @@
 # P0-5 ADR draft — Neo API style (Gateway ↔ App)
 
-Status: **PROPOSED**; PM review required. Date: 2026-11-17.
+Status: **PROPOSED**; PM review required. Date: 2026-11-18.
 
 ## Context
 
-Neo Gateway exposes one versioned, typed, schema-first contract from `packages/contracts` to web, PWA, Tauri webview and remote clients. It needs bidirectional WebSocket transport, ordered streaming subscriptions, runtime validation and TypeScript inference without generation. Extensions will register namespaced APIs through the Gateway. T3 Code v0.1.9 internally uses Effect RPC over WebSocket (see pinned `packages/contracts/src/rpc.ts` and `apps/server/src/ws.ts`), but Neo owns its separate Gateway ↔ App protocol.
+The Neo Gateway needs one versioned, schema-first contract in `packages/contracts` for browser, PWA, Tauri and remote clients, including ordered streaming subscriptions and runtime validation without TypeScript code generation. Non-TypeScript process extensions and third-party clients should also be able to discover the public API. T3 Code v0.1.9 uses Effect RPC internally; Neo's Gateway owns a distinct public protocol.
 
-The comparison deliberately benchmarks the same subscription: client sends `{count:2000}`; server streams ordered `{kind:'delta',seq:1..2000,text:'x'}` followed by exactly one `{kind:'done',seq:2000,text:''}`. Both clients check every sequence and terminal frame.
+Our localhost proof sends `{count:2000}`, receives 2,000 ordered `{kind:'delta',seq,text}` events and one terminal `{kind:'done',seq,text}`, and checks sequence numbers and the terminal frame. Every measured call opens a new WebSocket.
 
 ## Options
 
-| Criterion | Effect RPC 4.1.2 | oRPC 1.16.2 | tRPC v11.28.3 |
+| Criterion | Effect RPC 4.1.2 | oRPC 1.16.2 | tRPC 11.28.3 |
 | --- | --- | --- | --- |
-| Shared definition | `RpcGroup` + Effect `Schema`, schema-first | `@orpc/contract` + Zod, contract-first | `initTRPC` router/procedures, inferred `AppRouter` type; chiefly implementation-first |
-| Subscriptions | Typed `stream:true` on Rpc; tested WebSocket | Typed `eventIterator` output; tested `RPCHandler`/`RPCLink` WebSocket | Typed subscriptions over `wsLink` or SSE; **not benchmarked** |
-| Browser / Tauri webview | Standard WebSocket client; browser esbuild succeeded | Standard WebSocket client; browser esbuild succeeded | TypeScript clients and WebSockets/SSE documented; not tested here |
-| Remote client | WS transport possible; server auth/reconnect untested | WS transport possible; server auth/reconnect untested | WS/SSE plus tracked-event resume documented |
-| Code generation | None | None | None for TS clients |
-| Complexity | Effect layers, scopes, fibers, RPC protocol and Effect Schema | Contract + handler + link; async generator and Zod | Router and type-import coupling to server application |
-| Existing upstream seam | Mirrors T3's implementation style | Neo↔T3 adapter must translate protocols (already necessary) | Neo↔T3 adapter must translate protocols (already necessary) |
-| Local 2,000-event median completion | **9.46 ms** | 48.46 ms | Not measured |
-| Local median request→first delta | **7.67 ms** | 39.96 ms | Not measured |
-| Browser client bundle (minified / gzip) | 265,547 B / **87,020 B** | 308,049 B / **64,816 B** | Not measured |
+| Contract | `RpcGroup` + Effect Schema | `@orpc/contract` + Zod; standalone definition | `initTRPC` router types, primarily inferred from implementation |
+| Streaming | Typed `stream:true` RPC; WebSocket proven | `eventIterator` output; `RPCHandler`/`RPCLink` WebSocket proven | Subscriptions over WebSocket/SSE; not benchmarked |
+| Browser / Tauri | Browser bundle proven | Browser bundle proven | Supported; not built in this spike |
+| Codegen for TS | None | None | None |
+| OpenAPI from **same contract** | Not tested | **Proven**, OpenAPI 3.1.1 with typed JSON request and SSE event payload | Not tested in this spike; requires additional integration for OpenAPI |
+| Loopback median first delta | 7.67 ms | 39.96 ms | Not measured |
+| Loopback median completion (2,001 events) | 9.46 ms | 48.46 ms | Not measured |
+| Browser entry (minified / gzip) | 265,547 / **87,020 B** | 308,049 / **64,816 B** | Not measured |
+| Main tradeoff | More layers/scopes and protocol complexity; mirrors T3 internals | Simple contract/handler/client split; initial WS setup overhead in this test | Router-first ownership is less aligned with an independently authored contract |
 
-Reference documentation: [oRPC v1 WebSocket RPC link](https://v1.orpc.dev/docs/client/rpc-link), [oRPC v1 event iterators](https://v1.orpc.dev/docs/event-iterator), [tRPC v11 subscriptions](https://trpc.io/docs/server/subscriptions). The shipped spike explicitly uses oRPC **v1** APIs; do not substitute newer major-version documentation or APIs.
+API references: [oRPC v1 WebSocket RPC link](https://v1.orpc.dev/docs/client/rpc-link), [oRPC event iterators](https://v1.orpc.dev/docs/event-iterator), [oRPC OpenAPI](https://orpc.dev/docs/openapi/openapi-specification), and [tRPC v11 subscriptions](https://trpc.io/docs/server/subscriptions).
 
 ## Decision (proposed)
 
-Use **oRPC contract-first** with Zod schema modules in `packages/contracts` for the Gateway ↔ App boundary, typed `RPCHandler`/`RPCLink` over WebSocket for subscriptions and the same contracts over HTTP for ordinary request/response operations. Use namespaced contract groups for extensions. Keep the T3 Effect RPC client behind the `engine-t3` Gateway adapter; its wire contract need not dictate Neo's public API.
+Choose **oRPC v1 contract-first** with Zod in `packages/contracts`, WebSocket `RPCHandler`/`RPCLink` for live subscriptions, and HTTP endpoints for interoperable request/response and SSE where exposed. Group extension methods under versioned namespaces. Keep T3 Effect RPC in the engine adapter.
 
-Why oRPC despite Effect's faster loopback measurements: the contract-first separation is explicit, the proof uses simpler implementation and client setup, and the **compressed** client entry is ~22 kB smaller. On the intended remote path, network conditions, authentication and Gateway batching are likely more important than these isolated localhost times; that remains a hypothesis, not a measurement. Effect RPC is the fallback if production tests reveal a measurable throughput or latency limit.
+**Connection setup explains most of the observed 5× completion ratio.** The oRPC median reached its first delta at 39.96 ms and finished at 48.46 ms: only **8.50 ms** elapsed after the first delta for 1,999 more deltas plus the terminal event. Effect took 7.67 ms to first delta and 9.46 ms overall: **1.79 ms** after first delta. The first-delta gap is 32.29 ms of the 39.00 ms completion gap (~83%). Therefore the headline ratio reflects predominantly **a newly opened connection per request**, which is unlike a long-lived App connection. The remaining delivery difference still exists in this synthetic benchmark; persistent-connection latency and throughput **have not been measured** and must be verified before calling the stacks equivalent.
 
-Reject tRPC for this decision because Neo requires a standalone shared contract and independently replaceable server implementations; tRPC's normal router-first typing couples the contract to the server router type. tRPC meets the streaming and TS/no-codegen requirements, so this is a fit judgment rather than an assertion that it cannot stream.
+The stronger architectural benefit is the **same contract producing OpenAPI**. `api-openapi.mjs` imports `contract` directly from the tested `api-contract-orpc.mjs` and generates a **3,607-byte OpenAPI 3.1.1** document using `@orpc/openapi` and the Zod 4 JSON Schema converter. It describes `POST /subscribe`, a required JSON integer `count ≥ 1`, and `text/event-stream` events whose message data includes `kind`, `seq` and `text`. Python/Go extensions and external clients can use a documented HTTP/SSE API when the Gateway implements it; **the generated OpenAPI does not itself document the custom WebSocket RPC framing or prove an HTTP server is running**. This supports Neo's agnostic boundary without duplicating the schema.
+
+oRPC's client entry was ~22.2 kB smaller gzip in this isolated browser build; this is a bundle-entry comparison, not the guaranteed incremental production App size. Effect remains a fallback if measured persistent-connection throughput, cancellation or error behavior materially favors it.
 
 ## Consequences
 
-- Share only Zod contracts and client transport modules with the browser; never bundle Node server handlers into the App. Lazy-load the streaming client if it is not needed at startup.
-- Transport authentication, tenant isolation, extension route activation/unregistration, cancellation, slow-client backpressure, reconnect/resume, error frames, version negotiation and upgrade behavior require later contract tests. None were proven here.
-- Measure real Gateway coalescing and representative concurrent streams before setting a performance budget; 2,000 immediate deltas are a synthetic worst case for unbatched delivery, not a UI benchmark.
-- An Effect adapter remains necessary for the separate T3 server at the pinned revision. Do not fork upstream merely to change transports.
+- Put the Zod contract and client transport in shared packages; do not bundle Node server handlers in the browser.
+- Generate and publish a versioned OpenAPI document for advertised HTTP/SSE endpoints. Keep WebSocket transport conventions, authentication and streaming/reconnect semantics documented separately.
+- Define typed errors, scoped auth, tenant isolation, cancellation, backpressure, reconnect/resume, extension route lifecycle, version negotiation and compatibility tests before shipping.
+- Benchmark **one established WebSocket with repeated subscriptions** and representative concurrent streams; avoid treating this repeated-handshake microbenchmark as production latency.
+- Leave T3 untouched; its Effect RPC is an internal adapter concern.
 
 ## Evidence
 
-In `spikes/P0-5-adr-drafts` (PowerShell):
+Reproduce from `spikes/P0-5-adr-drafts` (PowerShell):
 
 ~~~powershell
 $env:NMH_UPSTREAM_CACHE='C:\Users\Neo\Desktop\nmh-upstream-cache'
-pnpm.cmd install --frozen-lockfile  # dependency restore, if needed
+pnpm.cmd install --frozen-lockfile
 node upstream-path.test.mjs
 node api-benchmark.mjs
+node api-openapi.mjs
 ~~~
 
-Observed on **Windows, Node v22.23.2**, WebSocket loopback `127.0.0.1`, **one warm-up + five measured trials** per implementation. Timing starts before client WebSocket setup; first-delta timing stops at the first stream frame and completion at return after the terminal frame. Each sample includes 2,000 ordered deltas plus one done event. Browser bundles from esbuild `platform:browser`, `format:esm`, `target:es2022`, `minify:true`, `treeShaking:true`; gzip uses Node `gzipSync`. A trivial baseline minifies to 42 B. Figures describe client entries plus whatever runtime dependencies esbuild retained after tree-shaking (type-only schema references may be removed), not guaranteed incremental bytes inside a production App. Compile-time TypeScript inference was assessed from library APIs, not compiled in this JavaScript-only runtime proof.
+Prior measured proof (Windows, Node v22.23.2, loopback 127.0.0.1, one warm-up + five trials, server and client new per trial):
 
 ~~~text
-effect-ws PASS runsMs=[21.23,9.54,9.06,9.46,8.76]
-  firstDeltaMs=[11.79,7.76,7.50,7.67,7.25]
-  medianCompletionMs=9.46 medianFirstDeltaMs=7.67
-  bundleBytes=265547 bundleGzipBytes=87020
-orpc-ws PASS runsMs=[81.45,51.26,48.46,47.55,47.08]
-  firstDeltaMs=[66.10,42.22,39.96,39.43,39.78]
-  medianCompletionMs=48.46 medianFirstDeltaMs=39.96
-  bundleBytes=308049 bundleGzipBytes=64816
-baselineBytes=42 node=v22.23.2 deltas=2000 trials=5 warmup=1
+effect-ws PASS medianFirstDeltaMs=7.67 medianCompletionMs=9.46 bundleGzipBytes=87020
+orpc-ws   PASS medianFirstDeltaMs=39.96 medianCompletionMs=48.46 bundleGzipBytes=64816
 API_BENCHMARK PASS
 ~~~
 
-Effect's HTTP layer emitted informational interruption records (status `503`) when each test closed its scoped WebSocket server. All 2,001 events had been received and validated beforehand. These shutdown logs deserve a lifecycle check before production use; they do **not** establish a failed RPC request in this proof. No real model, paid account, user credential, or external host was used.
+Rerun on 2026-11-18: Effect first delta **10.44 ms**, completion **12.55 ms**; oRPC first delta **45.57 ms**, completion **57.60 ms**. Both gzipped entry sizes were unchanged.
 
-Minimum next acceptance test: contract serialization snapshot + ordered stream over browser WebSocket; assert scoped auth, cancellation, reconnect, extension unmount, and 100 concurrent subscribers in a real Gateway.
+Follow-up proof from the **unchanged streaming contract**:
+
+~~~text
+node api-openapi.mjs
+ORPC_OPENAPI PASS version=3.1.1 paths=/subscribe bytes=3607
+
+Document excerpt:
+"openapi": "3.1.1"
+"/subscribe": {"post": {
+  "requestBody": {"required":true, "content":{"application/json":{"schema":{
+    "properties":{"count":{"type":"integer","minimum":1}}}}}},
+  "responses":{"200":{"content":{"text/event-stream":{"schema":{...}}}}}
+}}
+SSE message data properties: kind (delta|done), seq (number), text (string)
+~~~
+
+The emitted specification is saved only to ignored `.cache/neo-openapi.json`. With no Zod converter the generated schema was generic (2,244 B); the explicit `ZodToJsonSchemaConverter` is essential for usable non-TS documentation. The loopback benchmark logs benign Effect shutdown interruptions after validation; the 2,001 event assertions passed. No model, account or remote API was used.
+
+Smallest next contract test: generated OpenAPI schema assertion plus browser WebSocket subscription validation, then real HTTP/SSE handler interoperability and persistent-socket auth, cancellation and reconnect.
