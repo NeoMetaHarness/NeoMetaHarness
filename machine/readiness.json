@@ -30,7 +30,39 @@
     },
     "P0-3": {
       "title": "Seam spikes a-g",
-      "status": "todo"
+      "status": "in_progress",
+      "g": {
+        "status": "done",
+        "owner": "PM",
+        "evidence": "spikes/P0-3g-astryx-tauri/README.md",
+        "result": "WORKS; per-section streaming -89% script; Tauri vs Electron equal runtime on Windows, Tauri 100x smaller"
+      },
+      "a": {
+        "status": "rework",
+        "owner": "codex",
+        "note": "finish authenticated live E2E with fake ACP agent"
+      },
+      "b": {
+        "status": "rework",
+        "owner": "antigravity",
+        "note": "prove write/streaming paths with fake model server"
+      },
+      "c": {
+        "status": "todo",
+        "owner": "antigravity"
+      },
+      "d": {
+        "status": "todo",
+        "owner": "codex"
+      },
+      "e": {
+        "status": "todo",
+        "owner": "codex"
+      },
+      "f": {
+        "status": "todo",
+        "owner": "antigravity"
+      }
     },
     "P0-4": {
       "title": "Upstream registry + lock + local upstream check",

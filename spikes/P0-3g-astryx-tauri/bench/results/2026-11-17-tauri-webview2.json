@@ -1,0 +1,50 @@
+{
+  "exe": "src-tauri/target/release/neo-spike.exe",
+  "coldStart": [
+    864,
+    765,
+    648
+  ],
+  "idleRamMB": [
+    348.8,
+    344.5,
+    347.4
+  ],
+  "privateMB": [
+    232.4,
+    229.3,
+    229.4
+  ],
+  "bench": [
+    {
+      "mode": "naive",
+      "taskMs": 2059,
+      "scriptMs": 1249,
+      "layoutMs": 415,
+      "wallMs": 4242,
+      "lastToPaintMs": 241,
+      "heap1MB": 17.5,
+      "structure": "h2:74 li:219 pre:73 table:73 blockquote:73 a:73"
+    },
+    {
+      "mode": "naive",
+      "taskMs": 2063,
+      "scriptMs": 1250,
+      "layoutMs": 408,
+      "wallMs": 4233,
+      "lastToPaintMs": 229,
+      "heap1MB": 17.3,
+      "structure": "h2:74 li:219 pre:73 table:73 blockquote:73 a:73"
+    },
+    {
+      "mode": "naive",
+      "taskMs": 2085,
+      "scriptMs": 1249,
+      "layoutMs": 429,
+      "wallMs": 4259,
+      "lastToPaintMs": 254,
+      "heap1MB": 17.5,
+      "structure": "h2:74 li:219 pre:73 table:73 blockquote:73 a:73"
+    }
+  ]
+}

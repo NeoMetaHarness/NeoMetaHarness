@@ -60,3 +60,21 @@ PandaCode's [T3 comparison bench](https://github.com/aicodeking/pandacode/tree/m
 
 ## PandaCode ideas worth borrowing (not code)
 Account pools across subscriptions, tiled threads, a global quick launcher + menu-bar list of running agents, `/btw` side threads, turn checks (run tests after a clean turn), and a visual progress timeline.
+
+## Evidence from spike P0-3g (2026-11-17), with corrections
+Measured on Windows 11 with the same Astryx `dist/` in Tauri 2 (WebView2) and in a minimal Electron 39 shell. Details: [spikes/P0-3g-astryx-tauri](../../spikes/P0-3g-astryx-tauri/README.md).
+
+| | Tauri 2 | Electron 39 |
+|---|---:|---:|
+| Cold start to app shell | 765 ms | 696 ms |
+| Private RAM, idle (process tree) | 229 MB | 233 MB |
+| Streaming render (naive), script | 1,249 ms | 1,152 ms |
+| App on disk | 3.4 MB exe (+ system WebView2) | 326 MB runtime |
+| Installer | 1.47 MB | ~100 MB typical (not built) |
+
+**Corrections to this ADR:**
+- "Low idle RAM" and "fast startup" **do not hold on Windows**: WebView2 is Chromium, so Tauri and Electron measure the same. The RAM advantage is still expected on macOS (WKWebView) and Linux, but it is **unmeasured** there.
+- "Installer ~10–20 MB (+ gateway sidecar)" was conservative for the shell (1.47 MB), but the **Node gateway sidecar** (a single-executable Node, roughly 40–80 MB) will dominate. Electron could host the gateway in its own Node with no sidecar. Expected totals: about 45–85 MB (Tauri) versus about 100 MB (Electron), so roughly **2× smaller, not 10×**.
+- Rendering speed comes from the UI architecture, as this ADR already says. The spike's per-section streaming renderer cut script time 89% in both shells.
+
+**Decision stands (Tauri 2)** for: size and update payloads, the capability permission model, and the lower RAM expected on macOS/Linux. **Revisit** if the macOS/Linux measurements (P1) show no RAM win and WebKitGTK costs more QA time than the size saves. The shell-agnostic `@neometaharness/shell` keeps that switch cheap.

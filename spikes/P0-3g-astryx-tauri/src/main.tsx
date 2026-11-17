@@ -126,6 +126,8 @@ function StreamingReply() {
 }
 
 function App() {
+  // Cold-start probe: wall-clock time when the app shell has committed (read by bench/tauri-run.mjs).
+  useEffect(() => { requestAnimationFrame(() => { (window as any).__shellReadyAt = Date.now() }) }, [])
   return (
     <Theme theme={neutralTheme}>
       <AppShell
@@ -152,5 +154,8 @@ function App() {
   )
 }
 
-if ('serviceWorker' in navigator && !autostart) navigator.serviceWorker.register('/sw.js').catch(() => {})
+// PWA only: the Tauri desktop app ships its assets locally and must not cache them in a service worker.
+const inTauri = '__TAURI_INTERNALS__' in window
+if ('serviceWorker' in navigator && !autostart && !inTauri) navigator.serviceWorker.register('/sw.js').catch(() => {})
+if (inTauri) navigator.serviceWorker?.getRegistrations().then(rs => rs.forEach(r => r.unregister()))
 createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)

@@ -1,0 +1,50 @@
+{
+  "exe": "electron-baseline/node_modules/electron/dist/electron.exe",
+  "coldStart": [
+    872,
+    696,
+    681
+  ],
+  "idleRamMB": [
+    336.1,
+    329.6,
+    332.1
+  ],
+  "privateMB": [
+    231.4,
+    233.1,
+    246.1
+  ],
+  "bench": [
+    {
+      "mode": "naive",
+      "taskMs": 1974,
+      "scriptMs": 1144,
+      "layoutMs": 396,
+      "wallMs": 4220,
+      "lastToPaintMs": 220,
+      "heap1MB": 17.2,
+      "structure": "h2:74 li:219 pre:73 table:73 blockquote:73 a:73"
+    },
+    {
+      "mode": "naive",
+      "taskMs": 2022,
+      "scriptMs": 1186,
+      "layoutMs": 394,
+      "wallMs": 4218,
+      "lastToPaintMs": 218,
+      "heap1MB": 17.2,
+      "structure": "h2:74 li:219 pre:73 table:73 blockquote:73 a:73"
+    },
+    {
+      "mode": "naive",
+      "taskMs": 1986,
+      "scriptMs": 1152,
+      "layoutMs": 399,
+      "wallMs": 4217,
+      "lastToPaintMs": 216,
+      "heap1MB": 17.2,
+      "structure": "h2:74 li:219 pre:73 table:73 blockquote:73 a:73"
+    }
+  ]
+}

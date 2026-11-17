@@ -1,6 +1,6 @@
 # P0-3g Astryx in Tauri + PWA
 
-Verdict: **WORKS (web + PWA)** · **Tauri half pending**: Rust + MSVC Build Tools aren't installed yet (needs the user's OK for a ~5–7 GB install).
+Verdict: **WORKS** (web, PWA and Tauri 2 desktop). Includes a **correction to ADR 0001**: on Windows, Tauri gives no runtime speed or RAM advantage over Electron; its win is size.
 Question: Can the one Neo App run on Astryx (React 19 + StyleX) as a web app and installable PWA, fast enough to meet ADR 0001's streaming budget, and inside a Tauri 2 shell?
 Pinned ref: `@astryxdesign/core@0.7.16`, `@astryxdesign/theme-neutral@0.7.16`, React 19, Vite 7. Chrome 1xx headless on Windows 11.
 
@@ -67,5 +67,39 @@ Modes:
 ## Contract test idea
 `bench/run.mjs --runs 3 --modes naive,blocks-sections`, run in `neo check:perf` after each Astryx bump. It fails if the structure differs, if the `blocks-sections` / `naive` script ratio goes above 0.2, or if heap goes above 25 MB.
 
-## Still to do (Tauri half)
-Install the Rust toolchain + MSVC Build Tools (user approval), then: `tauri init` around `dist/`, measure installer size, idle RAM and cold start, and run the same bench inside WebView2 through its CDP port.
+## Tauri 2 desktop (Windows 11, WebView2)
+Toolchain: Rust 1.100.0 (rustup-init SHA-256 verified), MSVC Build Tools 14.44 (Microsoft-signed), Tauri CLI 2.12.4, tauri 2.12.6.
+NSIS 3.13 + nsis_tauri_utils 0.5.3 were seeded by hand into `%LOCALAPPDATA%\tauri\NSIS` because Tauri's built-in downloader timed out
+(`timeout: global`) while curl fetched the same file in 3 s. All three files match Tauri's pinned SHA-1s (zip, `NSIS.exe`, utils DLL).
+
+```
+tauri build  → target/release/neo-spike.exe 3.4 MB · bundle/nsis/Neo Spike_0.1.0_x64-setup.exe 1.47 MB
+first release compile 3m06s, incremental ~1m10s (release profile: opt-level s, lto, strip, panic=abort)
+```
+
+### Tauri vs Electron, same `dist/`, same machine (`node bench/tauri-run.mjs [--shell electron]`)
+Cold start = OS spawn → app-shell commit (page-side timestamp, so CDP polling is excluded). RAM = **private bytes** of the whole
+process tree after 5 s idle (working set double-counts shared pages: ~347 MB Tauri / ~332 MB Electron). Median of 3. The structure check is identical.
+
+| | Tauri 2 (WebView2) | Electron 39.8.10 (`electron-baseline/`) |
+|---|---:|---:|
+| Cold start | 765 ms (648–864) | 696 ms (681–872) |
+| Private RAM, idle | 229 MB | 233 MB |
+| Streaming W1 4 s, naive: script / task | 1,249 / 2,063 ms | 1,152 / 1,986 ms |
+| App binary + runtime on disk | 3.4 MB exe + system WebView2 | 326 MB unpacked runtime |
+| Installer | 1.47 MB | not built |
+
+**Reading:** on Windows, WebView2 *is* Chromium, so rendering, startup and memory are effectively equal. Tauri's measured advantage is
+**size** (about 100× smaller app, tiny installer and updates) plus its capability-based permission model. Not measured here: macOS (WKWebView)
+and Linux (WebKitGTK), where a system webview usually uses less RAM than a bundled Chromium, and where engine-consistency risk is higher.
+
+### Bug found and fixed: stale app after update
+The first cache-first service worker served an **old `index.html` → old bundle** after a rebuild (the WebView loaded `index-DENofhwy.js`
+while `dist/` held `index-_jlzbWy0.js`). Rules now in `public/sw.js`: navigations network-first with offline fallback, and only
+content-hashed `/assets/*` cache-first. **No service worker inside Tauri** (assets are local); `main.tsx` skips registration and
+unregisters any existing one. `pwa-check.mjs` re-verified offline behaviour after the change.
+
+## Perf checks to keep
+- `bench/run.mjs --runs 3 --modes naive,blocks-sections`: structure identical, script ratio ≤ 0.2, heap ≤ 25 MB.
+- `bench/tauri-run.mjs`: cold start ≤ 1.5 s, private RAM tracked per release (alert on +20%).
+- `bench/pwa-check.mjs`: manifest ok, SW active, offline shell renders.
