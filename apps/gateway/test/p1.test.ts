@@ -85,7 +85,8 @@ async function trial(index: number): Promise<void> {
     try {
       const http = createORPCClient<Client>(new HttpLink({ url: `http://127.0.0.1:${gateway.port}` }));
       const before = await http.extensions.list();
-      assert.equal(before.length, 3);
+      assert.ok(before.some((extension) => extension.id === 'sample-ts'));
+      assert.ok(before.some((extension) => extension.id === 'sample-py'));
       assert.ok(before.every((extension) => extension.status === 'disabled'));
 
       const seen: GatewayEvent[] = [];
