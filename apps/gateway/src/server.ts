@@ -5,7 +5,7 @@ import { WebSocketServer } from 'ws';
 import { RPCHandler as WSRPCHandler } from '@orpc/server/ws';
 import { RPCHandler as HttpRPCHandler } from '@orpc/server/node';
 import { implement, ORPCError } from '@orpc/server';
-import { neoContract, type T3Event, type VaultOperation } from '@neometaharness/contracts';
+import { neoContract, type T3Event, type HermesEvent, type VaultOperation } from '@neometaharness/contracts';
 import { VaultService, KeyFileProvider, type KeyProvider, type VaultScope } from '@neometaharness/vault';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
 import { NeoKernel } from '@neometaharness/kernel';
@@ -46,6 +46,11 @@ export async function startGateway(options: GatewayOptions) {
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'T3 extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const invokeHermes = async (route: string, body: unknown) => {
+    const path = `/x/engine-hermes/${route}`;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Hermes extension is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   const withHealth = async (id: string) => {
     const health = await kernel.health(id).catch(() => ({ ok: false }));
     return { ...kernel.status(id), ...(health ? { health } : {}) };
@@ -60,6 +65,26 @@ export async function startGateway(options: GatewayOptions) {
       }),
       approval: os.x['engine-t3'].approval.handler(async ({ input }) => invokeT3('approval', input) as Promise<{ sequence: number }>),
       settle: os.x['engine-t3'].settle.handler(async ({ input }) => invokeT3('settle', input) as Promise<{ sequence: number }>),
+    }, 'engine-hermes': {
+      profiles: {
+        list: os.x['engine-hermes'].profiles.list.handler(async () => invokeHermes('profiles/list', {}) as Promise<{ profiles: { name: string; path: string }[] }>),
+        create: os.x['engine-hermes'].profiles.create.handler(async ({ input }) => invokeHermes('profiles/create', input) as Promise<{ ok: boolean; name: string; path: string }>),
+        delete: os.x['engine-hermes'].profiles.delete.handler(async ({ input }) => invokeHermes('profiles/delete', input)),
+      },
+      runs: {
+        start: os.x['engine-hermes'].runs.start.handler(async ({ input }) => invokeHermes('runs/start', input) as Promise<{ run_id: string }>),
+        events: os.x['engine-hermes'].runs.events.handler(async function* ({ input, signal }) {
+          const stream = await invokeHermes('runs/events', { ...input, signal }) as AsyncIterable<HermesEvent>;
+          yield* coalesceText(stream);
+        }),
+        approve: os.x['engine-hermes'].runs.approve.handler(async ({ input }) => invokeHermes('runs/approve', input) as Promise<{ ok: boolean }>),
+        stop: os.x['engine-hermes'].runs.stop.handler(async ({ input }) => invokeHermes('runs/stop', input) as Promise<{ status: string }>),
+      },
+      cron: {
+        list: os.x['engine-hermes'].cron.list.handler(async () => invokeHermes('cron/list', {}) as Promise<Record<string, unknown>[]>),
+        create: os.x['engine-hermes'].cron.create.handler(async ({ input }) => invokeHermes('cron/create', input) as Promise<{ id: string }>),
+        delete: os.x['engine-hermes'].cron.delete.handler(async ({ input }) => invokeHermes('cron/delete', input)),
+      },
     } },
     extensions: {
       list: os.extensions.list.handler(async () => Promise.all(kernel.list().map((extension) => withHealth(extension.id)))),
@@ -107,7 +132,7 @@ export async function startGateway(options: GatewayOptions) {
       }
       if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
       const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
-      if (path.startsWith('/x/engine-t3/')) {
+      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/')) {
         if (!kernel.hasRoute(path)) { res.writeHead(404).end(); return; }
         const matched = await httpRPC.handle(req, res);
         if (!matched.matched) res.writeHead(404).end();

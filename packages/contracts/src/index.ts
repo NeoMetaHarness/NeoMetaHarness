@@ -64,8 +64,37 @@ const vaultNameSchema = z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/);
 const vaultSelectorSchema = z.object({ scope: vaultScopeSchema, name: vaultNameSchema });
 const vaultWriteSchema = vaultSelectorSchema.extend({ value: z.string().min(1) });
 export type VaultOperation = 'list' | 'put' | 'rotate' | 'delete';
+export const hermesEventSchema = t3EventSchema;
+export type HermesEvent = z.infer<typeof hermesEventSchema>;
+
+export const hermesContract = {
+  profiles: {
+    list: oc.output(z.object({ profiles: z.array(z.object({ name: z.string(), path: z.string() }).passthrough()) })),
+    create: oc.input(z.object({ name: z.string().min(1) })).output(z.object({
+      ok: z.boolean(), name: z.string(), path: z.string(),
+    }).passthrough()),
+    delete: oc.input(z.object({ name: z.string().min(1) })).output(z.unknown()),
+  },
+  runs: {
+    start: oc.input(z.object({ profile: z.string().min(1), input: z.string().min(1) }))
+      .output(z.object({ run_id: z.string() })),
+    events: oc.input(z.object({ profile: z.string().min(1), runId: z.string().min(1) }))
+      .output(eventIterator(hermesEventSchema)),
+    approve: oc.input(z.object({ profile: z.string().min(1), runId: z.string().min(1),
+      choice: z.enum(['once', 'session', 'deny']) })).output(z.object({ ok: z.boolean() })),
+    stop: oc.input(z.object({ profile: z.string().min(1), runId: z.string().min(1) }))
+      .output(z.object({ status: z.string() })),
+  },
+  cron: {
+    list: oc.output(z.array(z.record(z.string(), z.unknown()))),
+    create: oc.input(z.object({ prompt: z.string().min(1), schedule: z.string().min(1) }))
+      .output(z.object({ id: z.string() }).passthrough()),
+    delete: oc.input(z.object({ id: z.string().min(1) })).output(z.unknown()),
+  },
+};
+
 export const neoContract = {
-  x: { 'engine-t3': t3Contract },
+  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
