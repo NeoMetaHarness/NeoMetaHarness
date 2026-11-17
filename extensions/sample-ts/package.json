@@ -1,0 +1,8 @@
+{
+  "name": "@neometaharness/sample-ts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@neometaharness/kernel": "workspace:*"
+  }
+}

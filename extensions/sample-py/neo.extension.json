@@ -1,0 +1,7 @@
+{
+  "id": "sample-py",
+  "version": "0.1.0",
+  "displayName": "Python sample",
+  "kind": ["feature"],
+  "runtime": { "type": "process", "command": ["uv", "run", "--no-project", "--offline", "python", "extension.py"], "protocol": "jsonrpc" }
+}

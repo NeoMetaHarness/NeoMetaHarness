@@ -1,0 +1,25 @@
+{
+  "name": "@neometaharness/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "test:p1": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts && tsc --noEmit"
+  },
+  "dependencies": {
+    "@neometaharness/contracts": "workspace:*",
+    "@neometaharness/db": "workspace:*",
+    "@neometaharness/kernel": "workspace:*",
+    "@orpc/contract": "1.16.2",
+    "@orpc/server": "1.16.2",
+    "@orpc/client": "1.16.2",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.13",
+    "@types/ws": "8.18.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}
