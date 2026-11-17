@@ -176,9 +176,11 @@
       "follow_up": "assert installed T3 desktop server version == pinned v0.1.9 (T3 app auto-updates)"
     },
     "P1-6": {
-      "title": "Auth in the gateway (Better Auth, roles on vault + engine routes, api-key, desktop bootstrap)",
-      "status": "in_progress",
-      "owner": "antigravity"
+      "title": "Auth in the gateway",
+      "status": "rework",
+      "owner": "antigravity",
+      "rejected_2026_11_18": "desktop loopback fallback = auth bypass (default mode desktop; tokenless 127.0.0.1 -> owner; WS upgrade has no Origin check -> any website can drive gateway as owner; same-host reverse proxy -> all owner)",
+      "required": "no ambient authority; default mode server; desktop token file (owner-only) + NEO_DESKTOP_TOKEN; WS Origin allowlist + ticket auth; tests for 401/foreign-origin/no-token/ticket"
     },
     "P1-5": {
       "title": "Tauri 2 desktop shell (gateway sidecar, tray, clean exit)",
@@ -210,5 +212,8 @@
       "verified_by_pm": "2026-11-18 x2 on main: 2 parallel isolated sessions, coalesced ordered stream, cancel, disable -> 404 + process tree (6) gone, sample healthy; all other suites green",
       "follow_up": "run on Node >=24.9 (upstream requirement); real LLM adapter via model hub; computer/browser providers are stubs"
     }
-  }
+  },
+  "known_risks": [
+    "2026-11-18: main gateway has no auth yet (P1-6 pending); it binds 127.0.0.1 but WS has no Origin check, so a local web page could drive it. Dev-only; P1-6 must land before any release build."
+  ]
 }
