@@ -150,8 +150,21 @@
     },
     "P1-2": {
       "title": "Neo App shell on Astryx + Extensions page over the gateway",
+      "status": "done_with_followup",
+      "owner": "codex",
+      "evidence": "pnpm test:p1-2",
+      "verified_by_pm": "2026-11-18: 2 runs x 2 Chrome trials PASS (rows=2, live events, sample-ts 404/200, PWA 200), tsc clean",
+      "follow_up": "startup budget: entry+modulepreload = 349 KB gzip JS (> 300 KB); astryx-navigation chunk 166 KB gzip. Gate must sum all startup chunks."
+    },
+    "P1-3": {
+      "title": "Vault + engine projectors",
       "status": "in_progress",
-      "owner": "codex"
+      "owner": "sol-a"
+    },
+    "P1-4": {
+      "title": "engine-t3 extension (thin T3 RPC client)",
+      "status": "in_progress",
+      "owner": "sol-b"
     }
   }
 }
