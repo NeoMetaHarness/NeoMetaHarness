@@ -117,7 +117,7 @@ async function killTree(child: ChildProcess): Promise<void> {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill(); }
   }
   await Promise.race([
-    new Promise<void>((done) => child.once('exit', () => done())),
+    new Promise<void>((done) => child.once('close', () => done())),
     new Promise<void>((done) => setTimeout(done, 5000)),
   ]);
   if (child.exitCode === null) {
@@ -132,6 +132,7 @@ export class HermesRuntime {
   private dashboard?: HostedProcess;
   private readonly api = new Map<string, HostedProcess>();
   private readonly starting = new Map<string, Promise<HostedProcess>>();
+  private readonly closingProfiles = new Set<string>();
   private readonly streams = new Set<AbortController>();
   private python = '';
   private upstream = '';
@@ -188,7 +189,7 @@ export class HermesRuntime {
       cwd: this.upstream,
       detached: process.platform !== 'win32',
       windowsHide: true,
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: [surface === 'api' ? 'pipe' : 'ignore', 'ignore', 'pipe'],
       env: {
         ...process.env, HERMES_HOME: home, API_SERVER_KEY: key,
         HERMES_DASHBOARD_SESSION_TOKEN: this.dashboardToken,
@@ -215,6 +216,7 @@ export class HermesRuntime {
 
   private async server(profile: string): Promise<HostedProcess> {
     const name = profileName(profile);
+    if (this.closingProfiles.has(name)) throw new Error(`Hermes profile ${name} is closing`);
     const active = this.api.get(name);
     if (active && active.child.exitCode === null) return active;
     let pending = this.starting.get(name);
@@ -264,10 +266,16 @@ export class HermesRuntime {
   async deleteProfile(name: string): Promise<{ ok: boolean }> {
     const canonical = profileName(name);
     if (canonical === 'default') throw new Error('Cannot delete default profile');
-    await this.stopProfile(canonical);
-    const response = await this.request('dashboard', `/api/profiles/${encodeURIComponent(canonical)}`, { method: 'DELETE' });
-    await this.credentials.delete(canonical);
-    return await response.json() as { ok: boolean };
+    if (this.closingProfiles.has(canonical)) throw new Error(`Hermes profile ${canonical} is closing`);
+    this.closingProfiles.add(canonical);
+    try {
+      await this.stopProfile(canonical);
+      const response = await this.request('dashboard', `/api/profiles/${encodeURIComponent(canonical)}`, { method: 'DELETE' });
+      await this.credentials.delete(canonical);
+      return await response.json() as { ok: boolean };
+    } finally {
+      this.closingProfiles.delete(canonical);
+    }
   }
   async listCron(): Promise<Record<string, unknown>[]> { return this.request('dashboard', '/api/cron/jobs').then(async (r) => await r.json() as Record<string, unknown>[]); }
   async createCron(prompt: string, schedule: string): Promise<{ id: string }> {
@@ -336,8 +344,33 @@ export class HermesRuntime {
   }
 
   private async stopProfile(profile: string): Promise<void> {
+    const children = new Set<ChildProcess>();
     const running = this.api.get(profile);
-    if (running) { this.api.delete(profile); await killTree(running.child); }
+    if (running) children.add(running.child);
+    // Another request can be launching a replacement for a bridge that exited.
+    // Wait for it before removing the profile so it cannot reopen SQLite files.
+    const pending = this.starting.get(profile);
+    if (pending) {
+      try { children.add((await pending).child); } catch { /* launch already cleans up failed children */ }
+    }
+    const current = this.api.get(profile);
+    if (current) children.add(current.child);
+    this.api.delete(profile);
+    await Promise.all([...children].map(async (child) => {
+      if (child.exitCode !== null) return;
+      // Ask Hermes to close its SQLite stores before removing the profile.
+      child.stdin?.end();
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          new Promise<void>((done) => child.once('close', () => done())),
+          new Promise<void>((done) => { timer = setTimeout(done, 4000); }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      if (child.exitCode === null) await killTree(child);
+    }));
   }
   async disconnect(): Promise<void> {
     if (this.stopped) return;

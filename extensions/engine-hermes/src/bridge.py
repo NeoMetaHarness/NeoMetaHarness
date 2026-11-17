@@ -33,7 +33,9 @@ def main():
             if not await adapter.connect():
                 raise RuntimeError("Hermes API server refused to start")
             try:
-                await asyncio.Event().wait()
+                # The parent closes its stdin pipe to request a clean shutdown.
+                # Hermes releases its response-store SQLite handle in disconnect().
+                await asyncio.to_thread(__import__("sys").stdin.buffer.read, 1)
             finally:
                 await adapter.disconnect()
 
