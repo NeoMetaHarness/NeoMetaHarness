@@ -132,7 +132,7 @@ export const hermesContract = {
   },
 };
 
-export const neoContract = {
+const baseNeoContract = {
   x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
@@ -162,3 +162,75 @@ export const neoContract = {
       .output(eventIterator(gatewayEventSchema)),
   },
 };
+export const agentBotSchema = z.object({
+  id: z.string(), name: z.string(), created_at: z.number(),
+});
+export const agentTurnSchema = z.object({
+  id: z.string(), bot_id: z.string(), room_id: z.string().nullable(),
+  source: z.enum(['user', 'room', 'bot', 'routine']),
+  input: z.string(), status: z.enum(['queued', 'running', 'awaiting_approval', 'completed', 'denied', 'stopped', 'failed', 'interrupted']),
+  created_at: z.number(), updated_at: z.number(),
+});
+export const agentRoomSchema = z.object({ id: z.string(), name: z.string(), created_at: z.number() });
+export const agentRoomMessageSchema = z.object({
+  id: z.string(), room_id: z.string(), author_id: z.string(), body: z.string(), created_at: z.number(),
+});
+export const agentTaskSchema = z.object({
+  id: z.string(), bot_id: z.string(), title: z.string(), status: z.enum(['todo', 'working', 'done']),
+  note: z.string(), created_at: z.number(), updated_at: z.number(),
+});
+export const agentRoutineSchema = z.object({
+  id: z.string(), bot_id: z.string(), name: z.string(), prompt: z.string(), schedule: z.string(),
+  timezone: z.string(), enabled: z.number(), last_run_at: z.number().nullable(), created_at: z.number(),
+});
+const agentId = z.string().min(1);
+const agentSend = z.object({ botId: agentId, text: z.string().min(1) });
+export const agentsContract = {
+  bots: {
+    list: oc.output(z.array(agentBotSchema)),
+    create: oc.input(z.object({ name: z.string().min(1) })).output(agentBotSchema),
+    update: oc.input(z.object({ id: agentId, name: z.string().min(1) })).output(agentBotSchema.nullable()),
+    delete: oc.input(z.object({ id: agentId })).output(z.object({ deleted: z.boolean() })),
+  },
+  turns: {
+    send: oc.input(agentSend).output(z.object({ turnId: z.string() })),
+    events: oc.input(z.object({ turnId: agentId, since: z.number().int().nonnegative().default(0) }))
+      .output(eventIterator(t3EventSchema)),
+    stop: oc.input(z.object({ turnId: agentId })).output(z.object({ stopped: z.boolean() })),
+    list: oc.input(z.object({ botId: agentId })).output(z.array(agentTurnSchema)),
+  },
+  approvals: {
+    list: oc.input(z.object({ turnId: agentId })).output(z.array(z.object({
+      id: z.string(), turn_id: z.string(), request_id: z.string(), tool: z.string(), detail: z.string(),
+      status: z.enum(['pending', 'approved', 'denied', 'interrupted']),
+      created_at: z.number(), resolved_at: z.number().nullable(),
+    }))),
+    resolve: oc.input(z.object({ id: agentId, decision: z.enum(['allow', 'deny']) }))
+      .output(z.object({ resolved: z.boolean() })),
+  },
+  rooms: {
+    list: oc.output(z.array(agentRoomSchema)),
+    create: oc.input(z.object({ name: z.string().min(1), memberIds: z.array(agentId) })).output(agentRoomSchema),
+    post: oc.input(z.object({ roomId: agentId, text: z.string().min(1), authorId: z.string().default('user') }))
+      .output(z.object({ turnIds: z.array(z.string()) })),
+    events: oc.input(z.object({ roomId: agentId, after: agentId.optional() }))
+      .output(eventIterator(agentRoomMessageSchema)),
+  },
+  tasks: {
+    list: oc.input(z.object({ botId: agentId })).output(z.array(agentTaskSchema)),
+    create: oc.input(z.object({ botId: agentId, title: z.string().min(1) })).output(agentTaskSchema),
+    update: oc.input(z.object({ id: agentId, status: z.enum(['todo', 'working', 'done']), note: z.string().default('') }))
+      .output(z.object({ updated: z.boolean() })),
+  },
+  routines: {
+    list: oc.output(z.array(agentRoutineSchema)),
+    create: oc.input(z.object({
+      botId: agentId, name: z.string().min(1), prompt: z.string().min(1),
+      schedule: z.string().min(1), timezone: z.string().default('UTC'),
+    })).output(agentRoutineSchema),
+    enable: oc.input(z.object({ id: agentId, enabled: z.boolean() })).output(z.object({ enabled: z.boolean() })),
+  },
+};
+
+// Agent API is added after all group declarations so its schemas are initialized.
+export const neoContract = { ...baseNeoContract, agents: agentsContract };

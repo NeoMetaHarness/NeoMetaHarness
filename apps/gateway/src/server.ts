@@ -11,6 +11,7 @@ import { SqliteDatabaseProvider } from '@neometaharness/db';
 import { NeoKernel } from '@neometaharness/kernel';
 import { ComputerRegistry } from '@neometaharness/computers';
 import { coalesceText } from './coalesce.js';
+import { createAgentGateway } from './agents.js';
 
 export interface GatewayOptions {
   databaseFile: string;
@@ -53,6 +54,7 @@ export async function startGateway(options: GatewayOptions) {
     throw error;
   }
 
+  const agentApi = await createAgentGateway(db, kernel);
   const os = implement(neoContract);
   const invokeT3 = async (route: string, body: unknown) => {
     const path = `/x/engine-t3/${route}`;
@@ -74,6 +76,7 @@ export async function startGateway(options: GatewayOptions) {
     return { ...kernel.status(id), ...(health ? { health } : {}) };
   };
   const router = {
+    agents: agentApi.router,
     x: { 'engine-dsh': {
       create: os.x['engine-dsh'].create.handler(async ({ input }) => invokeDsh('create', input) as Promise<{ sessionId: string; pid: number }>),
       prompt: os.x['engine-dsh'].prompt.handler(async ({ input }) => invokeDsh('prompt', input) as Promise<{ messageId: string }>),
@@ -116,8 +119,8 @@ export async function startGateway(options: GatewayOptions) {
     } },
     extensions: {
       list: os.extensions.list.handler(async () => Promise.all(kernel.list().map((extension) => withHealth(extension.id)))),
-      enable: os.extensions.enable.handler(async ({ input }) => { await kernel.enable(input.id); return withHealth(input.id); }),
-      disable: os.extensions.disable.handler(async ({ input }) => { await kernel.disable(input.id); return withHealth(input.id); }),
+      enable: os.extensions.enable.handler(async ({ input }) => { await kernel.enable(input.id); if (input.id === 'engine-hermes') await agentApi.sync(); return withHealth(input.id); }),
+      disable: os.extensions.disable.handler(async ({ input }) => { if (input.id === 'engine-hermes') await agentApi.stop(); await kernel.disable(input.id); return withHealth(input.id); }),
     },
     vault: {
       list: os.vault.list.handler(async ({ input }) => {
@@ -254,6 +257,7 @@ export async function startGateway(options: GatewayOptions) {
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((done) => wss.close(() => done()));
       await new Promise<void>((done) => http.close(() => done()));
+      await agentApi.stop();
       await kernel.close();
     },
   };
