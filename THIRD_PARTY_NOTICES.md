@@ -4,7 +4,7 @@ Neo Meta Harness builds on these projects. Engines are used unmodified as separa
 
 | Project | License | How it is used |
 |---|---|---|
-| [bot-hq](https://github.com/nickvasilescu/bot-hq) | MIT | **Adopted**: code derived into `packages/agents` (notice to be copied in verbatim when the code lands) |
+| [bot-hq](https://github.com/nickvasilescu/bot-hq) | MIT | **Adopted**: domain code derived into `packages/agents` from commit `decf9a215cdd` (see `packages/agents/PORTING.md`); license below |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | MIT | Engine (unmodified) |
 | [dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) | MIT | Engine bundle (unmodified) |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | MIT | Engine (unmodified) |
@@ -12,3 +12,29 @@ Neo Meta Harness builds on these projects. Engines are used unmodified as separa
 | [Honcho](https://github.com/plastic-labs/honcho) | see upstream | Memory service (unmodified) |
 | [Panda Router](https://github.com/aicodeking/PandaOrchestrator) | MIT | Model router process (unmodified) |
 | [Astryx](https://github.com/meta/astryx) | MIT | Design system (npm dependency) |
+
+## bot-hq license (verbatim, commit decf9a215cdd)
+
+```
+MIT License
+
+Copyright (c) 2026 Nick Vasilescu
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
