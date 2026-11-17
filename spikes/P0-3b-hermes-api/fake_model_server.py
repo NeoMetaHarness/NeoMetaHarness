@@ -1,8 +1,10 @@
 """Tiny fake OpenAI-compatible streaming server for Hermes spike testing.
 
 Simulates an OpenAI /v1/chat/completions endpoint:
-- Returns streamed text SSE chunks.
-- When prompt contains "trigger_approval", emits a tool call requiring approval (rm -rf).
+- Returns streamed text SSE chunks or JSON completion.
+- Records all received requests for prompt inspection.
+- When prompt contains "trigger_approval", emits a tool call requiring approval (terminal rm -rf).
+- When prompt contains "trigger_computer_use", emits a computer_use tool call (click at [100, 200]).
 - When tool response is present or normal prompt, emits a final text stream and completes.
 """
 
@@ -15,6 +17,8 @@ from typing import Tuple
 
 HOST = "127.0.0.1"
 PORT = 18898
+
+RECORDED_REQUESTS = []
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
@@ -30,6 +34,11 @@ class FakeOpenAIHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"object": "list", "data": [{"id": "fake-model", "object": "model"}]}).encode("utf-8"))
+        elif self.path.endswith("/requests"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"requests": RECORDED_REQUESTS}).encode("utf-8"))
         else:
             self.send_response(200)
             self.end_headers()
@@ -38,6 +47,8 @@ class FakeOpenAIHandler(http.server.BaseHTTPRequestHandler):
         if "/chat/completions" in self.path:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length).decode("utf-8"))
+            RECORDED_REQUESTS.append(body)
+
             messages = body.get("messages", [])
             stream = body.get("stream", False)
 
@@ -49,7 +60,8 @@ class FakeOpenAIHandler(http.server.BaseHTTPRequestHandler):
                     user_text = content if isinstance(content, str) else str(content)
                     break
 
-            trigger_tool = "trigger_approval" in user_text and not has_tool_result
+            trigger_approval = "trigger_approval" in user_text and not has_tool_result
+            trigger_cu = "trigger_computer_use" in user_text and not has_tool_result
 
             self.send_response(200)
             if stream:
@@ -69,7 +81,7 @@ class FakeOpenAIHandler(http.server.BaseHTTPRequestHandler):
                     self.wfile.flush()
 
                 send_chunk({"role": "assistant", "content": ""})
-                if trigger_tool:
+                if trigger_approval:
                     send_chunk({
                         "content": "Initiating file removal tool call...",
                         "tool_calls": [{
@@ -83,8 +95,22 @@ class FakeOpenAIHandler(http.server.BaseHTTPRequestHandler):
                         }],
                     })
                     send_chunk({}, finish_reason="tool_calls")
+                elif trigger_cu:
+                    send_chunk({
+                        "content": "Driving desktop with computer_use click...",
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_cu_click",
+                            "type": "function",
+                            "function": {
+                                "name": "computer_use",
+                                "arguments": json.dumps({"action": "click", "coordinate": [100, 200], "capture_after": True}),
+                            },
+                        }],
+                    })
+                    send_chunk({}, finish_reason="tool_calls")
                 else:
-                    msg = "Turn completed following denial." if has_tool_result else "Standard simulated response completed."
+                    msg = "Turn completed following tool execution." if has_tool_result else "Standard simulated response completed."
                     send_chunk({"content": msg})
                     send_chunk({}, finish_reason="stop")
 
@@ -93,7 +119,7 @@ class FakeOpenAIHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                if trigger_tool:
+                if trigger_approval:
                     resp = {
                         "id": "chatcmpl-fake",
                         "object": "chat.completion",
@@ -111,8 +137,26 @@ class FakeOpenAIHandler(http.server.BaseHTTPRequestHandler):
                             "finish_reason": "tool_calls",
                         }],
                     }
+                elif trigger_cu:
+                    resp = {
+                        "id": "chatcmpl-fake",
+                        "object": "chat.completion",
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "Calling computer_use click...",
+                                "tool_calls": [{
+                                    "id": "call_cu_click",
+                                    "type": "function",
+                                    "function": {"name": "computer_use", "arguments": json.dumps({"action": "click", "coordinate": [100, 200], "capture_after": True})},
+                                }],
+                            },
+                            "finish_reason": "tool_calls",
+                        }],
+                    }
                 else:
-                    msg = "Turn completed following denial." if has_tool_result else "Standard simulated response completed."
+                    msg = "Turn completed following tool execution." if has_tool_result else "Standard simulated response completed."
                     resp = {
                         "id": "chatcmpl-fake",
                         "object": "chat.completion",
@@ -124,6 +168,7 @@ class FakeOpenAIHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
 def start_background_server(port: int = PORT) -> Tuple[ThreadingHTTPServer, threading.Thread]:
+    RECORDED_REQUESTS.clear()
     server = ThreadingHTTPServer((HOST, port), FakeOpenAIHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -136,3 +181,4 @@ if __name__ == "__main__":
         server.serve_forever()
     except KeyboardInterrupt:
         server.server_close()
+
