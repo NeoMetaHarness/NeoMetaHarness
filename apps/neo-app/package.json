@@ -1,0 +1,29 @@
+{
+  "name": "@neometaharness/neo-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "test:p1-2": "node test/p1-2.mjs"
+  },
+  "dependencies": {
+    "@neometaharness/ui": "workspace:*",
+    "@neometaharness/contracts": "workspace:*",
+    "@orpc/client": "1.16.2",
+    "@orpc/contract": "1.16.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.13",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "5.9.3",
+    "vite": "^7.1.0"
+  }
+}

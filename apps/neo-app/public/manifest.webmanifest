@@ -1,0 +1,9 @@
+{
+  "name": "Neo Meta Harness",
+  "short_name": "Neo",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#181818",
+  "theme_color": "#181818",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
