@@ -1,0 +1,11 @@
+﻿import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { upstreamCache, upstreamPath, lock, repoRoot } from './upstream-path.mjs';
+assert.equal(lock.pins.t3code.ref, 'v0.1.9');
+assert.equal(upstreamPath('t3code'), path.resolve(upstreamCache, 't3code@v0.1.9'));
+assert.equal(upstreamCache, path.resolve(process.env.NMH_UPSTREAM_CACHE || path.join(repoRoot, '../nmh-upstream-cache')));
+assert.throws(() => upstreamPath('not-pinned'));
+assert.throws(() => upstreamPath('t3code', '..', '..', 'escape'));
+assert.ok(fs.existsSync(upstreamPath('t3code', 'packages/contracts/src/rpc.ts')), 'Set NMH_UPSTREAM_CACHE to shared upstream cache');
+console.log('UPSTREAM_RESOLVER PASS t3code@v0.1.9 pinned; env/default path and traversal checked');
