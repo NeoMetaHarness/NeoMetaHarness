@@ -10,3 +10,4 @@ __pycache__/
 upstream/sources/
 src-tauri/target/
 .DS_Store
+/upstream/source-*/
