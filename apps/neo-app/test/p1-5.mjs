@@ -1,3 +1,4 @@
+import { existsSync, readdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -112,8 +113,10 @@ async function trial(number) {
     const base = `http://127.0.0.1:${status.port}`;
     assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 404);
 
+    // Rows = extensions the gateway discovers (every extensions/*/neo.extension.json), not a fixed number.
+    const expectedRows = readdirSync(join(repoDir, 'extensions')).filter((name) => existsSync(join(repoDir, 'extensions', name, 'neo.extension.json'))).length;
     view = await openWebview(cdpPort);
-    await view.eventually('document.querySelectorAll("[data-testid^=extension-]").length === 2', 'two extension rows');
+    await view.eventually(`document.querySelectorAll("[data-testid^=extension-]").length === ${expectedRows}`, `${expectedRows} extension rows`);
     await view.eventually('document.querySelector(".connection")?.textContent === "Live"', 'live event stream');
     assert.equal(await view.evaluate('"__TAURI_INTERNALS__" in window'), true, 'Tauri shell must be detected');
     assert.equal(await view.evaluate('navigator.serviceWorker.getRegistrations().then((items) => items.length)'), 0, 'no service worker');
@@ -141,7 +144,7 @@ async function trial(number) {
     await eventually(() => !alive(desktop.pid), 'desktop exit');
     await eventually(() => processTree.every((entry) => !alive(entry.ProcessId)), 'gateway and Python exit');
     await assert.rejects(fetch(`${base}/x/sample-ts/hello`), 'gateway port should be closed');
-    console.log(`P1-5_WEBVIEW PASS trial=${number} rows=2 live=true off=404 on=200 python=200 sw=0 process_tree=${processTree.length} clean_exit=true`);
+    console.log(`P1-5_WEBVIEW PASS trial=${number} rows=${expectedRows} live=true off=404 on=200 python=200 sw=0 process_tree=${processTree.length} clean_exit=true`);
   } finally {
     view?.close();
     if (alive(desktop.pid)) spawnSync('taskkill.exe', ['/PID', String(desktop.pid), '/T', '/F'], { windowsHide: true });
