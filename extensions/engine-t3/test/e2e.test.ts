@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { WebSocket } from 'ws';
@@ -19,7 +20,17 @@ import { coalesceText } from '../../../apps/gateway/src/coalesce.js';
 const here = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(here, '../..');
 const spike = join(repo, 'spikes/P0-3a-t3-headless-client');
-const upstream = resolve(repo, '../../nmh-upstream-cache/t3code@v0.1.9');
+// Upstream cache: NMH_UPSTREAM_CACHE, else the nearest parent folder that contains `nmh-upstream-cache`
+// (works from the PM checkout and from any helper worktree depth). The ref comes from upstream.lock.json.
+const t3Ref = (JSON.parse(readFileSync(join(repo, 'upstream.lock.json'), 'utf8')) as { pins: Record<string, { ref: string }> }).pins.t3code!.ref;
+function upstreamCache(): string {
+  if (process.env.NMH_UPSTREAM_CACHE) return process.env.NMH_UPSTREAM_CACHE;
+  for (let dir = repo; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, 'nmh-upstream-cache'))) return join(dir, 'nmh-upstream-cache');
+    if (dirname(dir) === dir) throw new Error('nmh-upstream-cache not found; set NMH_UPSTREAM_CACHE');
+  }
+}
+const upstream = join(upstreamCache(), `t3code@${t3Ref}`);
 const gatewayDir = join(repo, 'apps/gateway');
 const pinnedSha = '24e77473ecf41bc1f7142529c7911c1c1aae1d76';
 const localAppData = process.env.LOCALAPPDATA;
