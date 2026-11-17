@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.tsx",
+    "./shell": "./src/shell.tsx",
     "./StreamView": "./src/StreamView.tsx",
     "./styles.css": "./src/styles.css"
   },

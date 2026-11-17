@@ -1,4 +1,7 @@
 :root { font-family: system-ui, sans-serif; }
+.neo-nav-heading { display: flex; flex-direction: column; gap: 2px; padding: 20px 18px 16px; }
+.neo-nav-heading strong { font-size: 18px; font-weight: 700; }
+.neo-nav-heading span { font-size: 12px; opacity: .75; }
 .neo-page { width: 100%; min-height: 100%; padding: clamp(24px, 4vw, 56px); }
 .extensions-page { max-width: 920px; margin: 0 auto; }
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 30px; }

@@ -139,11 +139,30 @@ async function verifyBuild() {
   nodeTool(gatewayDir, 'typescript/bin/tsc', ['--noEmit']);
   nodeTool(app, 'vite/bin/vite.js', ['build']);
   const html = await readFile(join(app, 'dist', 'index.html'), 'utf8');
-  const entry = html.match(/src="\/(assets\/index-[^"]+\.js)"/)?.[1];
-  assert.ok(entry, 'Vite build must include an initial JS entry');
-  const gzip = gzipSync(await readFile(join(app, 'dist', entry))).length;
-  assert.ok(gzip <= 300 * 1024, `Initial chunk ${entry} exceeds 300 KiB (${gzip} bytes gzip)`);
-  console.log(`P1-2_BUNDLE PASS initial=${entry} gzip=${gzip} limit=${300 * 1024}`);
+  const startup = new Set();
+  const stylesheets = new Set();
+  for (const [tag] of html.matchAll(/<(?:script|link)\b[^>]*>/gi)) {
+    const attributes = Object.fromEntries([...tag.matchAll(/([\w-]+)\s*=\s*["']([^"']+)["']/g)]
+      .map(([, key, value]) => [key.toLowerCase(), value]));
+    const js = tag.startsWith('<script') && attributes.type === 'module' ||
+      tag.startsWith('<link') && attributes.rel === 'modulepreload';
+    const path = js ? (attributes.src ?? attributes.href) : attributes.rel === 'stylesheet' ? attributes.href : undefined;
+    if (!path) continue;
+    const url = new URL(path, 'http://localhost/');
+    assert.equal(url.origin, 'http://localhost', `Unexpected remote startup asset ${path}`);
+    if (js) startup.add(decodeURIComponent(url.pathname.slice(1)));
+    else stylesheets.add(decodeURIComponent(url.pathname.slice(1)));
+  }
+  assert.ok(startup.size > 0, 'Vite build must include a startup JS entry');
+  const measure = async (assets) => Promise.all([...assets].map(async (asset) => {
+    const bytes = gzipSync(await readFile(join(app, 'dist', asset))).length;
+    console.log(`P1-2_ASSET ${asset} gzip=${bytes}`);
+    return bytes;
+  }));
+  const jsGzip = (await measure(startup)).reduce((a, b) => a + b, 0);
+  const cssGzip = (await measure(stylesheets)).reduce((a, b) => a + b, 0);
+  assert.ok(jsGzip <= 300 * 1024, `Startup JS exceeds 300 KiB (${jsGzip} bytes gzip across ${startup.size} assets)`);
+  console.log(`P1-2_BUNDLE PASS startup_js_gzip=${jsGzip} css_gzip=${cssGzip} limit=${300 * 1024}`);
 }
 
 async function trial(number, previewPort) {

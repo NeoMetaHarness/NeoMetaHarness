@@ -1,7 +1,7 @@
 import '@neometaharness/ui/styles.css';
 import { StrictMode, Suspense, lazy, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AppShell, NeoTheme, SideNav, SideNavHeading, SideNavItem, SideNavSection } from '@neometaharness/ui';
+import { AppShell, NeoTheme, SideNav, SideNavItem, SideNavSection } from '@neometaharness/ui/shell';
 import './shell.css';
 
 const Extensions = lazy(() => import('./pages/Extensions'));
@@ -37,7 +37,7 @@ function NeoApp() {
 
   return <NeoTheme>
     <AppShell variant="section" contentPadding={0} sideNav={
-      <SideNav header={<SideNavHeading heading="Neo" subheading="Meta Harness" />}>
+      <SideNav header={<div className="neo-nav-heading"><strong>Neo</strong><span>Meta Harness</span></div>}>
         <SideNavSection title="Workspace">
           {pages.map((page) => <SideNavItem
             key={page.path}
