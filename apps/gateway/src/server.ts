@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { RPCHandler as WSRPCHandler } from '@orpc/server/ws';
 import { RPCHandler as HttpRPCHandler } from '@orpc/server/node';
-import { implement } from '@orpc/server';
-import { neoContract } from '@neometaharness/contracts';
+import { implement, ORPCError } from '@orpc/server';
+import { neoContract, type T3Event } from '@neometaharness/contracts';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
 import { NeoKernel } from '@neometaharness/kernel';
+import { coalesceText } from './coalesce.js';
 
 export interface GatewayOptions {
   databaseFile: string;
@@ -28,11 +29,26 @@ export async function startGateway(options: GatewayOptions) {
   }
 
   const os = implement(neoContract);
+  const invokeT3 = async (route: string, body: unknown) => {
+    const path = `/x/engine-t3/${route}`;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'T3 extension is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   const withHealth = async (id: string) => {
     const health = await kernel.health(id).catch(() => ({ ok: false }));
     return { ...kernel.status(id), ...(health ? { health } : {}) };
   };
   const router = {
+    x: { 'engine-t3': {
+      create: os.x['engine-t3'].create.handler(async ({ input }) => invokeT3('create', input) as Promise<{ sequence: number }>),
+      send: os.x['engine-t3'].send.handler(async ({ input }) => invokeT3('send', input) as Promise<{ sequence: number }>),
+      events: os.x['engine-t3'].events.handler(async function* ({ input, signal }) {
+        const stream = await invokeT3('events', { ...input, signal }) as AsyncIterable<T3Event>;
+        yield* coalesceText(stream);
+      }),
+      approval: os.x['engine-t3'].approval.handler(async ({ input }) => invokeT3('approval', input) as Promise<{ sequence: number }>),
+      settle: os.x['engine-t3'].settle.handler(async ({ input }) => invokeT3('settle', input) as Promise<{ sequence: number }>),
+    } },
     extensions: {
       list: os.extensions.list.handler(async () => Promise.all(kernel.list().map((extension) => withHealth(extension.id)))),
       enable: os.extensions.enable.handler(async ({ input }) => { await kernel.enable(input.id); return withHealth(input.id); }),
@@ -61,6 +77,12 @@ export async function startGateway(options: GatewayOptions) {
       }
       if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
       const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+      if (path.startsWith('/x/engine-t3/')) {
+        if (!kernel.hasRoute(path)) { res.writeHead(404).end(); return; }
+        const matched = await httpRPC.handle(req, res);
+        if (!matched.matched) res.writeHead(404).end();
+        return;
+      }
       if (kernel.hasRoute(path)) {
         if (req.method !== 'GET') {
           res.writeHead(405).end();
