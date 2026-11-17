@@ -5,11 +5,14 @@
   "description": "Neo Meta Harness: one always-on super agent, any computer, any channel, any model. Everything is an extension.",
   "license": "MIT",
   "packageManager": "pnpm@12.9.1",
-  "engines": { "node": ">=22.12" },
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "check": "node scripts/check.mjs",
     "upstream:check": "node scripts/upstream.mjs",
-    "org:scaffold": "node scripts/org/scaffold.mjs"
+    "org:scaffold": "node scripts/org/scaffold.mjs",
+    "test:p1": "pnpm --dir apps/gateway test:p1"
   },
   "devDependencies": {
     "yaml": "^2.8.1"
