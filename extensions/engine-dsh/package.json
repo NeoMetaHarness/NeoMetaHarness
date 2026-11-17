@@ -1,0 +1,27 @@
+{
+  "name": "@neometaharness/engine-dsh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tsx test/e2e.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@neometaharness/kernel": "workspace:*",
+    "@neometaharness/vault": "workspace:*",
+    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-computer-use": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-browser-use": "0.2.2-rc.1"
+  },
+  "devDependencies": {
+    "@neometaharness/contracts": "workspace:*",
+    "@orpc/client": "1.16.2",
+    "@orpc/contract": "1.16.2",
+    "ws": "8.18.3",
+    "@types/ws": "8.18.1",
+    "@types/node": "22.18.13",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}

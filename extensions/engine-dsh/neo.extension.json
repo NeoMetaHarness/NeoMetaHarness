@@ -1,0 +1,7 @@
+{
+  "id": "engine-dsh",
+  "version": "0.1.0",
+  "displayName": "DeepSeek Harness SDK engine",
+  "kind": ["engine"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}
