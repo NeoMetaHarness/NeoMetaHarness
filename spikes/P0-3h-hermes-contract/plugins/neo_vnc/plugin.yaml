@@ -1,0 +1,5 @@
+name: neo_vnc
+version: 1.0.0
+description: "Neo VNC computer use backend plugin"
+config_keys:
+  - computer_use.neo_vnc
