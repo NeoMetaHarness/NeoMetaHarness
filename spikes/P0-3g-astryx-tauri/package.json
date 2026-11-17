@@ -1,0 +1,34 @@
+{
+  "name": "spike-p0-3g-astryx-tauri",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4317 --strictPort --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "0.7.16",
+    "@astryxdesign/theme-neutral": "0.7.16",
+    "@stylexjs/stylex": "*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@astryxdesign/cli": "0.7.16",
+    "@vitejs/plugin-react": "^5.0.0",
+    "vite": "^7.1.0",
+    "typescript": "^5.9.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "@astryxdesign/core",
+      "@astryxdesign/cli"
+    ]
+  }
+}
