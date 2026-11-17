@@ -1,29 +1,31 @@
 # P0-3f Hermes Memory Provider Plugin
 Verdict: WORKS
-Question: Can a stub Hermes memory-provider plugin be installed by path with zero Hermes edits, serve context from a local HTTP endpoint, and record memory writes and completed turns?
+Question: Can a stub Hermes memory-provider plugin be installed by path with zero Hermes edits, serve context from a local HTTP endpoint, and record memory writes and completed turns during a real agent turn?
 Pinned ref: hermes-agent@v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`)
 Seam:
 - `plugins/memory/__init__.py`: `find_provider_dir()`, `load_memory_provider()`, and user plugin directory discovery at `$HERMES_HOME/plugins/<name>/`
 - `agent/memory_provider.py`: `MemoryProvider` ABC (`is_available`, `initialize`, `prefetch`, `on_memory_write`, `sync_turn`, `get_tool_schemas`, `handle_tool_call`, `register(ctx)`)
 - `agent/memory_manager.py`: `MemoryManager` lifecycle integration (`add_provider`, `initialize_all`, `prefetch`, `on_memory_write`, `sync_all`)
+- `agent/turn_context.py`: Turn execution hooks (`turn_context.py:1082` `agent._memory_manager.prefetch_all` and `run_agent.py:902` `_sync_external_memory_for_turn`)
 
 ## Mechanism
 Hermes discovers external memory provider plugins from `$HERMES_HOME/plugins/<name>/` (or project `./.hermes/plugins/<name>/` if enabled) before falling back to entry points.
 1. The stub plugin `neo_l1` is placed under `$HERMES_HOME/plugins/neo_l1/` with `plugin.yaml` and `__init__.py`.
 2. In `~/.hermes/config.yaml`, setting `memory.provider: neo_l1` activates it as the profile's external memory provider.
 3. During turn execution:
-   - `prefetch(query)` queries the local L1 HTTP endpoint `GET /context?q=...` and formats the recalled context for LLM prompt injection.
-   - `on_memory_write(action, target, content)` mirrors memory tool actions (e.g. user profile updates) via `POST /write` to the local L1 HTTP endpoint.
+   - `prefetch(query)` queries the local L1 HTTP endpoint `GET /context?q=...` and formats the recalled context for LLM prompt injection (`## Neo L1 Memory Context`).
+   - `on_memory_write(action, target, content)` mirrors memory tool actions via `POST /write` to the local L1 HTTP endpoint.
    - `sync_all(user_content, assistant_content)` forwards completed turn dialogues via `POST /write` to the local L1 HTTP endpoint in a non-blocking background thread.
+4. When executed in a live agent turn (`AIAgent.run_conversation`), Hermes invokes `prefetch_all` before the first LLM call and `sync_all` after the assistant completes the turn, driven by our local `fake_model_server.py`.
 
 ## Evidence
-Ran `test_memory_plugin.py` against isolated Hermes `v0.23.2` home (`spikes/.hermes-home`):
+Ran `test_memory_plugin.py` against isolated Hermes `v0.23.2` home (`spikes/.hermes-home`) and `fake_model_server.py`:
 
 ```powershell
 === Testing Spike P0-3f: Stub Hermes Memory-Provider Plugin ===
 1. Started Fake L1 Local Memory HTTP Server on 127.0.0.1:18899
 2. Installed plugin into C:\Users\Neo\Desktop\nmh-wt\gemini\spikes\.hermes-home\plugins\neo_l1 (zero edits to Hermes upstream)
-3. Configured memory.provider: neo_l1 in config.yaml
+3. Configured memory.provider: neo_l1 and custom model in config.yaml
 4. Hermes successfully discovered provider at: C:\Users\Neo\Desktop\nmh-wt\gemini\spikes\.hermes-home\plugins\neo_l1
 5. Provider loaded: name='neo_l1', is_available=True
 6. prefetch() returned:
@@ -31,12 +33,27 @@ Ran `test_memory_plugin.py` against isolated Hermes `v0.23.2` home (`spikes/.her
 NEO-L1-RECALL: Found knowledge for query 'architecture design'. User prefers modular TypeScript extensions.
 7a. Dispatched on_memory_write via MemoryManager
 7b. Dispatched sync_turn via MemoryManager
-
 8. Verified writes recorded on Fake L1 Server (2 events):
    - {'type': 'memory_write', 'action': 'add', 'target': 'user', 'content': 'Prefers Cordis kernel and Astryx UI', 'session_id': 'test-session-spike-f', 'metadata': {}}
    - {'type': 'turn', 'session_id': 'test-session-spike-f', 'user': 'Design the Neo Meta Harness architecture', 'assistant': 'The architecture is modular, using Cordis kernel and Astryx design system.'}
 
-[SUCCESS] Spike P0-3f completed: Stub memory-provider plugin loaded by path without Hermes edits, served context from local HTTP server, and recorded memory writes!
+9. Executing real agent turn with fake model server...
+   AIAgent initialized with neo_l1 active memory provider.
+💬 Starting conversation: 'What are the user preferences for Neo architecture?'
+🧠 Neo L1 — recalled 1 memory
+
+🔄 Making API call #1/1...
+   📊 Request size: 2 messages, ~1,901 tokens (~7,604 chars)
+   🔧 Available tools: 18
+⏱️  API call completed in 0.08s
+🤖 Assistant: Standard simulated response completed.
+🎉 Conversation completed after 1 OpenAI-compatible API call(s)
+   Real agent turn completed successfully.
+   Total recalls on Fake L1 Server: 2
+   Total writes on Fake L1 Server: 3
+   Verified real turn write recorded: turn (user: 'What are the user preferences for Neo ar...')
+
+[SUCCESS] Spike P0-3f completed: Stub memory-provider plugin loaded by path without Hermes edits, served context from local HTTP server, and recorded memory writes during real agent turn!
 ```
 
 ## Risks
