@@ -7,7 +7,10 @@
     "ui": "one Neo App on Astryx",
     "desktop_shell": "Tauri 2 (ADR 0001, accepted 2026-11-17)",
     "product_model": "OSS MIT, self-hosted, team-ready",
-    "model_router": "Panda Router default picker; API model for Eval in v1"
+    "model_router": "Panda Router default picker; API model for Eval in v1",
+    "api": "oRPC contract-first (ADR 0002)",
+    "db": "Kysely, SQLite/Postgres (ADR 0003)",
+    "kernel": "Cordis via @neometaharness/kernel (ADR 0004)"
   },
   "p0_tasks": {
     "P0-1": {
@@ -102,24 +105,25 @@
       "title": "ADRs: kernel, API style, DB layer, auth",
       "status": "in_progress",
       "api_style": {
-        "status": "proposed",
+        "status": "accepted",
+        "adr": "docs/adr/0002-api-style.md",
         "owner": "codex",
-        "evidence": "spikes/P0-5-adr-drafts/ADR-api-style.md",
-        "proposal": "oRPC v1 contract-first (Zod) over WS + HTTP; T3 Effect RPC stays inside engine-t3",
-        "verified_by_pm": "benchmark reproduced 2026-11-18 (effect 9.7 ms / orpc 53 ms per 2,000 deltas incl. connect; orpc gap is connection setup, streaming body ~8 ms both)"
+        "verified_by_pm": "benchmark + OpenAPI reproduced 2026-11-18"
       },
       "db_layer": {
-        "status": "blocked_partial",
+        "status": "accepted",
+        "adr": "docs/adr/0003-db-layer.md",
         "owner": "codex",
-        "proposal": "Kysely",
-        "note": "SQLite proven; Postgres not run (no Docker on this machine): use PGlite / embedded Postgres"
+        "verified_by_pm": "SQLite x2, PGlite x2, native Postgres 18.6 + cleanup reproduced 2026-11-18"
       },
       "kernel": {
-        "status": "todo",
-        "owner": "PM"
+        "status": "accepted",
+        "adr": "docs/adr/0004-kernel.md",
+        "owner": "PM",
+        "evidence": "spikes d/e; @deepseek-ai/cordis 4.1.0 = DSH vendor build of MIT cordiverse/cordis"
       },
       "auth": {
-        "status": "todo",
+        "status": "in_progress",
         "owner": "antigravity (draft)"
       }
     }

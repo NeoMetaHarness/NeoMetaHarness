@@ -61,7 +61,7 @@ flowchart TB
 | Layer | What | Tech (swappable) |
 |---|---|---|
 | **Clients** | Neo App: one codebase for web, PWA and the desktop app ([ADR 0001](adr/0001-desktop-shell.md)) | React 19, Astryx, StyleX, TanStack Router; hot streams rendered outside React; desktop = **Tauri 2** shell over the OS webview, with the gateway as a sidecar; shell APIs behind `@neometaharness/shell` |
-| **Gateway** | Neo Gateway: extension host, Neo API, auth/teams, agents service, registries, vault | Node 24 LTS (DSH needs ≥ 24.9; one runtime for gateway and engines), TypeScript, **Cordis** as the in-process plugin kernel (already proven by DSH), SQLite by default / Postgres for teams |
+| **Gateway** | Neo Gateway: extension host, Neo API, auth/teams, agents service, registries, vault | Node 24 LTS (DSH needs ≥ 24.9; one runtime for gateway and engines), TypeScript, **Cordis** kernel behind `@neometaharness/kernel` ([ADR 0004](adr/0004-kernel.md)), **oRPC** contracts ([ADR 0002](adr/0002-api-style.md)), **Kysely** over SQLite by default / Postgres for teams ([ADR 0003](adr/0003-db-layer.md)) |
 | **Engines** | DSH + superagent bundle, Hermes, T3 server: each wrapped by an *engine extension* | as upstream ships them (TS / Python) |
 | **Capabilities** | computers, channels, models, memory, skills, tools, sources: interfaces plus provider extensions | any language, via in-process TS or out-of-process JSON-RPC/MCP |
 | **Data** | L1 local memory, L2 Honcho, skill registry, gateway DB, artifacts | SQLite/FTS5, Postgres + pgvector, git-backed skill repo, filesystem / S3-compatible |
