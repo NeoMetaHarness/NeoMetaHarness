@@ -139,5 +139,19 @@
   },
   "findings": {
     "2026-11-17": "Personal ubermensch-site forks retired; engines consumed from source repos (they were 0 ahead, so nothing was lost)."
+  },
+  "p1_tasks": {
+    "P1-1": {
+      "title": "Kernel facade, oRPC contracts, Kysely/SQLite state, gateway, sample TS + Python extensions",
+      "status": "done",
+      "owner": "codex",
+      "evidence": "pnpm test:p1 (apps/gateway/test/p1.test.ts + resolver tests + tsc)",
+      "verified_by_pm": "2026-11-18 on main: P1_LIFECYCLE PASS x2 runs (live enable/disable, 404 after disable, py healthy, python pid exits, ordered events 1-6, persistence across restart), 6/6 resolver, tsc clean"
+    },
+    "P1-2": {
+      "title": "Neo App shell on Astryx + Extensions page over the gateway",
+      "status": "in_progress",
+      "owner": "codex"
+    }
   }
 }
