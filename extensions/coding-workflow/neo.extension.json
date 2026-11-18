@@ -1,0 +1,7 @@
+{
+  "id": "coding-workflow",
+  "version": "0.1.0",
+  "displayName": "Coding worktrees and local PR preparation",
+  "kind": ["feature"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}

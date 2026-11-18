@@ -1,0 +1,14 @@
+{
+  "name": "@neometaharness/coding-workflow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@neometaharness/kernel": "workspace:*",
+    "@neometaharness/vault": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.13",
+    "typescript": "5.9.3"
+  }
+}

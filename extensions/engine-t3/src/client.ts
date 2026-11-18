@@ -12,6 +12,11 @@ import { Rpc, RpcClient, RpcGroup, RpcSerialization } from 'effect/rpc';
 // Small wire projection for the pinned public T3 orchestration RPC seams. The actual
 // pinned T3 schemas are checked in test/contracts.entry.ts, not loaded here.
 const rpcGroup = RpcGroup.make(
+  ...['server.updateSettings', 'vcs.createWorktree', 'terminal.open', 'terminal.close', 'terminal.write'].map((name) =>
+    Rpc.make(name, { payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown })),
+  Rpc.make('terminal.observe', {
+    payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown, stream: true,
+  }),
   Rpc.make('orchestration.dispatchCommand', {
     payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown,
   }),
@@ -69,6 +74,23 @@ export class T3ControlPlane {
   private readonly subscriptions = new Set<AbortController>();
 
   get connected(): boolean { return !!this.client; }
+
+  /** Fixed public seams used by coding-workflow; never expose arbitrary RPC to clients. */
+  async workflowRequest(method: 'server.updateSettings' | 'vcs.createWorktree' | 'terminal.open' | 'terminal.close' | 'terminal.write', input: unknown): Promise<any> {
+    if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
+    return this.runtime.runPromise(this.client[method](input));
+  }
+
+  workflowCommand(command: Record<string, unknown>) { return this.dispatch(command); }
+
+  async *terminalOutput(input: { threadId: string; terminalId: string }, signal?: AbortSignal): AsyncGenerator<any> {
+    if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
+    const iterable = Stream.toAsyncIterable(this.client['terminal.observe'](input));
+    for await (const item of iterable) {
+      if (signal?.aborted) return;
+      yield item;
+    }
+  }
 
   async connect(origin: string, scopedSession: string): Promise<void> {
     if (this.client) throw new Error('T3 is already connected');

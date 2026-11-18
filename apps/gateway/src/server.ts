@@ -1,3 +1,4 @@
+import { codingWorkflowRouter } from './coding-workflow.js';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, linkSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
@@ -676,6 +677,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           return invokeDsh('shutdown', input) as Promise<{ stopped: boolean }>;
         }),
       },
+      'coding-workflow': codingWorkflowRouter(kernel),
       'engine-t3': {
         create: os.x['engine-t3'].create.handler(async ({ input, context }) => {
           authorize('x.engine-t3.create', context);
@@ -1107,7 +1109,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/')) {
+      if (path.startsWith('/x/coding-workflow/') || path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/')) {
         // Order for every role: authorize the procedure, then report availability,
         // then let oRPC validate method and input. Authorization runs before
         // anything else, so no role learns more than its policy allows, and a

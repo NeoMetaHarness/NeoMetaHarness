@@ -56,6 +56,9 @@ export const t3EventSchema = z.object({
 });
 export type T3Event = z.infer<typeof t3EventSchema>;
 
+export { codingWorkflowContract } from './coding-workflow.js';
+import { codingWorkflowContract } from './coding-workflow.js';
+
 export const t3Contract = {
   providers: {
     list: oc.output(z.object({ providers: z.array(z.object({
@@ -387,7 +390,7 @@ const baseNeoContract = {
     backup: oc.input(z.object({ out: z.string().min(1), passphrase: z.string().min(12) }))
       .output(z.object({ out: z.string(), files: z.number().int(), format: z.number().int() })),
   },
-  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract },
+  x: { 'coding-workflow': codingWorkflowContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),

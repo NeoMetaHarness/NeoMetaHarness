@@ -164,7 +164,7 @@ class Session {
     return { status: 'settled' };
   }
 
-  async *subscribe(signal?: AbortSignal): AsyncGenerator<DshEvent> {
+  async *subscribe(signal?: AbortSignal, afterSequence = 0): AsyncGenerator<DshEvent> {
     let index = 0;
     let wake: (() => void) | undefined;
     const notify = () => wake?.();
@@ -175,6 +175,7 @@ class Session {
       while (!signal?.aborted) {
         if (index < this.events.length) {
           const event = this.events[index++]!;
+          if ((event.sequence ?? 0) <= afterSequence) continue;
           yield event;
           if (event.type === 'session.settled') return;
           continue;
@@ -307,7 +308,9 @@ export class DshAgentRuntime {
   }
 
   prompt(input: { sessionId: string; text: string }) { return this.session(input.sessionId).prompt(input.text); }
-  events(input: { sessionId: string; signal?: AbortSignal }) { return this.session(input.sessionId).subscribe(input.signal); }
+  events(input: { sessionId: string; signal?: AbortSignal; afterSequence?: number }) {
+    return this.session(input.sessionId).subscribe(input.signal, input.afterSequence);
+  }
   wait(input: { sessionId: string }) { return this.session(input.sessionId).wait(); }
 
   async cancel(input: { sessionId: string }): Promise<{ cancelled: boolean }> {

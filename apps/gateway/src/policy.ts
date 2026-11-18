@@ -18,6 +18,13 @@ export function destructiveToolApproval(tool: string, detail: string): boolean {
 export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'system.backup': 'owner',
   'system.restore': 'owner',
+  'x.coding-workflow.register': 'admin',
+  'x.coding-workflow.switch': 'member',
+  'x.coding-workflow.worktree': 'member',
+  'x.coding-workflow.terminal.open': 'member',
+  'x.coding-workflow.terminal.output': 'viewer',
+  'x.coding-workflow.terminal.run': 'member',
+  'x.coding-workflow.prepare': 'member',
   // x.engine-t3
   'x.engine-t3.create': 'member',
   'x.engine-t3.send': 'member',
