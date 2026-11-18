@@ -1,0 +1,20 @@
+.settings-page { padding: 4px 0 40px; }
+.settings-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+.settings-extension-panel { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); padding: 20px; margin-top: 16px; border-radius: 6px; }
+.settings-extension-panel h3 { margin: 0 0 12px; }
+.settings-form { display: flex; flex-direction: column; gap: 16px; }
+.settings-field { display: grid; gap: 6px; }
+.settings-field label { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.settings-field small { opacity: 0.7; font-weight: normal; }
+.settings-field input, .settings-field select {
+  min-width: 0; width: 100%; max-width: 480px; box-sizing: border-box;
+  background: transparent; color: inherit;
+  border: 1px solid color-mix(in srgb, currentColor 50%, transparent);
+  padding: 8px 10px; font: inherit; border-radius: 4px;
+}
+.settings-field select option { color: #1a1a1a; background: #fff; }
+.settings-secret-status { font-size: 0.8em; padding: 2px 6px; border-radius: 3px; font-weight: normal; }
+.settings-secret-status.configured { background: color-mix(in srgb, #22c55e 25%, transparent); color: #22c55e; }
+.settings-secret-status.unset { background: color-mix(in srgb, currentColor 15%, transparent); opacity: 0.7; }
+.settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.settings-status { font-size: 0.9em; opacity: 0.85; }
