@@ -172,6 +172,9 @@ importers:
 
   apps/gateway:
     dependencies:
+      '@neometaharness/agents':
+        specifier: workspace:*
+        version: link:../../packages/agents
       '@neometaharness/computers':
         specifier: workspace:*
         version: link:../../packages/computers
@@ -390,19 +393,37 @@ importers:
 
   packages/agents:
     dependencies:
+      '@neometaharness/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@neometaharness/db':
         specifier: workspace:*
         version: link:../db
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../kernel
     devDependencies:
+      '@orpc/client':
+        specifier: 1.16.2
+        version: 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/contract':
+        specifier: 1.16.2
+        version: 1.16.2(@opentelemetry/api@1.10.0)
       '@types/node':
         specifier: 22.18.13
         version: 22.18.13
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
       tsx:
         specifier: 4.20.6
         version: 4.20.6
       typescript:
         specifier: 5.9.3
         version: 5.9.3
+      ws:
+        specifier: 8.18.3
+        version: 8.18.3
 
   packages/computers:
     dependencies:
