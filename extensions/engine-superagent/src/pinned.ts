@@ -1,5 +1,6 @@
 import { readFile, mkdir } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { resolve, join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
@@ -9,7 +10,7 @@ export async function loadPinnedSuperagent(): Promise<Record<string, any>> {
     pins: { 'dsh-superagent': { ref: string } };
   };
   const pinnedRef = lock.pins['dsh-superagent'].ref;
-  const upstreamCache = resolve(repo, process.env.NMH_UPSTREAM_CACHE ?? '../nmh-upstream-cache');
+  const upstreamCache = findUpstreamCache(repo);
   const source = join(upstreamCache, `dsh-superagent@${pinnedRef}`, 'src');
   const outputDir = resolve(import.meta.dirname, '../.cache');
   await mkdir(outputDir, { recursive: true });
@@ -28,4 +29,14 @@ export async function loadPinnedSuperagent(): Promise<Record<string, any>> {
     logLevel: 'silent',
   });
   return import(pathToFileURL(outfile).href);
+}
+
+/** NMH_UPSTREAM_CACHE, else the nearest `nmh-upstream-cache` in a parent folder (works from worktrees and the main checkout). */
+function findUpstreamCache(repo: string): string {
+  if (process.env.NMH_UPSTREAM_CACHE) return resolve(process.env.NMH_UPSTREAM_CACHE);
+  for (let dir = repo; ; dir = dirname(dir)) {
+    const candidate = join(dir, 'nmh-upstream-cache');
+    if (existsSync(candidate)) return candidate;
+    if (dirname(dir) === dir) throw new Error('nmh-upstream-cache not found; set NMH_UPSTREAM_CACHE');
+  }
 }
