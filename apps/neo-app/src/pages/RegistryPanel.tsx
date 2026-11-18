@@ -7,7 +7,8 @@ import { Button } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 
 type Client = ContractRouterClient<typeof neoContract>;
-type Skill = { name: string; version: number; sourceProfile: string; sourcePath: string; trust: string; updatedAt: number };
+type Skill = { name: string; version: number; sourceProfile: string; sourcePath: string; trust: string; updatedAt: number;
+  evaluation?: { status: 'unevaluated' | 'passed' | 'failed' | 'overridden'; error?: string; overrideBy?: string } };
 type Version = { version: number; hash: string; metadata: Skill };
 type Assignment = { name: string; engine: 'hermes' | 'dsh'; targetId: string };
 const api = createORPCClient<Client>(new RPCLink({
@@ -31,6 +32,7 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
 
   async function refresh() {
     const [items, targets] = await Promise.all([api.list(), api.assignments()]);
@@ -53,6 +55,9 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
     finally { setBusy(false); }
   }
   const assignment = assignments.some((item) => item.name === selected && item.engine === targetEngine && item.targetId === targetId);
+  const current = skills.find((item) => item.name === selected);
+  const evalStatus = current?.evaluation?.status ?? 'unevaluated';
+  const evalAllowed = evalStatus === 'passed' || evalStatus === 'overridden';
 
   return <section className="skills-panel skills-registry" data-testid="registry-panel">
     <div className="skills-panel-title"><h2>Neo Skill Registry</h2>
@@ -81,6 +86,24 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
       {selected && <div data-testid="registry-details">
         <h3>{selected}</h3>
         <p>{versions.length} versions</p>
+        <p data-testid="registry-eval-status">Evaluation for v{current?.version} — {evalStatus}</p>
+        {current?.evaluation?.error && <p role="status">{current.evaluation.error}</p>}
+        <div className="skills-actions">
+          <Button label="Run skill evaluation" data-testid="registry-evaluate" isDisabled={busy}
+            onClick={() => void action(async () => {
+              const result = await api.evaluate({ name: selected });
+              await refresh(); await loadVersions(selected);
+              setNotice(`Evaluation ${result.status} for v${result.version}`);
+            })}>Run eval</Button>
+          {!evalAllowed && <><label>Admin override reason
+            <input data-testid="registry-override-reason" value={overrideReason} onChange={(event) => setOverrideReason(event.target.value)} />
+          </label><Button label="Override evaluation" data-testid="registry-override"
+            isDisabled={busy || !overrideReason.trim()} onClick={() => void action(async () => {
+              await api.override({ name: selected, reason: overrideReason });
+              setOverrideReason(''); await refresh(); await loadVersions(selected);
+              setNotice('Admin override recorded');
+            })}>Override</Button></>}
+        </div>
         <label>From version <select data-testid="registry-from" value={from} onChange={(event) => setFrom(Number(event.target.value))}>
           {versions.map((item) => <option key={item.version} value={item.version}>v{item.version}</option>)}
         </select></label>
@@ -107,7 +130,7 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
           onChange={(event) => setTargetId(event.target.value)} /></label>
         <datalist id="registry-profiles">{profiles.map((name) => <option key={name} value={name} />)}</datalist>
         <Button label={assignment ? 'Unassign skill' : 'Assign skill'} data-testid="registry-assign"
-          isDisabled={busy || !targetId.trim()} onClick={() => void action(async () => {
+          isDisabled={busy || !targetId.trim() || (!assignment && !evalAllowed)} onClick={() => void action(async () => {
             await api.assign({ name: selected, engine: targetEngine, targetId, assigned: !assignment });
             await refresh(); setNotice(assignment ? 'Skill unassigned' : 'Skill assigned');
           })}>{assignment ? 'Unassign' : 'Assign'}</Button>

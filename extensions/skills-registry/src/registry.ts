@@ -2,9 +2,10 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, unlink, rmdir, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, unlink, rmdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { parse } from 'yaml';
 import type { SkillProjection } from '@neometaharness/kernel';
 
 const exec = promisify(execFile);
@@ -14,10 +15,40 @@ const validIdentity = /^[a-z][a-z0-9_-]{0,79}\/[a-z][a-z0-9_-]{0,79}$/;
 type Trust = 'untrusted' | 'observed' | 'confirmed';
 type Engine = 'hermes' | 'dsh';
 type Assignment = { name: string; engine: Engine; targetId: string };
+export type SkillCheck = { prompt: string; expected: string[] };
+export type Evaluation = {
+  status: 'unevaluated' | 'passed' | 'failed' | 'overridden';
+  version: number;
+  checkedAt?: number;
+  checks?: { prompt: string; passed: boolean; missing: string[] }[];
+  error?: string;
+  overrideBy?: string;
+  overrideReason?: string;
+};
 export type SkillRecord = {
   name: string; version: number; trust: Trust; sourceProfile: string;
-  sourcePath: string; updatedAt: number;
+  sourcePath: string; updatedAt: number; checks?: SkillCheck[];
+  evaluation?: Evaluation;
 };
+
+function declaredChecks(content: string): SkillCheck[] {
+  const frontmatter = /^---\s*\n([\s\S]*?)\n---\s*\n/.exec(content);
+  if (!frontmatter) throw new Error('Skill requires SKILL.md frontmatter');
+  const metadata = parse(frontmatter[1]!) as Record<string, unknown> | null;
+  const checks = metadata?.checks;
+  if (checks === undefined) return [];
+  if (!Array.isArray(checks) || !checks.length || checks.length > 20) throw new Error('Invalid skill checks');
+  return checks.map((value: unknown) => {
+    const item = value as { prompt?: unknown; expected?: unknown };
+    const expected = typeof item?.expected === 'string' ? [item.expected] : item?.expected;
+    if (typeof item?.prompt !== 'string' || !item.prompt.trim() || item.prompt.length > 4000
+      || !Array.isArray(expected) || !expected.length || expected.length > 10
+      || !expected.every((part) => typeof part === 'string' && part.length > 0 && part.length <= 500)) {
+      throw new Error('Checks require a prompt and expected substrings');
+    }
+    return { prompt: item.prompt, expected: expected as string[] };
+  });
+}
 
 function safeIdentity(name: string): string {
   if (!validIdentity.test(name)) throw new Error(`Invalid skill identity ${name}`);
@@ -39,6 +70,9 @@ function safeName(name: string): string {
 export class SkillRegistry implements SkillProjection {
   private readonly repo: string;
   private readonly assignmentsFile: string;
+  private readonly evaluationsFile: string;
+  private readonly auditFile: string;
+  private evaluations: Record<string, Evaluation> = {};
   private assignments: Assignment[] = [];
   private readonly homes = new Map<string, string>();
   private readonly seen = new Map<string, Map<string, string>>();
@@ -49,6 +83,8 @@ export class SkillRegistry implements SkillProjection {
   constructor(private readonly dataDir: string) {
     this.repo = join(dataDir, 'repo');
     this.assignmentsFile = join(dataDir, 'assignments.json');
+    this.evaluationsFile = join(dataDir, 'evaluations.json');
+    this.auditFile = join(dataDir, 'audit.jsonl');
   }
 
   private async git(...args: string[]): Promise<string> {
@@ -58,6 +94,9 @@ export class SkillRegistry implements SkillProjection {
 
   async start(): Promise<void> {
     await mkdir(this.repo, { recursive: true });
+    if (existsSync(this.evaluationsFile)) {
+      this.evaluations = JSON.parse(await readFile(this.evaluationsFile, 'utf8')) as Record<string, Evaluation>;
+    }
     if (!existsSync(join(this.repo, '.git'))) await this.git('init');
     await this.migrateLegacy();
     if (existsSync(this.assignmentsFile)) {
@@ -115,7 +154,22 @@ export class SkillRegistry implements SkillProjection {
   private skillDir(name: string): string { return join(this.repo, 'skills', ...safeIdentity(name).split('/')); }
 
   private async record(name: string): Promise<SkillRecord> {
-    return JSON.parse(await readFile(join(this.skillDir(name), 'metadata.json'), 'utf8')) as SkillRecord;
+    const metadata = JSON.parse(await readFile(join(this.skillDir(name), 'metadata.json'), 'utf8')) as SkillRecord;
+    return this.withEvaluation(metadata);
+  }
+
+  private withEvaluation(metadata: SkillRecord): SkillRecord {
+    const evaluation = this.evaluations[`${metadata.name}@${metadata.version}`]
+      ?? { status: 'unevaluated' as const, version: metadata.version };
+    return { ...metadata, evaluation };
+  }
+
+  private async saveEvaluations(): Promise<void> {
+    await writeFile(this.evaluationsFile, JSON.stringify(this.evaluations, null, 2) + '\n');
+  }
+
+  private approved(metadata: SkillRecord): boolean {
+    return metadata.evaluation?.status === 'passed' || metadata.evaluation?.status === 'overridden';
   }
 
   async list(): Promise<SkillRecord[]> {
@@ -151,7 +205,7 @@ export class SkillRegistry implements SkillProjection {
       const next: SkillRecord = {
         name, version: (previous?.metadata.version ?? 0) + 1,
         sourceProfile: input.sourceProfile, sourcePath: input.sourcePath,
-        trust: input.trust ?? 'observed', updatedAt: Date.now(),
+        trust: input.trust ?? 'observed', updatedAt: Date.now(), checks: declaredChecks(content),
       };
       await mkdir(folder, { recursive: true });
       await writeFile(join(folder, 'SKILL.md'), content, 'utf8');
@@ -160,7 +214,7 @@ export class SkillRegistry implements SkillProjection {
       await this.git('-c', 'user.name=Neo Skill Registry', '-c', 'user.email=skills@localhost',
         'commit', '-m', `skill ${name} v${next.version}`);
       await this.refreshAll(name);
-      return next;
+      return this.withEvaluation(next);
     });
   }
 
@@ -183,7 +237,52 @@ export class SkillRegistry implements SkillProjection {
   }
 
   async versions(name: string): Promise<{ version: number; hash: string; metadata: SkillRecord }[]> {
-    return (await this.history(name)).map(({ version, hash, metadata }) => ({ version, hash, metadata }));
+    return (await this.history(name)).map(({ version, hash, metadata }) => ({ version, hash, metadata: this.withEvaluation(metadata) }));
+  }
+
+  async evaluate(name: string, resolveEval: () => Promise<{ baseUrl: string; model: string; apiKey?: string }>): Promise<Evaluation> {
+    return this.serialize(async () => {
+      const metadata = await this.record(name);
+      const result: Evaluation = { status: 'failed', version: metadata.version, checkedAt: Date.now(), checks: [] };
+      try {
+        if (!metadata.checks?.length) throw new Error('No declared checks');
+        const model = await resolveEval();
+        for (const check of metadata.checks) {
+          const response = await fetch(`${model.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+            method: 'POST', signal: AbortSignal.timeout(20_000),
+            headers: { 'content-type': 'application/json', ...(model.apiKey ? { authorization: `Bearer ${model.apiKey}` } : {}) },
+            body: JSON.stringify({ model: model.model, temperature: 0, stream: false,
+              messages: [{ role: 'user', content: check.prompt }] }),
+          });
+          if (!response.ok) throw new Error(`Eval model returned HTTP ${response.status}`);
+          const body = await response.json() as { choices?: { message?: { content?: string } }[] };
+          const answer = body.choices?.[0]?.message?.content;
+          if (typeof answer !== 'string') throw new Error('Eval model response missing content');
+          const missing = check.expected.filter((term) => !answer.includes(term));
+          result.checks!.push({ prompt: check.prompt, passed: missing.length === 0, missing });
+        }
+        result.status = result.checks!.every((check) => check.passed) ? 'passed' : 'failed';
+      } catch (error) { result.error = String(error); }
+      this.evaluations[`${name}@${metadata.version}`] = result;
+      await this.saveEvaluations();
+      await this.refreshAll(name);
+      return result;
+    });
+  }
+
+  async override(name: string, actor: string, reason: string): Promise<Evaluation> {
+    return this.serialize(async () => {
+      if (!reason.trim() || reason.length > 1000) throw new Error('Override requires an audit reason');
+      const metadata = await this.record(name);
+      const result: Evaluation = { ...metadata.evaluation!, status: 'overridden', version: metadata.version,
+        checkedAt: Date.now(), overrideBy: actor, overrideReason: reason.trim() };
+      await appendFile(this.auditFile, JSON.stringify({ action: 'eval.override', name,
+        version: metadata.version, actor, reason: reason.trim(), at: Date.now() }) + '\n');
+      this.evaluations[`${name}@${metadata.version}`] = result;
+      await this.saveEvaluations();
+      await this.refreshAll(name);
+      return result;
+    });
   }
 
   private async versionContent(revision: { hash: string; path: string }): Promise<string> {
@@ -283,7 +382,7 @@ export class SkillRegistry implements SkillProjection {
     safeIdentity(input.name);
     if (input.engine !== 'dsh' && input.engine !== 'hermes') throw new Error('Unknown engine');
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(input.targetId)) throw new Error('Invalid target');
-    if (input.assigned) await this.record(input.name);
+    if (input.assigned && !this.approved(await this.record(input.name))) throw new Error('Skill evaluation must pass before assignment');
     const next = this.assignments.filter((row) => row.name !== input.name || row.engine !== input.engine || row.targetId !== input.targetId);
     if (input.assigned) {
       if (next.some((row) => row.engine === input.engine && row.targetId === input.targetId
@@ -307,18 +406,23 @@ export class SkillRegistry implements SkillProjection {
     const home = this.homes.get(this.key(engine, targetId));
     if (!home || this.disposed) return;
     const root = join(home, 'skills');
-    for (const path of [...this.projected]) {
-      if (!path.startsWith(root + '\\') && !path.startsWith(root + '/')) continue;
+    const eligible: Assignment[] = [];
+    for (const row of this.assignments.filter((item) => item.engine === engine && item.targetId === targetId)) {
+      try { if (this.approved(await this.record(row.name))) eligible.push(row); }
+      catch (error) { if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error; }
+    }
+    const existing = existsSync(root) ? (await readdir(root, { withFileTypes: true }))
+      .filter((item) => item.isDirectory()).map((item) => join(root, item.name)) : [];
+    for (const path of existing) {
       const name = path.slice(root.length + 1);
       const owned = existsSync(join(path, marker))
         ? JSON.parse(await readFile(join(path, marker), 'utf8')) as { name: string } : undefined;
-      if (!this.assignments.some((item) => item.name === owned?.name && baseName(item.name) === name
-        && item.engine === engine && item.targetId === targetId)) {
+      if (owned && !eligible.some((item) => item.name === owned.name && baseName(item.name) === name)) {
         await this.removeOwned(path);
         this.projected.delete(path);
       }
     }
-    for (const row of this.assignments.filter((item) => item.engine === engine && item.targetId === targetId)) {
+    for (const row of eligible) {
       const destination = join(root, baseName(row.name));
       if (existsSync(destination)) {
         if (!existsSync(join(destination, marker)) || (await lstat(destination)).isSymbolicLink()) {

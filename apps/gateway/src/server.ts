@@ -433,6 +433,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           authorize('x.skills-registry.assignments', context);
           return invokeSkills('assignments', {}) as Promise<{ name: string; engine: 'hermes' | 'dsh'; targetId: string }[]>;
         }),
+        evaluate: os.x['skills-registry'].evaluate.handler(async ({ input, context }) => {
+          authorize('x.skills-registry.evaluate', context);
+          return invokeSkills('evaluate', input) as Promise<{ status: 'passed' | 'failed' | 'unevaluated' | 'overridden'; version: number }>;
+        }),
+        override: os.x['skills-registry'].override.handler(async ({ input, context }) => {
+          authorize('x.skills-registry.override', context);
+          return invokeSkills('override', { ...input, actor: context.user!.id }) as Promise<{ status: 'overridden'; version: number }>;
+        }),
       },
       'memory-honcho': {
         status: os.x['memory-honcho'].status.handler(async ({ input, context }) => {

@@ -242,9 +242,17 @@ const skillName = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);
 const skillId = z.string().regex(/^[a-z][a-z0-9_-]{0,79}\/[a-z][a-z0-9_-]{0,79}$/);
 const skillInput = z.union([skillName, skillId]);
 const skillTrust = z.enum(['untrusted', 'observed', 'confirmed']);
+const skillEval = z.object({
+  status: z.enum(['unevaluated', 'passed', 'failed', 'overridden']), version: z.number().int().positive(),
+  checkedAt: z.number().optional(), error: z.string().optional(),
+  checks: z.array(z.object({ prompt: z.string(), passed: z.boolean(), missing: z.array(z.string()) })).optional(),
+  overrideBy: z.string().optional(), overrideReason: z.string().optional(),
+});
 export const registrySkillSchema = z.object({
   name: skillId, version: z.number().int().positive(), trust: skillTrust,
   sourceProfile: z.string(), sourcePath: z.string(), updatedAt: z.number().int(),
+  checks: z.array(z.object({ prompt: z.string(), expected: z.array(z.string()) })).optional(),
+  evaluation: skillEval.optional(),
 });
 export type RegistrySkill = z.infer<typeof registrySkillSchema>;
 const skillTarget = z.object({ name: skillId, engine: z.enum(['hermes', 'dsh']), targetId: z.string().min(1) });
@@ -264,6 +272,8 @@ export const skillsRegistryContract = {
   rollback: oc.input(z.object({ name: skillId, version: z.number().int().positive() })).output(registrySkillSchema),
   assign: oc.input(skillTarget.extend({ assigned: z.boolean() })).output(z.object({ assigned: z.boolean() })),
   assignments: oc.output(z.array(skillTarget)),
+  evaluate: oc.input(z.object({ name: skillId })).output(skillEval),
+  override: oc.input(z.object({ name: skillId, reason: z.string().trim().min(1).max(1000) })).output(skillEval),
 };
 
 const modelProviderId = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/);

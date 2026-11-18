@@ -83,8 +83,10 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.skills-registry.versions': 'viewer',
   'x.skills-registry.diff': 'viewer',
   'x.skills-registry.rollback': 'member',
-  'x.skills-registry.assign': 'member',
+  'x.skills-registry.assign': 'admin',
   'x.skills-registry.assignments': 'viewer',
+  'x.skills-registry.evaluate': 'admin',
+  'x.skills-registry.override': 'admin',
 
   // x.channels (channel tokens are workspace config)
   'x.channels.list': 'viewer',
