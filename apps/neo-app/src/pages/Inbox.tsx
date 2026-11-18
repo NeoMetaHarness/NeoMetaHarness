@@ -58,7 +58,24 @@ export default function Inbox() {
       textNode('strong', item.status, 'inbox-status'));
     const body = textNode('p', item.text, 'inbox-request');
     const content: HTMLElement[] = [header, body];
-    if (item.status === 'suggestion') {
+    if (item.upstream) {
+      const details = document.createElement('section');
+      details.className = 'inbox-upstream';
+      details.dataset.testid = 'inbox-upstream';
+      details.append(textNode('p', `Engine: ${item.upstream.name}`),
+        textNode('p', `Current pin: ${item.upstream.pinned}`),
+        textNode('p', `Latest upstream: ${item.upstream.latest}`));
+      if (item.upstream.changelog) {
+        const link = document.createElement('a');
+        link.href = item.upstream.changelog;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'Changelog';
+        details.append(link);
+      }
+      content.push(details);
+    }
+    if (item.status === 'suggestion' && item.source !== 'neo/upstream') {
       const accept = document.createElement('button');
       accept.type = 'button';
       accept.className = 'inbox-accept';
@@ -71,6 +88,73 @@ export default function Inbox() {
         catch (reason) { setError(`Could not accept suggestion: ${String(reason)}`); accept.disabled = false; }
       };
       content.push(accept);
+    }
+    if (item.status === 'question') {
+      const form = document.createElement('form');
+      form.className = 'inbox-response';
+      form.dataset.testid = 'inbox-question';
+      const label = textNode('label', item.report?.question || item.report?.summary || 'Your answer');
+      const answer = document.createElement('textarea');
+      answer.name = 'answer';
+      answer.required = true;
+      answer.setAttribute('aria-label', 'Answer question');
+      const submit = textNode('button', 'Reply', 'inbox-accept') as HTMLButtonElement;
+      submit.type = 'submit';
+      submit.dataset.action = 'reply';
+      label.append(answer);
+      form.append(label, submit);
+      form.onsubmit = async (event) => {
+        event.preventDefault();
+        if (!answer.value.trim()) return;
+        submit.disabled = true;
+        setError('');
+        try { renderItem(await http.inbox.reply({ id: item.id, answer: answer.value.trim() })); }
+        catch (reason) { setError(`Could not reply: ${String(reason)}`); submit.disabled = false; }
+      };
+      content.push(form);
+    }
+    if (item.status === 'approval') {
+      const form = document.createElement('form');
+      form.className = 'inbox-response';
+      form.dataset.testid = 'inbox-approval';
+      form.append(textNode('p', item.approval?.reason || 'Approval requested'));
+      if (item.approval?.destructive) form.append(textNode('p', 'Admin approval required'));
+      const label = textNode('label', 'Reason');
+      const reason = document.createElement('textarea');
+      reason.name = 'reason';
+      reason.required = true;
+      reason.setAttribute('aria-label', 'Approval reason');
+      label.append(reason);
+      form.append(label);
+      for (const decision of ['approve', 'deny'] as const) {
+        const button = textNode('button', decision === 'approve' ? 'Approve' : 'Deny', 'inbox-accept') as HTMLButtonElement;
+        button.type = 'button';
+        button.dataset.action = decision;
+        button.onclick = async () => {
+          if (!reason.value.trim()) { reason.reportValidity(); return; }
+          for (const control of form.querySelectorAll('button')) control.disabled = true;
+          setError('');
+          try { renderItem(await http.inbox.approval.decide({ id: item.id, decision, reason: reason.value.trim() })); }
+          catch (error) {
+            setError(`Could not ${decision}: ${String(error)}`);
+            for (const control of form.querySelectorAll('button')) control.disabled = false;
+          }
+        };
+        form.append(button);
+      }
+      content.push(form);
+    }
+    if (item.status === 'failed') {
+      const retry = textNode('button', 'Retry', 'inbox-accept') as HTMLButtonElement;
+      retry.type = 'button';
+      retry.dataset.action = 'retry';
+      retry.onclick = async () => {
+        retry.disabled = true;
+        setError('');
+        try { renderItem(await http.inbox.retry({ id: item.id })); }
+        catch (error) { setError(`Could not retry: ${String(error)}`); retry.disabled = false; }
+      };
+      content.push(retry);
     }
     if (item.report) {
       const report = document.createElement('section');

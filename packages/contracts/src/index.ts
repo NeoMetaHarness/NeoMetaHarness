@@ -484,7 +484,7 @@ export const agentsContract = {
 };
 
 export const inboxReportSchema = z.object({
-  status: z.enum(['ready', 'question', 'blocked', 'failed']),
+  status: z.enum(['ready', 'question', 'approval', 'blocked', 'failed']),
   summary: z.string(),
   question: z.string().optional(),
   options: z.array(z.string()).default([]),
@@ -503,7 +503,10 @@ export const inboxItemSchema = z.object({
     changelog: z.string().url().nullable() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).optional(),
   mode: z.enum(['observe', 'act']),
-  status: z.enum(['suggestion', 'running', 'ready', 'question', 'blocked', 'failed']),
+  status: z.enum(['suggestion', 'running', 'ready', 'question', 'approval', 'blocked', 'failed']),
+  kind: z.enum(['question', 'approval', 'failure']).optional(),
+  approval: z.object({ destructive: z.boolean(), reason: z.string(),
+    decision: z.enum(['approved', 'denied']).optional() }).optional(),
   ticketId: z.string().optional(), report: inboxReportSchema.optional(),
   createdAt: z.number(), updatedAt: z.number(),
 });
@@ -525,6 +528,10 @@ export const inboxContract = {
   decisions: { list: oc.input(z.object({ ticketId: z.string().optional(),
     limit: z.number().int().min(1).max(500).default(100) })).output(z.array(inboxDecisionSchema)) },
   accept: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
+  reply: oc.input(z.object({ id: z.string().min(1), answer: z.string().trim().min(1) })).output(inboxItemSchema),
+  approval: { decide: oc.input(z.object({ id: z.string().min(1),
+    decision: z.enum(['approve', 'deny']), reason: z.string().trim().min(1) })).output(inboxItemSchema) },
+  retry: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
   upstream: { check: oc.output(z.object({ checked: z.number().int(), drift: z.number().int() })) },
   events: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))
     .output(eventIterator(inboxEventSchema)),

@@ -386,6 +386,23 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('inbox.accept', context);
         return invokeInbox('accept', input) as Promise<InboxItem>;
       }),
+      reply: os.inbox.reply.handler(async ({ input, context }) => {
+        authorize('inbox.reply', context);
+        return invokeInbox('reply', input) as Promise<InboxItem>;
+      }),
+      approval: { decide: os.inbox.approval.decide.handler(async ({ input, context }) => {
+        authorize('inbox.approval.decide', context);
+        const items = await invokeInbox('list', {}) as InboxItem[];
+        const item = items.find((entry) => entry.id === input.id);
+        if (item?.approval?.destructive && context.role !== 'admin' && context.role !== 'owner') {
+          throw new ORPCError('FORBIDDEN', { message: 'Destructive approval requires admin or owner' });
+        }
+        return invokeInbox('approval/decide', { ...input, role: context.role }) as Promise<InboxItem>;
+      }) },
+      retry: os.inbox.retry.handler(async ({ input, context }) => {
+        authorize('inbox.retry', context);
+        return invokeInbox('retry', input) as Promise<InboxItem>;
+      }),
       upstream: { check: os.inbox.upstream.check.handler(async ({ context }) => {
         authorize('inbox.upstream.check', context);
         return invokeInbox('upstream/check', {}) as Promise<{ checked: number; drift: number }>;

@@ -48,6 +48,20 @@ server.registerTool('agents.send_to_bot', {
       socket.close();
     }
     if (!summary.trim()) throw new Error(`Hermes bot turn ${turnId} produced no response text`);
+    let structured;
+    try { structured = JSON.parse(summary.trim()); } catch { /* Plain text is a normal response. */ }
+    if (structured && typeof structured === 'object' && typeof structured.summary === 'string') {
+      if (structured.kind === 'failure') {
+        throw new Error(structured.summary);
+      }
+      if (structured.kind === 'question' || structured.kind === 'approval') {
+        return { content: [{ type: 'text', text: JSON.stringify({ turnId, status,
+          summary: structured.summary, kind: structured.kind,
+          question: typeof structured.question === 'string' ? structured.question : structured.summary,
+          destructive: structured.destructive === true,
+          tests: [], risks: [] }) }] };
+      }
+    }
     return { content: [{ type: 'text', text: JSON.stringify({ turnId, status, summary: summary.trim(), tests: [], risks: [] }) }] };
   } catch (error) {
     return { isError: true, content: [{ type: 'text', text: (error instanceof Error ? error.message : String(error)) }] };

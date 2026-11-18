@@ -15,7 +15,8 @@ import { bridgeEnv } from './bridge-key.js';
 export interface WorkerHost {
   /** tokenFile holds the bridge API key; the MCP child re-reads it on every call. */
   start(home: string, gatewayUrl: string, tokenFile?: string): Promise<void>;
-  delegate(botId: string, text: string): Promise<{ summary: string; tests: string[]; risks: string[] }>;
+  delegate(botId: string, text: string): Promise<{ summary: string; tests: string[]; risks: string[];
+    kind?: 'question' | 'approval'; question?: string; destructive?: boolean }>;
   close(): Promise<void>;
 }
 
@@ -52,7 +53,8 @@ export class PresetWorkerHost implements WorkerHost {
     });
   }
 
-  async delegate(botId: string, text: string): Promise<{ summary: string; tests: string[]; risks: string[] }> {
+  async delegate(botId: string, text: string): Promise<{ summary: string; tests: string[]; risks: string[];
+    kind?: 'question' | 'approval'; question?: string; destructive?: boolean }> {
     const binding = await this.models('worker', { botId, text });
     const { adapter, provider, model } = binding;
     // Every worker has its own model adapter, allowing concurrent assignments.
@@ -83,8 +85,10 @@ export class PresetWorkerHost implements WorkerHost {
       const output = result.data.message.content.find((part) => part.type === 'text');
       const message = output?.type === 'text' ? output.text : '';
       if (result.data.message.isError) throw new Error(message || 'Hermes MCP tool failed');
-      const parsed = JSON.parse(message) as { summary: string; tests?: string[]; risks?: string[] };
-      return { summary: parsed.summary, tests: parsed.tests ?? [], risks: parsed.risks ?? [] };
+      const parsed = JSON.parse(message) as { summary: string; tests?: string[]; risks?: string[];
+        kind?: 'question' | 'approval'; question?: string; destructive?: boolean };
+      return { summary: parsed.summary, tests: parsed.tests ?? [], risks: parsed.risks ?? [],
+        kind: parsed.kind, question: parsed.question, destructive: parsed.destructive };
     } finally {
       try {
         if (worker) {

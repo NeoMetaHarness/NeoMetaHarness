@@ -9,7 +9,7 @@ import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './mod
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
 import { NeoCronSource, type ScheduledAsk } from './cron-source.js';
 import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './channel-source.js';
-import { blockedReason } from './ask-policy.js';
+import { blockedReason, isDestructive } from './ask-policy.js';
 import { DecisionLog } from './decision-log.js';
 import { BridgeKey, BRIDGE_KEY_ROTATE_MS, writeTokenFile, type BridgeKeyHandle } from './bridge-key.js';
 import { checkUpstreams } from './upstream-source.js';
@@ -65,6 +65,8 @@ class SuperagentService {
   private unsubscribeChannel?: () => void;
   private readonly channelReplies = new Map<string, { channelId: string; inReplyTo: string }>();
   private readonly inflight = new Set<Promise<void>>();
+  private readonly assignments = new Map<string, string>();
+  private readonly terminalReports = new Set<string>();
   private readonly upstreamItems = new Map<string, string>();
   private workerReady?: Promise<void>;
   private workerHome = '';
@@ -315,6 +317,45 @@ class SuperagentService {
   }
 
   list(): InboxItem[] { return [...this.items.values()].map((item) => structuredClone(item)); }
+  private resume(item: InboxItem, text: string): InboxItem {
+    if (!item.ticketId) throw new Error('Ticket does not have an assignment');
+    const assignmentId = this.assignments.get(item.id);
+    if (!assignmentId) throw new Error('Ticket has no resumable assignment');
+    const next = this.update(item, { status: 'running', kind: undefined, report: undefined });
+    const work = this.runTicket(item.ticketId, assignmentId, text, true);
+    this.inflight.add(work);
+    void work.then(() => this.inflight.delete(work), () => this.inflight.delete(work));
+    return next;
+  }
+
+  reply(input: { id: string; answer: string }): InboxItem {
+    const item = this.items.get(input.id);
+    if (!item || item.status !== 'question') throw new Error('Ticket is not waiting for an answer');
+    return this.resume(item, `${item.text}\nHuman answer: ${input.answer.trim()}`);
+  }
+
+  async decideApproval(input: { id: string; decision: 'approve' | 'deny'; reason: string },
+    role: 'viewer' | 'member' | 'admin' | 'owner'): Promise<InboxItem> {
+    const item = this.items.get(input.id);
+    if (!item || item.status !== 'approval') throw new Error('Ticket is not awaiting approval');
+    if (item.approval?.destructive && role !== 'admin' && role !== 'owner') {
+      throw new Error('Destructive approval requires admin or owner');
+    }
+    const approval = { destructive: item.approval?.destructive ?? false, reason: input.reason.trim(),
+      decision: (input.decision === 'approve' ? 'approved' : 'denied') as 'approved' | 'denied' };
+    const updated = this.update(item, { approval });
+    if (input.decision === 'deny') {
+      const summary = `Approval denied. ${input.reason.trim()}`;
+      return this.finish(updated, { status: 'blocked', summary, changes: [], tests: [], risks: [summary], options: [] });
+    }
+    return this.resume(updated, `${item.text}\nApproved by ${role}: ${input.reason.trim()}`);
+  }
+
+  retry(input: { id: string }): InboxItem {
+    const item = this.items.get(input.id);
+    if (!item || item.status !== 'failed') throw new Error('Only failed tickets can be retried');
+    return this.resume(item, item.text);
+  }
   async checkUpstream(): Promise<{ checked: number; drift: number }> {
     if (this.closed) throw new Error('Superagent is stopped');
     const entries = await checkUpstreams();
@@ -370,22 +411,38 @@ class SuperagentService {
     }
   }
 
-  private async runTicket(ticketId: string, assignmentId: string): Promise<void> {
+  private async runTicket(ticketId: string, assignmentId: string, text?: string, resume = false): Promise<void> {
     const item = [...this.items.values()].find((value) => value.ticketId === ticketId);
     if (!item || this.closed) return;
     const started = Date.now();
     let outcome = 'failed';
     try {
-      this.engine.assignmentStarted(ticketId, assignmentId);
+      this.assignments.set(item.id, assignmentId);
+      if (!resume) this.engine.assignmentStarted(ticketId, assignmentId);
       this.workerReady ??= this.worker.start(this.workerHome, this.gatewayUrl(), this.token);
       await this.workerReady;
-      const result = await this.worker.delegate(item.botId, item.text);
+      const result = await this.worker.delegate(item.botId, text ?? item.text);
       if (this.closed) return;
+      if (result.kind === 'question' || result.kind === 'approval') {
+        outcome = result.kind;
+        const question = result.question || result.summary;
+        this.update(item, { kind: result.kind, status: result.kind,
+          ...(result.kind === 'approval' ? { approval: {
+            destructive: Boolean(result.destructive || isDestructive(item.text)), reason: question,
+          } } : {}),
+          report: { status: result.kind, summary: result.summary, question,
+            changes: [], tests: result.tests, risks: result.risks, options: [] },
+        });
+        return;
+      }
       outcome = 'ready';
       const report: Report = {
         status: 'ready', summary: result.summary, changes: [], tests: result.tests, risks: result.risks, options: [],
       };
-      this.engine.report(ticketId, { state: 'ready', summary: report.summary });
+      if (!this.terminalReports.has(ticketId)) {
+        this.engine.report(ticketId, { state: 'ready', summary: report.summary });
+        this.terminalReports.add(ticketId);
+      }
       await this.finish(item, report);
     } catch (error) {
       if (this.closed) return;
@@ -395,8 +452,11 @@ class SuperagentService {
       outcome = status;
       const report: Report = { status, summary: `Hermes delegation ${status}: ${message}`, changes: [], tests: [],
         risks: [message], options: [] };
-      this.engine.report(ticketId, { state: status, summary: report.summary });
-      await this.finish(item, report);
+      if (!this.terminalReports.has(ticketId)) {
+        this.engine.report(ticketId, { state: status, summary: report.summary });
+        this.terminalReports.add(ticketId);
+      }
+      await this.finish(this.update(item, { kind: status === 'failed' ? 'failure' : undefined }), report);
     } finally {
       if (!this.closed) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: [assignmentId], chosenAction: 'delegate',
@@ -466,6 +526,12 @@ export default defineExtension({
     ctx.route('list', () => service.list());
     ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number }));
     ctx.route('accept', ({ body }) => service.accept(body as { id: string }));
+    ctx.route('reply', ({ body }) => service.reply(body as { id: string; answer: string }));
+    ctx.route('approval/decide', ({ body }) => service.decideApproval(body as {
+      id: string; decision: 'approve' | 'deny'; reason: string;
+      role: 'viewer' | 'member' | 'admin' | 'owner';
+    }, (body as { role: 'viewer' | 'member' | 'admin' | 'owner' }).role));
+    ctx.route('retry', ({ body }) => service.retry(body as { id: string }));
     ctx.route('upstream/check', () => service.checkUpstream());
     ctx.route('cron/list', () => service.cronList());
     ctx.route('cron/create', ({ body }) => service.cronCreate(body));
