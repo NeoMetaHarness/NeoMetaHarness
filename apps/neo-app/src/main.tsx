@@ -23,6 +23,7 @@ const Routines = lazy(() => import('./pages/Routines'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Onboarding = lazy(() => import('./pages/Onboarding'));
+const SetupReminder = lazy(() => import('./pages/SetupReminder'));
 const Placeholder = lazy(() => import('./pages/Placeholder'));
 const pages = [
   { label: 'Inbox', path: '/inbox', icon: 'inbox' },
@@ -148,10 +149,9 @@ function NeoApp() {
     }>
       <div className="neo-page">
         {shellError && <p role="alert">{shellError}</p>}
-        {setupIncomplete && path !== '/onboarding' && <div className="neo-setup-reminder" data-testid="onboarding-reminder">
-          <span>Finish setting up your workspace when you are ready.</span>
-          <Button label="Resume setup" onClick={() => navigate('/onboarding')}>Resume setup</Button>
-        </div>}
+        {setupIncomplete && path !== '/onboarding' && <Suspense fallback={null}>
+          <SetupReminder onResume={() => navigate('/onboarding')} />
+        </Suspense>}
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
           {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/onboarding' ? <Onboarding onOpen={navigate} onSkip={skipSetup} onCompleted={completeSetup} /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings' ? <Settings onOpen={navigate} /> : <Placeholder name={current.label} />}
         </Suspense>
