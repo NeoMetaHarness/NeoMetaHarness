@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "tsx test/model.test.ts && tsx test/e2e.test.ts",
+    "test": "tsx test/model.test.ts && tsx test/github-source.test.ts && tsx test/e2e.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
