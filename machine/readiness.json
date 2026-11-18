@@ -286,6 +286,13 @@
     },
     "P4-5": {
       "title": "memory-honcho L2 (self-hosted) behind MemoryStore + L1<->L2 sync",
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "PM rerun 2x + regression 25/25 on main: P4-5_BROWSER PASS honcho-writeback=true next-turn-honcho-context=true outage-fallback=true badge-degraded=true disable-l1=true; fake Honcho cites v3.6.1 routers (PM spot-checked sessions.py:744, messages.py:113)",
+      "follow_up": "live Honcho unverified (needs Postgres+pgvector+embeddings key; not on this machine); add honcho@v3.6.1 to nmh-upstream-cache (currently %TEMP% checkout)"
+    },
+    "P4-6": {
+      "title": "Skills safety: eval gate, autonomy ceilings, Hub install with static scan",
       "status": "in_progress",
       "owner": "sol-b"
     }
