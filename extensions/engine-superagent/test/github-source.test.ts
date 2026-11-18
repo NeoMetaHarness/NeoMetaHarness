@@ -36,7 +36,7 @@ const vaultData = new Map<string, string>();
 const vault = {
   async put(_scope: unknown, name: string, value: string) { vaultData.set(name, value); },
   async get(_scope: unknown, name: string) { return vaultData.get(name); },
-} as VaultService;
+} as unknown as VaultService;
 
 try {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
