@@ -1,0 +1,5 @@
+name: neo
+version: 1.0.0
+description: Neo local memory via the gateway
+config_keys:
+  - memory.neo

@@ -2,6 +2,7 @@ import { defineExtension } from '@neometaharness/kernel';
 import type { ComputerRegistry } from '@neometaharness/computers';
 import { projectHermesComputer } from '@neometaharness/computers/hermes';
 import { HermesRuntime, ProfileFileCredentials, VaultCredentials } from './runtime.js';
+import { projectHermesMemory, type MemoryBridge } from './memory.js';
 import type { VaultService } from '@neometaharness/vault';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,9 +13,12 @@ export default defineExtension({
     const vault = ctx.inject<VaultService>('vault');
     const credentials = vault ? new VaultCredentials(vault, home) : new ProfileFileCredentials(home);
     const computers = ctx.inject<ComputerRegistry>('computers');
-    const service = new HermesRuntime(credentials, computers
-      ? (profile, profileHome) => projectHermesComputer(computers, profile, profileHome)
-      : undefined);
+    const memory = ctx.inject<MemoryBridge>('memoryBridge');
+    const service = new HermesRuntime(credentials, async (profile, profileHome) => {
+      const computerVersion = computers ? await projectHermesComputer(computers, profile, profileHome) : undefined;
+      const memoryVersion = await projectHermesMemory(memory, profile, profileHome);
+      return JSON.stringify([computerVersion, memoryVersion]);
+    });
     await service.start();
     ctx.provide('agentRuntime', service);
     ctx.effect(() => () => service.disconnect());
