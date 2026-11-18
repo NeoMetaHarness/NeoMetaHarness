@@ -300,6 +300,25 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;
         yield* stream;
       }),
+      cron: {
+        create: os.inbox.cron.create.handler(async ({ input, context }) => {
+          authorize('inbox.cron.create', context);
+          return invokeInbox('cron/create', input) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }>;
+        }),
+        list: os.inbox.cron.list.handler(async ({ context }) => {
+          authorize('inbox.cron.list', context);
+          return invokeInbox('cron/list', {}) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }[]>;
+        }),
+        delete: os.inbox.cron.delete.handler(async ({ input, context }) => {
+          authorize('inbox.cron.delete', context);
+          return invokeInbox('cron/delete', input) as Promise<{ deleted: boolean }>;
+        }),
+        fire: os.inbox.cron.fire.handler(async ({ input, context }) => {
+          authorize('inbox.cron.fire', context);
+          if (process.env.NODE_ENV !== 'test') throw new ORPCError('NOT_FOUND');
+          return invokeInbox('cron/fire', input) as Promise<{ ok: boolean }>;
+        }),
+      },
     },
     x: {
       models: {

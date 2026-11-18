@@ -393,6 +393,7 @@ export const inboxReportSchema = z.object({
 });
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
+  source: z.enum(['neo/app', 'neo/cron', 'neo/channel']).optional(),
   mode: z.enum(['observe', 'act']),
   status: z.enum(['suggestion', 'running', 'ready', 'question', 'blocked', 'failed']),
   ticketId: z.string().optional(), report: inboxReportSchema.optional(),
@@ -408,6 +409,16 @@ export const inboxContract = {
   accept: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
   events: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))
     .output(eventIterator(inboxEventSchema)),
+  cron: {
+    create: oc.input(z.object({ text: z.string().min(1), botId: z.string().min(1),
+      schedule: z.string().min(1), mode: z.enum(['observe', 'act']).default('observe') }))
+      .output(z.object({ id: z.string(), text: z.string(), botId: z.string(),
+        schedule: z.string(), mode: z.enum(['observe', 'act']) })),
+    list: oc.output(z.array(z.object({ id: z.string(), text: z.string(), botId: z.string(),
+      schedule: z.string(), mode: z.enum(['observe', 'act']) }))),
+    delete: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ deleted: z.boolean() })),
+    fire: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ ok: z.boolean() })),
+  },
 };
 
 export const neoContract = { ...baseNeoContract, agents: agentsContract, inbox: inboxContract };

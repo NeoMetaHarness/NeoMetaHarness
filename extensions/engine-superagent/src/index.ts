@@ -7,6 +7,7 @@ import type { InboxEvent, InboxItem } from '@neometaharness/contracts';
 import { loadPinnedSuperagent } from './pinned.js';
 import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './model.js';
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
+import { NeoCronSource, type ScheduledAsk } from './cron-source.js';
 
 type Report = NonNullable<InboxItem['report']>;
 type Candidate = { evalId: string; triggers: { id: string }[] };
@@ -19,13 +20,14 @@ const askSchema = z.object({
 
 /** The only Neo-specific boundary that can ingest a Source Trigger. */
 export class NeoSourceAdapter {
-  constructor(private readonly context: { receive(trigger: unknown): unknown | Promise<unknown> }) {}
+  constructor(private readonly context: { receive(trigger: unknown): unknown | Promise<unknown> },
+    private readonly kind = 'neo/app') {}
 
   async receive(item: InboxItem): Promise<void> {
     const trigger = {
-      id: `neo/app:${item.id}`, source: 'neo/app',
-      threads: [{ source: 'neo/app', id: item.id }],
-      actor: { source: 'neo/app', id: 'person' }, human: true,
+      id: `${this.kind}:${item.id}`, source: this.kind,
+      threads: [{ source: this.kind, id: item.id }],
+      actor: { source: this.kind, id: 'person' }, human: true,
       addressed: 'direct', at: new Date(item.createdAt).toISOString(),
       text: item.text, meta: { inboxId: item.id, botId: item.botId },
     };
@@ -43,8 +45,9 @@ class SuperagentService {
   private sequence = 0;
   private closed = false;
   private engine: any;
-  private source!: NeoSourceAdapter;
-  private unregisterSource?: () => void;
+  private readonly sources = new Map<string, NeoSourceAdapter>();
+  private readonly unregisterSources: (() => void)[] = [];
+  private cron?: NeoCronSource;
   private readonly inflight = new Set<Promise<void>>();
   private workerReady?: Promise<void>;
   private workerHome = '';
@@ -57,16 +60,17 @@ class SuperagentService {
     this.token = token;
     const upstream = await loadPinnedSuperagent();
     const repo = new upstream.MemoryRepositories();
-    const sourceKind = {
-      kind: 'neo/app', title: { en: 'Ask Neo', zh: 'Ask Neo' },
-      description: { en: 'Messages from the Neo App', zh: 'Messages from the Neo App' },
-      health: ['neo-app-source'], fields: [], schema: z.object({ enabled: z.boolean().default(true) }),
-      scope: () => ({ listened: true, observed: false, row: 'app' }),
-    };
-    const settings = { sources: { 'neo/app': { enabled: true, config: {} } } };
+    const kinds = ['neo/app', 'neo/cron'];
+    const sourceKinds = kinds.map((kind) => ({
+      kind, title: { en: kind, zh: kind },
+      description: { en: `Neo source ${kind}`, zh: `Neo source ${kind}` },
+      health: [`${kind}-source`], fields: [], schema: z.object({ enabled: z.boolean().default(true) }),
+      scope: () => ({ listened: true, observed: false, row: kind }),
+    }));
+    const settings = { sources: Object.fromEntries(kinds.map((kind) => [kind, { enabled: true, config: {} }])) };
     const board = new upstream.HealthBoard();
     const registry = new upstream.SourceRegistry(() => settings, board);
-    this.unregisterSource = registry.register(sourceKind);
+    for (const kind of sourceKinds) this.unregisterSources.push(registry.register(kind));
     this.engine = new upstream.Engine({
       repo, scope: registry,
       policy: () => ({
@@ -94,14 +98,14 @@ class SuperagentService {
       emit: (event: { type: string; data: { ticketId?: string } }) => {
         if (event.type === 'ticket.created' && event.data.ticketId) {
           const ticket = repo.tickets.get(event.data.ticketId) as Ticket;
-          const item = this.items.get(ticket.origin.triggerId.replace('neo/app:', ''));
+          const item = this.items.get(ticket.origin.triggerId.split(':')[1]!);
           if (item) this.update(item, { ticketId: ticket.id, status: 'running' });
         }
       },
     });
     // sourceContextOf enforces Source-owned health/config/state boundaries.
     const state = new Map<string, unknown>();
-    const context = upstream.sourceContextOf({
+    const sourceRuntime = {
       sources: registry, ready: Promise.resolve(), configured: () => true,
       deployment: {}, commands: {}, engine: this.engine, outbox: { send: () => {} },
       receive: (trigger: unknown) => this.engine.receive(trigger),
@@ -114,8 +118,15 @@ class SuperagentService {
         triggers: { get: repo.triggers.get },
         read: { subscribedThreads: () => [], threadTriggers: () => [] },
       },
-    }, sourceKind);
-    this.source = new NeoSourceAdapter(context);
+    };
+    for (const kind of sourceKinds) {
+      const context = upstream.sourceContextOf(sourceRuntime, kind);
+      this.sources.set(kind.kind, new NeoSourceAdapter(context, kind.kind));
+    }
+    this.cron = new NeoCronSource(join(home, '..', 'cron.json'), async (job) => {
+      await this.ask({ text: job.text, botId: job.botId, mode: job.mode }, 'neo/cron');
+    });
+    await this.cron.start();
   }
 
   private update(item: InboxItem, patch: Partial<InboxItem>): InboxItem {
@@ -128,24 +139,24 @@ class SuperagentService {
     return next;
   }
 
-  async ask(input: unknown): Promise<InboxItem> {
+  async ask(input: unknown, source = 'neo/app'): Promise<InboxItem> {
     if (this.closed) throw new Error('Superagent is stopped');
     const request = askSchema.parse(input);
     const now = Date.now();
     const item: InboxItem = {
-      ...request, id: randomUUID(), status: 'suggestion', createdAt: now, updatedAt: now,
+      ...request, id: randomUUID(), source: source as InboxItem['source'], status: 'suggestion', createdAt: now, updatedAt: now,
     };
     this.items.set(item.id, item);
-    await this.source.receive(item);
+    await this.sources.get(source)!.receive(item);
     this.engine.evaluateDue();
-    const triggerId = `neo/app:${item.id}`;
+    const triggerId = `${source}:${item.id}`;
     const candidate = this.candidates.get(triggerId);
     if (!candidate) throw new Error('Trigger was not evaluated by the pinned superagent');
     await this.evaluate(item, candidate);
     this.engine.candidateDelivered(candidate.evalId);
     // Observe mode retains the accepted proposal for human approval.
     if (item.mode === 'observe') return this.update(item, { status: 'suggestion' });
-    this.acceptCandidate(item, candidate);
+    this.acceptCandidate(item, candidate, source);
     return this.items.get(item.id)!;
   }
 
@@ -164,25 +175,35 @@ class SuperagentService {
     }
   }
 
-  private acceptCandidate(item: InboxItem, candidate: Candidate): void {
-    this.engine.decide(`neo/app:${item.id}`, {
-      kind: 'accept', title: item.text.slice(0, 100), scope: 'neo/app',
+  private acceptCandidate(item: InboxItem, candidate: Candidate, source = 'neo/app'): void {
+    this.engine.decide(`${source}:${item.id}`, {
+      kind: 'accept', title: item.text.slice(0, 100), scope: source,
       reason: 'Explicit Ask Neo request', evalId: candidate.evalId,
     });
-    this.candidates.delete(`neo/app:${item.id}`);
+    this.candidates.delete(`${source}:${item.id}`);
   }
 
   accept(input: { id: string }): InboxItem {
     const item = this.items.get(input.id);
     if (!item) throw new Error('Suggestion not found');
     if (item.status !== 'suggestion') throw new Error(`Cannot accept ${item.status} ticket`);
-    const candidate = this.candidates.get(`neo/app:${item.id}`);
+    const candidate = this.candidates.get(`${item.source ?? 'neo/app'}:${item.id}`);
     if (!candidate) throw new Error('Suggestion Eval expired');
-    this.acceptCandidate(item, candidate);
+    this.acceptCandidate(item, candidate, item.source);
     return this.items.get(item.id)!;
   }
 
   list(): InboxItem[] { return [...this.items.values()].map((item) => structuredClone(item)); }
+
+  cronList(): ScheduledAsk[] { return this.cron!.list(); }
+  cronCreate(input: unknown): Promise<ScheduledAsk> {
+    return this.cron!.create(askSchema.extend({ schedule: z.string().min(1) }).parse(input));
+  }
+  cronDelete(input: { id: string }): Promise<{ deleted: boolean }> { return this.cron!.delete(input.id); }
+  async cronFire(input: { id: string }): Promise<{ ok: boolean }> {
+    await this.cron!.fire(input.id);
+    return { ok: true };
+  }
 
   async *subscribe(since = 0, signal?: AbortSignal): AsyncGenerator<InboxEvent> {
     let cursor = since;
@@ -230,10 +251,11 @@ class SuperagentService {
 
   async close(): Promise<void> {
     this.closed = true;
+    await this.cron?.stop();
     for (const listener of this.listeners) listener();
     await this.worker.close();
     await Promise.allSettled([...this.inflight]);
-    this.unregisterSource?.();
+    for (const unregister of this.unregisterSources) unregister();
   }
 }
 
@@ -288,6 +310,10 @@ export default defineExtension({
     ctx.route('ask', ({ body }) => service.ask(body));
     ctx.route('list', () => service.list());
     ctx.route('accept', ({ body }) => service.accept(body as { id: string }));
+    ctx.route('cron/list', () => service.cronList());
+    ctx.route('cron/create', ({ body }) => service.cronCreate(body));
+    ctx.route('cron/delete', ({ body }) => service.cronDelete(body as { id: string }));
+    if (process.env.NODE_ENV === 'test') ctx.route('cron/fire', ({ body }) => service.cronFire(body as { id: string }));
     ctx.route('events', ({ body }) => {
       const { since, signal } = body as { since: number; signal?: AbortSignal };
       return service.subscribe(since, signal);

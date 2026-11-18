@@ -140,6 +140,10 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'inbox.list': 'viewer',
   'inbox.accept': 'member',
   'inbox.events': 'viewer',
+  'inbox.cron.create': 'member',
+  'inbox.cron.list': 'viewer',
+  'inbox.cron.delete': 'member',
+  'inbox.cron.fire': 'admin',
 };
 
 export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
