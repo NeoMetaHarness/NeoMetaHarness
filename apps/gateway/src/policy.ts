@@ -25,6 +25,7 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.engine-t3.stop': 'member',
   'x.engine-t3.diff': 'viewer',
   'x.engine-t3.rollback': 'member',
+  'x.engine-t3.providers.list': 'viewer',
   'x.engine-t3.threads.list': 'viewer',
 
   // x.engine-hermes

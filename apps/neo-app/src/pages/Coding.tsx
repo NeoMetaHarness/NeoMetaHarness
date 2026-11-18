@@ -13,6 +13,7 @@ import './coding.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Catalog = Awaited<ReturnType<Client['x']['engine-t3']['threads']['list']>>;
+type Providers = Awaited<ReturnType<Client['x']['engine-t3']['providers']['list']>>['providers'];
 type Thread = Catalog['threads'][number];
 type Message = { id: number; role: 'user' | 'assistant'; text?: string };
 type Approval = { id: string; kind: string; busy: boolean };
@@ -50,6 +51,7 @@ export default function Coding() {
   const [threadId, setThreadId] = useState('');
   const [title, setTitle] = useState('');
   const [providerId, setProviderId] = useState('');
+  const [providers, setProviders] = useState<Providers>([]);
   const [model, setModel] = useState('default');
   const [draft, setDraft] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -69,6 +71,7 @@ export default function Coding() {
   const selected = useRef('');
   const views = useRef(new Map<number, StreamViewHandle>());
   const queued = useRef(new Map<number, string>());
+  const rendered = useRef(new Map<number, string>());
   const messageIds = useRef(new Map<string, number>());
   const nextId = useRef(0);
   const activeAssistant = useRef<number | null>(null);
@@ -87,15 +90,27 @@ export default function Coding() {
 
   async function refresh(silent = false) {
     try {
-      const result = await http.x['engine-t3'].threads.list();
+      const [result, providerResult] = await Promise.all([
+        http.x['engine-t3'].threads.list(), http.x['engine-t3'].providers.list(),
+      ]);
       if (!live.current) return;
       setCatalog(result);
+      setProviders(providerResult.providers);
       setProjectId((previous) => result.projects.some((project) => project.id === previous)
         ? previous : result.projects[0]?.id ?? '');
       const firstProject = result.projects[0];
       if (firstProject) {
-        setProviderId((previous) => previous || firstProject.defaultModelSelection?.instanceId || '');
-        setModel((previous) => previous === 'default' ? firstProject.defaultModelSelection?.model ?? previous : previous);
+        const preferred = providerResult.providers.find((provider) =>
+          provider.id === 'neo-coding' || provider.name === 'neo-coding');
+        setProviderId((previous) => {
+          if (previous && providerResult.providers.some((provider) => provider.id === previous)) return previous;
+          const projectDefault = providerResult.providers.find((provider) =>
+            provider.id === firstProject.defaultModelSelection?.instanceId);
+          return preferred?.id ?? projectDefault?.id ?? providerResult.providers[0]?.id ?? '';
+        });
+        setModel((previous) => previous === 'default'
+          ? preferred?.models.find((item) => item.isDefault)?.id
+            ?? preferred?.models[0]?.id ?? firstProject.defaultModelSelection?.model ?? previous : previous);
       }
       setStatus((previous) => previous === 'disabled' ? 'Ready' : previous === 'Loading' ? 'Ready' : previous);
       if (!silent) setError('');
@@ -105,6 +120,7 @@ export default function Coding() {
         setStatus('disabled');
         setError('');
         setCatalog({ projects: [], threads: [] });
+        setProviders([]);
         connection.current?.socket.close();
         connection.current = null;
         setRunning(false);
@@ -149,7 +165,10 @@ export default function Coding() {
         const restored = history.map(({ item }) => {
           const messageId = ++nextId.current;
           if (item?.messageId) messageIds.current.set(item.messageId, messageId);
-          if (item?.type === 'assistant_message') queued.current.set(messageId, item.text ?? '');
+          if (item?.type === 'assistant_message') {
+            queued.current.set(messageId, item.text ?? '');
+            rendered.current.set(messageId, item.text ?? '');
+          }
           return { id: messageId, role: item?.type === 'user_message' ? 'user' : 'assistant',
             text: item?.type === 'user_message' ? item.text ?? '' : undefined } satisfies Message;
         });
@@ -170,7 +189,17 @@ export default function Coding() {
         setMessages((previous) => previous.some((entry) => entry.id === messageId) ? previous
           : [...previous, { id: messageId!, role: 'assistant' }]);
       }
-      append(messageId, event.textDelta ?? '');
+      // T3 message.updated carries the complete revised text (v0.1.9 ws.test.ts:390-437).
+      // Reconcile revisions and snapshots without repeating already-rendered text.
+      const text = event.textDelta ?? '';
+      const previousText = rendered.current.get(messageId) ?? '';
+      if (text.startsWith(previousText)) append(messageId, text.slice(previousText.length));
+      else {
+        views.current.get(messageId)?.reset();
+        if (views.current.has(messageId)) append(messageId, text);
+        else queued.current.set(messageId, text);
+      }
+      rendered.current.set(messageId, text);
       return;
     }
     if (event.kind !== 'event') return;
@@ -212,6 +241,7 @@ export default function Coding() {
     activeAssistant.current = null;
     messageIds.current.clear();
     queued.current.clear();
+    rendered.current.clear();
     views.current.clear();
     const token = gatewayToken();
     const socket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws', token ? ['bearer.' + token] : undefined);
@@ -363,8 +393,10 @@ export default function Coding() {
             <button key={entry.id} type="button" className="coding-project" aria-current={projectId === entry.id ? 'page' : undefined}
               data-testid={`project-${entry.id}`} onClick={() => {
                 setProjectId(entry.id);
-                setProviderId(entry.defaultModelSelection?.instanceId ?? '');
-                setModel(entry.defaultModelSelection?.model ?? 'default');
+                const preferred = providers.find((provider) => provider.id === 'neo-coding' || provider.name === 'neo-coding');
+                setProviderId(preferred?.id ?? entry.defaultModelSelection?.instanceId ?? providers[0]?.id ?? '');
+                setModel(preferred?.models.find((model) => model.isDefault)?.id
+                  ?? (preferred ? preferred.models[0]?.id : entry.defaultModelSelection?.model) ?? 'default');
                 setThreadId('');
                 selected.current = '';
                 connection.current?.socket.close();
@@ -375,8 +407,15 @@ export default function Coding() {
             <label htmlFor="coding-title">Title</label>
             <input id="coding-title" data-testid="coding-title" value={title} onChange={(event) => setTitle(event.target.value)} required />
             <label htmlFor="coding-provider">Provider</label>
-            <input id="coding-provider" data-testid="coding-provider" value={providerId}
-              onChange={(event) => setProviderId(event.target.value)} placeholder="Provider instance" required />
+            <select id="coding-provider" data-testid="coding-provider" value={providerId}
+              onChange={(event) => {
+                const chosen = providers.find((provider) => provider.id === event.target.value);
+                setProviderId(event.target.value);
+                setModel(chosen?.models.find((item) => item.isDefault)?.id ?? chosen?.models[0]?.id ?? 'default');
+              }} required>
+              <option value="" disabled>Select a provider</option>
+              {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+            </select>
             <label htmlFor="coding-model">Model</label>
             <input id="coding-model" data-testid="coding-model" value={model} onChange={(event) => setModel(event.target.value)} required />
             <Button type="submit" label="Create thread" isDisabled={busy || !title.trim() || !providerId.trim()}>Create thread</Button>

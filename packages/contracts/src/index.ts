@@ -54,6 +54,12 @@ export const t3EventSchema = z.object({
 export type T3Event = z.infer<typeof t3EventSchema>;
 
 export const t3Contract = {
+  providers: {
+    list: oc.output(z.object({ providers: z.array(z.object({
+      id: z.string(), name: z.string(), status: z.string(),
+      models: z.array(z.object({ id: z.string(), name: z.string(), isDefault: z.boolean() })),
+    })) })),
+  },
   create: oc.input(z.object({
     threadId: z.string().min(1), projectId: z.string().min(1), title: z.string(),
     providerId: z.string().min(1), model: z.string().min(1),

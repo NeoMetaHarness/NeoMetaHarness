@@ -27,6 +27,9 @@ const rpcGroup = RpcGroup.make(
   Rpc.make('orchestration.forceStopThread', {
     payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown,
   }),
+  Rpc.make('server.getConfig', {
+    payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown,
+  }),
 );
 
 type Runtime = ManagedRuntime.ManagedRuntime<any, never>;
@@ -158,6 +161,22 @@ export class T3ControlPlane {
   async diff(input: { threadId: string; fromTurnCount: number; toTurnCount: number; ignoreWhitespace?: boolean }) {
     if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
     return this.runtime.runPromise(this.client['orchestration.getTurnDiff'](input));
+  }
+
+  async listProviders() {
+    if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
+    // T3 v0.1.9 packages/contracts/src/rpc.ts:647 and server.ts:207-271.
+    // Expose only routing and display metadata, never auth/config/settings.
+    const config: any = await this.runtime.runPromise(this.client['server.getConfig']({}));
+    const providers = Array.isArray(config?.providers) ? config.providers : [];
+    return { providers: providers.filter((provider: any) => provider.enabled && provider.installed && provider.status !== 'disabled')
+      .map((provider: any) => ({
+        id: String(provider.instanceId), name: String(provider.displayName || provider.instanceId),
+        status: String(provider.status),
+        models: (Array.isArray(provider.models) ? provider.models : []).map((model: any) => ({
+          id: String(model.slug), name: String(model.name), isDefault: model.isDefault === true,
+        })),
+      })) };
   }
 
   rollback(input: { threadId: string; scopeId: string; checkpointId: string }) {
