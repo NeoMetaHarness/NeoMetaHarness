@@ -16,6 +16,9 @@ export default defineExtension({
     });
     ctx.route('approval', ({ body }) => service.respond(body as Parameters<typeof service.respond>[0]));
     ctx.route('settle', ({ body }) => service.settle((body as { threadId: string }).threadId));
+    ctx.route('stop', ({ body }) => service.stop(body as Parameters<typeof service.stop>[0]));
+    ctx.route('diff', ({ body }) => service.diff(body as Parameters<typeof service.diff>[0]));
+    ctx.route('threads/list', () => service.listThreads());
 
     if (process.env.NMH_T3_URL && process.env.NMH_T3_SCOPED_SESSION) {
       await service.connect(process.env.NMH_T3_URL, process.env.NMH_T3_SCOPED_SESSION);

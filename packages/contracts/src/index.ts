@@ -65,6 +65,25 @@ export const t3Contract = {
     threadId: z.string().min(1), requestId: z.string().min(1), decision: z.enum(['approve', 'decline']),
   })).output(z.object({ sequence: z.number().int() })),
   settle: oc.input(z.object({ threadId: z.string().min(1) })).output(z.object({ sequence: z.number().int() })),
+  stop: oc.input(z.object({ threadId: z.string().min(1), runId: z.string().optional() }))
+    .output(z.object({ outcome: z.enum(['killed', 'released', 'releasing', 'shared']), sharedWithThreadIds: z.array(z.string()) })),
+  diff: oc.input(z.object({
+    threadId: z.string().min(1), fromTurnCount: z.number().int().nonnegative(),
+    toTurnCount: z.number().int().nonnegative(), ignoreWhitespace: z.boolean().optional(),
+  })).output(z.object({ threadId: z.string(), fromTurnCount: z.number(), toTurnCount: z.number(), diff: z.string() })),
+  threads: {
+    list: oc.output(z.object({
+      projects: z.array(z.object({
+        id: z.string(), title: z.string(), workspaceRoot: z.string(),
+        defaultModelSelection: z.object({ instanceId: z.string(), model: z.string() }).nullable().optional(),
+      })),
+      threads: z.array(z.object({
+        id: z.string(), projectId: z.string(), title: z.string(), status: z.string(),
+        activeRunId: z.string().nullable(), itemCount: z.number(),
+        pendingRuntimeRequest: z.object({ id: z.string(), kind: z.string() }).nullable(),
+      })),
+    })),
+  },
 };
 
 export const dshEventSchema = t3EventSchema;

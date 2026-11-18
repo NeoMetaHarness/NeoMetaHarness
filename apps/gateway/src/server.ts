@@ -113,6 +113,14 @@ export async function startGateway(options: GatewayOptions) {
       }),
       approval: os.x['engine-t3'].approval.handler(async ({ input }) => invokeT3('approval', input) as Promise<{ sequence: number }>),
       settle: os.x['engine-t3'].settle.handler(async ({ input }) => invokeT3('settle', input) as Promise<{ sequence: number }>),
+      stop: os.x['engine-t3'].stop.handler(async ({ input }) =>
+        invokeT3('stop', input) as Promise<{ outcome: 'killed' | 'released' | 'releasing' | 'shared'; sharedWithThreadIds: string[] }>),
+      diff: os.x['engine-t3'].diff.handler(async ({ input }) =>
+        invokeT3('diff', input) as Promise<{ threadId: string; fromTurnCount: number; toTurnCount: number; diff: string }>),
+      threads: {
+        list: os.x['engine-t3'].threads.list.handler(async () =>
+          invokeT3('threads/list', {}) as Promise<any>),
+      },
     }, 'engine-hermes': {
       skills: {
         list: os.x['engine-hermes'].skills.list.handler(async ({ input }) => invokeHermes('skills/list', input) as Promise<{ name: string; provenance?: string; usage?: number }[]>),

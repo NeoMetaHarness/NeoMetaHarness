@@ -9,7 +9,7 @@ import * as Exit from 'effect/Exit';
 import { Socket } from 'effect/socket';
 import { Rpc, RpcClient, RpcGroup, RpcSerialization } from 'effect/rpc';
 
-// Small wire projection for the two public T3 RPC method names. The actual
+// Small wire projection for the pinned public T3 orchestration RPC seams. The actual
 // pinned T3 schemas are checked in test/contracts.entry.ts, not loaded here.
 const rpcGroup = RpcGroup.make(
   Rpc.make('orchestration.dispatchCommand', {
@@ -17,6 +17,15 @@ const rpcGroup = RpcGroup.make(
   }),
   Rpc.make('orchestration.subscribeThread', {
     payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown, stream: true,
+  }),
+  Rpc.make('orchestration.subscribeShell', {
+    payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown, stream: true,
+  }),
+  Rpc.make('orchestration.getTurnDiff', {
+    payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown,
+  }),
+  Rpc.make('orchestration.forceStopThread', {
+    payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown,
   }),
 );
 
@@ -116,10 +125,45 @@ export class T3ControlPlane {
   }
 
   respond(input: { threadId: string; requestId: string; decision: 'approve' | 'decline' }) {
-    return this.dispatch({ type: 'runtime-request.respond', ...input });
+    // T3's ProviderApprovalDecision accepts `accept`, while Neo exposes `approve`.
+    return this.dispatch({ type: 'runtime-request.respond', ...input,
+      decision: input.decision === 'approve' ? 'accept' : 'decline' });
   }
 
   settle(threadId: string) { return this.dispatch({ type: 'thread.settle', threadId }); }
+
+  async listThreads() {
+    if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
+    // The initial shell stream frame is a snapshot. Returning ends the subscription.
+    for await (const value of Stream.toAsyncIterable(this.client['orchestration.subscribeShell']({}))) {
+      const frame = value as { kind?: string; snapshot?: { projects: unknown[]; threads: unknown[] } };
+      if (frame.kind !== 'snapshot' || !frame.snapshot) continue;
+      const snapshot = frame.snapshot;
+      return {
+        projects: (snapshot.projects as any[]).map((project) => ({
+          id: project.id, title: project.title, workspaceRoot: project.workspaceRoot,
+          defaultModelSelection: project.defaultModelSelection ?? null,
+        })),
+        threads: (snapshot.threads as any[]).map((thread) => ({
+          id: thread.id, projectId: thread.projectId, title: thread.title, status: thread.status,
+          activeRunId: thread.activeRunId, itemCount: thread.itemCount,
+          pendingRuntimeRequest: thread.pendingRuntimeRequest
+            ? { id: thread.pendingRuntimeRequest.id, kind: thread.pendingRuntimeRequest.kind } : null,
+        })),
+      };
+    }
+    throw new Error('T3 shell snapshot unavailable');
+  }
+
+  async diff(input: { threadId: string; fromTurnCount: number; toTurnCount: number; ignoreWhitespace?: boolean }) {
+    if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
+    return this.runtime.runPromise(this.client['orchestration.getTurnDiff'](input));
+  }
+
+  async stop(input: { threadId: string; runId?: string }) {
+    if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
+    return this.runtime.runPromise(this.client['orchestration.forceStopThread'](input));
+  }
 
   async *subscribeThread(threadId: string, signal?: AbortSignal): AsyncGenerator<T3Event> {
     if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
