@@ -45,5 +45,18 @@ export default defineExtension({
       return service.createCron(prompt, schedule);
     });
     ctx.route('cron/delete', ({ body }) => service.deleteCron((body as { id: string }).id));
+    ctx.route('skills/list', ({ body }) => service.listSkills((body as { profile: string }).profile));
+    ctx.route('skills/hub', ({ body }) => service.officialSkills((body as { profile: string }).profile));
+    ctx.route('skills/curator', ({ body }) => service.curatorStatus((body as { profile: string }).profile));
+    ctx.route('skills/pause', ({ body }) => {
+      const { profile, paused } = body as { profile: string; paused: boolean };
+      return service.pauseCurator(profile, paused);
+    });
+    ctx.route('skills/run', ({ body }) => service.runCurator((body as { profile: string }).profile));
+    ctx.route('skills/graph', ({ body }) => service.learningGraph((body as { profile: string }).profile));
+    ctx.route('skills/learn', ({ body }) => {
+      const { profile, description } = body as { profile: string; description: string };
+      return service.learn(profile, description);
+    });
   },
 });

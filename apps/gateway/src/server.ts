@@ -97,6 +97,15 @@ export async function startGateway(options: GatewayOptions) {
       approval: os.x['engine-t3'].approval.handler(async ({ input }) => invokeT3('approval', input) as Promise<{ sequence: number }>),
       settle: os.x['engine-t3'].settle.handler(async ({ input }) => invokeT3('settle', input) as Promise<{ sequence: number }>),
     }, 'engine-hermes': {
+      skills: {
+        list: os.x['engine-hermes'].skills.list.handler(async ({ input }) => invokeHermes('skills/list', input) as Promise<{ name: string; provenance?: string; usage?: number }[]>),
+        hub: os.x['engine-hermes'].skills.hub.handler(async ({ input }) => invokeHermes('skills/hub', input) as Promise<{ skills: { name: string }[] }>),
+        curator: os.x['engine-hermes'].skills.curator.handler(async ({ input }) => invokeHermes('skills/curator', input) as Promise<{ enabled: boolean; paused: boolean }>),
+        pause: os.x['engine-hermes'].skills.pause.handler(async ({ input }) => invokeHermes('skills/pause', input) as Promise<{ ok: boolean; paused: boolean }>),
+        run: os.x['engine-hermes'].skills.run.handler(async ({ input }) => invokeHermes('skills/run', input) as Promise<{ ok: boolean; pid: number; name: string }>),
+        graph: os.x['engine-hermes'].skills.graph.handler(async ({ input }) => invokeHermes('skills/graph', input) as Promise<{ nodes: { id: string; label: string; kind: string }[]; edges: { source: string; target: string }[] }>),
+        learn: os.x['engine-hermes'].skills.learn.handler(async ({ input }) => invokeHermes('skills/learn', input) as Promise<{ run_id: string }>),
+      },
       profiles: {
         list: os.x['engine-hermes'].profiles.list.handler(async () => invokeHermes('profiles/list', {}) as Promise<{ profiles: { name: string; path: string }[] }>),
         create: os.x['engine-hermes'].profiles.create.handler(async ({ input }) => invokeHermes('profiles/create', input) as Promise<{ ok: boolean; name: string; path: string }>),

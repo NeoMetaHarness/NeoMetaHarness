@@ -170,6 +170,8 @@ export class HermesRuntime {
   private readonly closingProfiles = new Set<string>();
   private readonly streams = new Set<AbortController>();
   private readonly projectionVersions = new Map<string, string | undefined>();
+  private readonly curatorPids = new Set<number>();
+  private readonly learnProcesses = new Set<ChildProcess>();
   private python = '';
   private upstream = '';
   private stopped = false;
@@ -331,6 +333,82 @@ export class HermesRuntime {
   async deleteCron(id: string): Promise<{ ok: boolean }> {
     return this.request('dashboard', `/api/cron/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(async (r) => await r.json() as { ok: boolean });
   }
+
+  private skillPath(path: string, profile: string): string {
+    return `${path}?profile=${encodeURIComponent(profileName(profile))}`;
+  }
+
+  async listSkills(profile: string): Promise<Record<string, unknown>[]> {
+    return this.request('dashboard', this.skillPath('/api/skills', profile))
+      .then(async (r) => await r.json() as Record<string, unknown>[]);
+  }
+
+  async officialSkills(profile: string): Promise<{ skills: Record<string, unknown>[] }> {
+    return this.request('dashboard', this.skillPath('/api/skills/hub/official', profile))
+      .then(async (r) => await r.json() as { skills: Record<string, unknown>[] });
+  }
+
+  async curatorStatus(profile: string): Promise<Record<string, unknown>> {
+    return this.request('dashboard', this.skillPath('/api/curator', profile))
+      .then(async (r) => await r.json() as Record<string, unknown>);
+  }
+
+  async pauseCurator(profile: string, paused: boolean): Promise<{ ok: boolean; paused: boolean }> {
+    return this.request('dashboard', this.skillPath('/api/curator/paused', profile), {
+      method: 'PUT', body: { paused },
+    }).then(async (r) => await r.json() as { ok: boolean; paused: boolean });
+  }
+
+  async runCurator(profile: string): Promise<{ ok: boolean; pid: number; name: string }> {
+    const result = await this.request('dashboard', this.skillPath('/api/curator/run', profile), { method: 'POST' })
+      .then(async (r) => await r.json() as { ok: boolean; pid: number; name: string });
+    if (result.ok && Number.isSafeInteger(result.pid) && result.pid > 0) {
+      this.curatorPids.add(result.pid);
+      if (this.stopped) await this.stopCurator(result.pid);
+    }
+    return result;
+  }
+
+  private async stopCurator(pid: number): Promise<void> {
+    if (process.platform === 'win32') {
+      await exec('taskkill.exe', ['/PID', String(pid), '/T', '/F']).catch(() => {});
+    } else {
+      try { process.kill(pid, 'SIGTERM'); } catch { /* action finished */ }
+    }
+    this.curatorPids.delete(pid);
+  }
+
+  async learningGraph(profile: string): Promise<Record<string, unknown>> {
+    return this.request('dashboard', this.skillPath('/api/learning/graph', profile))
+      .then(async (r) => await r.json() as Record<string, unknown>);
+  }
+
+  async learn(profile: string, description: string): Promise<{ run_id: string }> {
+    const home = this.profileHome(profile);
+    if (!existsSync(home)) throw new Error(`Unknown Hermes profile: ${profile}`);
+    // Use the pinned Hermes /learn prompt builder, also called by its CLI and gateway.
+    const child = spawn(this.python, ['-c',
+      'import sys; from agent.learn_prompt import build_learn_prompt; sys.stdout.write(build_learn_prompt(sys.stdin.read()))',
+    ], {
+      cwd: this.upstream, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...await hermesBaseEnvironment(), PYTHONPATH: this.upstream, HERMES_HOME: home,
+        HERMES_DISABLE_LAZY_INSTALLS: '1', PYTHONDONTWRITEBYTECODE: '1' },
+    });
+    this.learnProcesses.add(child);
+    const output: Buffer[] = [];
+    const errors: Buffer[] = [];
+    child.stdout?.on('data', (chunk: Buffer) => output.push(chunk));
+    child.stderr?.on('data', (chunk: Buffer) => errors.push(chunk));
+    const finished = new Promise<void>((done, reject) => {
+      child.once('error', reject);
+      child.once('close', (code) => code === 0 ? done() : reject(new Error(`Hermes learn prompt failed (${code}): ${Buffer.concat(errors).toString().slice(-500)}`)));
+    });
+    child.stdin?.end(description);
+    try { await finished; } finally { this.learnProcesses.delete(child); }
+    if (this.stopped) throw new Error('Hermes extension disabled');
+    return this.startRun(profile, Buffer.concat(output).toString('utf8'));
+  }
+
   async startRun(profile: string, input: string): Promise<{ run_id: string }> {
     return this.request('api', '/v1/runs', { method: 'POST', profile, body: { input } }).then(async (r) => await r.json() as { run_id: string });
   }
@@ -423,6 +501,8 @@ export class HermesRuntime {
     if (this.stopped) return;
     this.stopped = true;
     for (const stream of this.streams) stream.abort();
+    await Promise.all([...this.learnProcesses].map((child) => killTree(child)));
+    await Promise.all([...this.curatorPids].map((pid) => this.stopCurator(pid)));
     await Promise.allSettled([...this.starting.values()]);
     await Promise.all([...this.api.keys()].map((profile) => this.stopProfile(profile)));
     if (this.dashboard) { await killTree(this.dashboard.child); this.dashboard = undefined; }

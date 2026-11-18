@@ -107,6 +107,27 @@ export const hermesEventSchema = t3EventSchema;
 export type HermesEvent = z.infer<typeof hermesEventSchema>;
 
 export const hermesContract = {
+  skills: {
+    list: oc.input(z.object({ profile: z.string().min(1) })).output(z.array(z.object({
+      name: z.string(), provenance: z.string().optional(), usage: z.number().optional(),
+    }).passthrough())),
+    hub: oc.input(z.object({ profile: z.string().min(1) })).output(z.object({
+      skills: z.array(z.object({ name: z.string(), installed: z.boolean().optional() }).passthrough()),
+    }).passthrough()),
+    curator: oc.input(z.object({ profile: z.string().min(1) })).output(z.object({
+      enabled: z.boolean(), paused: z.boolean(),
+    }).passthrough()),
+    pause: oc.input(z.object({ profile: z.string().min(1), paused: z.boolean() }))
+      .output(z.object({ ok: z.boolean(), paused: z.boolean() })),
+    run: oc.input(z.object({ profile: z.string().min(1) }))
+      .output(z.object({ ok: z.boolean(), pid: z.number(), name: z.string() })),
+    graph: oc.input(z.object({ profile: z.string().min(1) })).output(z.object({
+      nodes: z.array(z.object({ id: z.string(), label: z.string(), kind: z.string() }).passthrough()),
+      edges: z.array(z.object({ source: z.string(), target: z.string() }).passthrough()),
+    }).passthrough()),
+    learn: oc.input(z.object({ profile: z.string().min(1), description: z.string().min(1) }))
+      .output(z.object({ run_id: z.string() })),
+  },
   profiles: {
     list: oc.output(z.object({ profiles: z.array(z.object({ name: z.string(), path: z.string() }).passthrough()) })),
     create: oc.input(z.object({ name: z.string().min(1) })).output(z.object({
