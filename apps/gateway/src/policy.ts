@@ -9,6 +9,12 @@ import {
 
 export type PolicyLevel = 'viewer' | 'member' | 'admin' | 'owner' | 'internal';
 
+/** Approval metadata identifies tool calls that can erase or replace user data. */
+export function destructiveToolApproval(tool: string, detail: string): boolean {
+  return /\b(delete|destroy|erase|wipe|purge|truncate|drop|remove|overwrite|format|reset|revoke)\b/i
+    .test(`${tool} ${detail}`);
+}
+
 export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   // x.engine-t3
   'x.engine-t3.create': 'member',
@@ -136,7 +142,7 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'agents.routines.enable': 'member',
 
   // inbox
-  'inbox.ask': 'member',
+  'inbox.ask': 'viewer',
   'inbox.list': 'viewer',
   'inbox.accept': 'member',
   'inbox.events': 'viewer',

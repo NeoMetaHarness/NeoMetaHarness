@@ -285,7 +285,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     inbox: {
       ask: os.inbox.ask.handler(async ({ input, context }) => {
         authorize('inbox.ask', context);
-        return invokeInbox('ask', input) as Promise<InboxItem>;
+        return invokeInbox('ask', { ...input, requesterRole: context.role, requesterId: context.user?.id }) as Promise<InboxItem>;
       }),
       list: os.inbox.list.handler(async ({ context }) => {
         authorize('inbox.list', context);
@@ -303,7 +303,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       cron: {
         create: os.inbox.cron.create.handler(async ({ input, context }) => {
           authorize('inbox.cron.create', context);
-          return invokeInbox('cron/create', input) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }>;
+          return invokeInbox('cron/create', { ...input, requesterRole: context.role }) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }>;
         }),
         list: os.inbox.cron.list.handler(async ({ context }) => {
           authorize('inbox.cron.list', context);

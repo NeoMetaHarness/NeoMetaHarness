@@ -394,6 +394,7 @@ export const inboxReportSchema = z.object({
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
   source: z.enum(['neo/app', 'neo/cron', 'neo/channel']).optional(),
+  requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).optional(),
   mode: z.enum(['observe', 'act']),
   status: z.enum(['suggestion', 'running', 'ready', 'question', 'blocked', 'failed']),
   ticketId: z.string().optional(), report: inboxReportSchema.optional(),
@@ -413,9 +414,11 @@ export const inboxContract = {
     create: oc.input(z.object({ text: z.string().min(1), botId: z.string().min(1),
       schedule: z.string().min(1), mode: z.enum(['observe', 'act']).default('observe') }))
       .output(z.object({ id: z.string(), text: z.string(), botId: z.string(),
-        schedule: z.string(), mode: z.enum(['observe', 'act']) })),
+      schedule: z.string(), mode: z.enum(['observe', 'act']),
+      requesterRole: z.enum(['member', 'admin', 'owner']).optional() })),
     list: oc.output(z.array(z.object({ id: z.string(), text: z.string(), botId: z.string(),
-      schedule: z.string(), mode: z.enum(['observe', 'act']) }))),
+      schedule: z.string(), mode: z.enum(['observe', 'act']),
+      requesterRole: z.enum(['member', 'admin', 'owner']).optional() }))),
     delete: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ deleted: z.boolean() })),
     fire: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ ok: z.boolean() })),
   },

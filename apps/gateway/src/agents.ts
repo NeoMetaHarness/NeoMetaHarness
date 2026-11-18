@@ -4,8 +4,8 @@ import type { SqliteDatabaseProvider } from '@neometaharness/db';
 import type { NeoKernel } from '@neometaharness/kernel';
 import { AgentService, HermesAgentRuntime } from '@neometaharness/agents';
 import { coalesceText } from './coalesce.js';
-import { requireViewer, requireMember, type GatewayAuthContext } from './rbac.js';
-import { authorize } from './policy.js';
+import { requireViewer, requireMember, requireAdminOrOwner, type GatewayAuthContext } from './rbac.js';
+import { authorize, destructiveToolApproval } from './policy.js';
 
 /** The gateway owns the service lifetime. It follows Hermes enable/disable transitions. */
 export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: NeoKernel) {
@@ -93,6 +93,12 @@ export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: Neo
       }),
       resolve: os.agents.approvals.resolve.handler(async ({ input, context }) => {
         authorize('agents.approvals.resolve', context as GatewayAuthContext);
+        if (input.decision === 'allow') {
+          const approval = await requireService().records.getApproval(input.id);
+          if (approval && destructiveToolApproval(approval.tool, approval.detail)) {
+            requireAdminOrOwner(context as GatewayAuthContext);
+          }
+        }
         return {
           resolved: await requireService().resolveApproval(input.id, input.decision),
         };

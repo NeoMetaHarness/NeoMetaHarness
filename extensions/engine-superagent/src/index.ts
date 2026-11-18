@@ -9,6 +9,7 @@ import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './mod
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
 import { NeoCronSource, type ScheduledAsk } from './cron-source.js';
 import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './channel-source.js';
+import { blockedReason } from './ask-policy.js';
 
 type Report = NonNullable<InboxItem['report']>;
 type Candidate = { evalId: string; triggers: { id: string }[] };
@@ -17,6 +18,7 @@ type Assignment = { id: string };
 
 const askSchema = z.object({
   text: z.string().min(1), botId: z.string().min(1), mode: z.enum(['observe', 'act']).default('observe'),
+  requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).default('member'),
 });
 
 /** The only Neo-specific boundary that can ingest a Source Trigger. */
@@ -128,7 +130,8 @@ class SuperagentService {
       this.sources.set(kind.kind, new NeoSourceAdapter(context, kind.kind));
     }
     this.cron = new NeoCronSource(join(home, '..', 'cron.json'), async (job) => {
-      await this.ask({ text: job.text, botId: job.botId, mode: job.mode }, 'neo/cron');
+      await this.ask({ text: job.text, botId: job.botId, mode: job.mode,
+        requesterRole: job.requesterRole ?? 'member' }, 'neo/cron');
     });
     await this.cron.start();
     if (channel) {
@@ -157,7 +160,8 @@ class SuperagentService {
     if (this.closed || !/(^|\s)@neo\b/i.test(message.text)) return;
     const text = message.text.replace(/(^|\s)@neo\b/i, '$1').trim();
     if (!text) return;
-    await this.ask({ text, botId: message.botId, mode: message.mode ?? 'act' }, 'neo/channel', (item) => {
+    await this.ask({ text, botId: message.botId, mode: message.mode ?? 'act',
+      requesterRole: message.memberRole }, 'neo/channel', (item) => {
       this.channelReplies.set(item.id, { channelId: message.channelId, inReplyTo: message.id });
     });
   }
@@ -171,6 +175,11 @@ class SuperagentService {
     };
     this.items.set(item.id, item);
     onCreated?.(item);
+    const reason = blockedReason(request.requesterRole, request.mode, request.text);
+    if (reason) {
+      const report: Report = { status: 'blocked', summary: reason, changes: [], tests: [], risks: [reason], options: [] };
+      return this.update(item, { status: 'blocked', report });
+    }
     await this.sources.get(source)!.receive(item);
     this.engine.evaluateDue();
     const triggerId = `${source}:${item.id}`;
@@ -211,6 +220,11 @@ class SuperagentService {
     const item = this.items.get(input.id);
     if (!item) throw new Error('Suggestion not found');
     if (item.status !== 'suggestion') throw new Error(`Cannot accept ${item.status} ticket`);
+    const reason = blockedReason(item.requesterRole ?? 'member', 'act', item.text);
+    if (reason) {
+      return this.update(item, { status: 'blocked', report: { status: 'blocked', summary: reason,
+        changes: [], tests: [], risks: [reason], options: [] } });
+    }
     const candidate = this.candidates.get(`${item.source ?? 'neo/app'}:${item.id}`);
     if (!candidate) throw new Error('Suggestion Eval expired');
     this.acceptCandidate(item, candidate, item.source);
@@ -221,7 +235,9 @@ class SuperagentService {
 
   cronList(): ScheduledAsk[] { return this.cron!.list(); }
   cronCreate(input: unknown): Promise<ScheduledAsk> {
-    return this.cron!.create(askSchema.extend({ schedule: z.string().min(1) }).parse(input));
+    const parsed = askSchema.extend({ schedule: z.string().min(1) }).parse(input);
+    if (parsed.requesterRole === 'viewer') throw new Error('Viewer cannot register schedules');
+    return this.cron!.create({ ...parsed, requesterRole: parsed.requesterRole });
   }
   cronDelete(input: { id: string }): Promise<{ deleted: boolean }> { return this.cron!.delete(input.id); }
   async cronFire(input: { id: string }): Promise<{ ok: boolean }> {

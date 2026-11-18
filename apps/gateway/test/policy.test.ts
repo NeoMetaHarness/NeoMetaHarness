@@ -326,8 +326,8 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
     );
     await assert.rejects(
       viewerClient.inbox.ask({ botId: 'b-1', text: 'question' }),
-      (err: any) => err.code === 'FORBIDDEN',
-      'Viewer call to member route must fail with 403, not 503'
+      (err: any) => err.code === 'SERVICE_UNAVAILABLE',
+      'Viewer observe asks may pass authorization, then fail if the superagent is disabled'
     );
     await assert.rejects(
       viewerClient.agents.bots.create({ name: 'New Bot' }),
