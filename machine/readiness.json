@@ -236,8 +236,10 @@
   "p4_tasks": {
     "P4-1": {
       "title": "Skills page over Hermes learned skills + engine-hermes vault env",
-      "status": "in_progress",
-      "owner": "sol-b"
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "PM rerun 2x on main: P4-1_BROWSER PASS ordinary=true learning=true provenance=true graph=true curator=true disabled=404 sample=healthy; Hermes child env allowlisted (NEO_TEST_SECRET excluded), credentials via vault; full regression 14/14",
+      "follow_up": "real-model learning quality unverified (fake model); Skills Hub install disabled until P4-2 eval gate"
     }
   },
   "p3_tasks": {
@@ -251,8 +253,10 @@
     },
     "P3-2": {
       "title": "Computers page + headless-Chrome computer provider",
-      "status": "in_progress",
-      "owner": "sol-a"
+      "status": "done",
+      "owner": "sol-a",
+      "evidence": "PM rerun 2x from clean build: P3-2_GATEWAY_UI PASS chrome=true Hermes=navigate+click frames=changed lease=403 handback=200 kill=403 pid=gone sample=healthy; isolated Chrome profile, loopback CDP random port; PM fixed test to build before preview",
+      "follow_up": "needs installed Chrome (NMH_CHROME override)"
     }
   },
   "p5_tasks": {
