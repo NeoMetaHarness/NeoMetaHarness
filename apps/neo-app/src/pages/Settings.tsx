@@ -1,6 +1,20 @@
 import { Button } from '@neometaharness/ui';
+import { useState } from 'react';
 
 export default function Settings({ onOpen }: { onOpen: (path: '/settings/channels' | '/settings/models') => void }) {
+  const [updateStatus, setUpdateStatus] = useState('');
+  const native = (window as unknown as { __TAURI_INTERNALS__?: {
+    invoke: (name: string) => Promise<string | null>;
+  } }).__TAURI_INTERNALS__;
+  async function checkUpdates() {
+    setUpdateStatus('Checking for updates…');
+    try {
+      const version = await native?.invoke('check_for_updates');
+      setUpdateStatus(version ? `Version ${version} is available` : 'No newer version found');
+    } catch (error) {
+      setUpdateStatus(String(error));
+    }
+  }
   return <section aria-label="Settings">
     <h1>Settings</h1>
     <h2>Channels</h2>
@@ -13,5 +27,12 @@ export default function Settings({ onOpen }: { onOpen: (path: '/settings/channel
     <Button label="Manage models" data-testid="settings-models-open" onClick={() => onOpen('/settings/models')}>
       Manage models
     </Button>
+    {native && <section aria-label="Desktop updates">
+      <h2>Desktop updates</h2>
+      <Button label="Check for updates" data-testid="settings-update-check" onClick={() => void checkUpdates()}>
+        Check for updates
+      </Button>
+      {updateStatus && <p role="status">{updateStatus}</p>}
+    </section>}
   </section>;
 }

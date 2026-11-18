@@ -8,6 +8,45 @@ use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_updater::UpdaterExt;
+
+fn focus_main(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn forward_deep_link(app: &tauri::AppHandle, url: &str) {
+    if !url.starts_with("neo://inbox/") && !url.starts_with("neo://coding/") {
+        return;
+    }
+    focus_main(app);
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(payload) = serde_json::to_string(url) {
+            let _ = window.eval(&format!(
+                "window.dispatchEvent(new CustomEvent('neo:deep-link', {{detail: {payload}}}))"
+            ));
+        }
+    }
+}
+
+#[tauri::command]
+async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let endpoint = std::env::var("NMH_UPDATER_ENDPOINT")
+        .map_err(|_| "Updater endpoint is not configured".to_string())?;
+    let public_key = std::env::var("NMH_UPDATER_PUBLIC_KEY")
+        .map_err(|_| "Updater public key is not configured".to_string())?;
+    let endpoint = endpoint.parse().map_err(|error| format!("Invalid updater URL: {error}"))?;
+    let updater = app.updater_builder()
+        .endpoints(vec![endpoint]).map_err(|error| error.to_string())?
+        .pubkey(public_key).build().map_err(|error| error.to_string())?;
+    let update = updater.check().await.map_err(|error| error.to_string())?;
+    Ok(update.map(|candidate| candidate.version))
+}
 
 struct GatewaySidecar {
     child: Child,
@@ -92,6 +131,10 @@ struct GatewayState(Mutex<Option<GatewaySidecar>>);
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![check_for_updates])
         .setup(|app| {
             let data_dir = std::env::var_os("NMH_DESKTOP_DATA_DIR")
                 .map(PathBuf::from)
@@ -102,28 +145,58 @@ pub fn run() {
             app.manage(GatewayState(Mutex::new(Some(sidecar))));
 
             let token = fs::read_to_string(data_dir.join("desktop.token")).unwrap_or_default().trim().to_string();
-            let url = if token.is_empty() {
+            let mut url = if token.is_empty() {
                 format!("index.html?gateway=http%3A%2F%2F127.0.0.1%3A{port}")
             } else {
                 format!("index.html?gateway=http%3A%2F%2F127.0.0.1%3A{port}&token={token}")
             };
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                if let Some(link) = urls.first() {
+                    if link.scheme() == "neo" && ["inbox", "coding"].contains(&link.host_str().unwrap_or_default()) {
+                        url.push_str("&deep_link=");
+                        url.push_str(&percent_encoding::utf8_percent_encode(link.as_str(), percent_encoding::NON_ALPHANUMERIC).to_string());
+                    }
+                }
+            }
             let url = WebviewUrl::App(url.into());
             WebviewWindowBuilder::new(app, "main", url)
                 .title("Neo Meta Harness")
                 .inner_size(1280.0, 860.0)
                 .build()?;
 
+            let shortcut = std::env::var("NMH_LAUNCHER_SHORTCUT").ok()
+                .or_else(|| fs::read_to_string(data_dir.join("launcher-shortcut.txt")).ok())
+                .unwrap_or_else(|| "Ctrl+Shift+Space".to_owned());
+            app.global_shortcut().on_shortcut(shortcut.trim(), |app, _, event| {
+                if event.state() == ShortcutState::Pressed {
+                    focus_main(app);
+                }
+            })?;
+
+            let app_handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    forward_deep_link(&app_handle, url.as_str());
+                }
+            });
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                for url in urls {
+                    forward_deep_link(app.handle(), url.as_str());
+                }
+            }
+
             let open = MenuItem::with_id(app, "open", "Open Neo", true, None::<&str>)?;
+            let stop = MenuItem::with_id(app, "stop", "Stop all agents", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Neo", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &stop, &quit])?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().ok_or("Desktop tray icon unavailable")?.clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    "open" => {
+                    "open" => focus_main(app),
+                    "stop" => {
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                            let _ = window.eval("window.dispatchEvent(new Event('neo:stop-all-agents'))");
                         }
                     }
                     "quit" => app.exit(0),
@@ -134,7 +207,7 @@ pub fn run() {
             if let Some(file) = std::env::var_os("NMH_DESKTOP_STATUS_FILE") {
                 fs::write(
                     file,
-                    serde_json::json!({ "port": port, "gatewayPid": gateway_pid, "appPid": std::process::id() }).to_string(),
+                    serde_json::json!({ "port": port, "gatewayPid": gateway_pid, "appPid": std::process::id(), "trayReady": true, "deepLinks": ["neo://inbox/", "neo://coding/"], "shortcut": shortcut.trim() }).to_string(),
                 )?;
             }
             Ok(())

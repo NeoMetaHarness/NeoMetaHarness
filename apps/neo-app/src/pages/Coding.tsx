@@ -89,6 +89,15 @@ export default function Coding() {
     };
   }, []);
 
+  useEffect(() => {
+    const target = new URLSearchParams(window.location.search).get('openThread');
+    if (!target || selected.current === target || !catalog.threads.some((thread) => thread.id === target)) return;
+    openThread(target);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('openThread');
+    window.history.replaceState({}, '', url.pathname + url.search);
+  }, [catalog]);
+
   async function refresh(silent = false) {
     try {
       const [result, providerResult] = await Promise.all([

@@ -52,6 +52,10 @@ export default function Inbox() {
       list.current.prepend(row);
     }
     row.dataset.status = item.status;
+    if (new URLSearchParams(window.location.search).get('openInbox') === item.id) {
+      row.dataset.deepLinkSelected = 'true';
+      requestAnimationFrame(() => row?.scrollIntoView({ block: 'center' }));
+    }
     const header = document.createElement('div');
     header.className = 'inbox-item-header';
     header.append(textNode('span', item.mode === 'observe' ? 'Observe' : 'Act', 'inbox-mode'),

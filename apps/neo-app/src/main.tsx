@@ -2,6 +2,11 @@ import '@neometaharness/ui/styles.css';
 import { StrictMode, Suspense, lazy, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppShell, NeoTheme, SideNav, SideNavItem, SideNavSection } from '@neometaharness/ui/shell';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
+import { neoContract } from '@neometaharness/contracts';
+import { gatewayToken, gatewayUrl } from './config';
 import './shell.css';
 
 const Extensions = lazy(() => import('./pages/Extensions'));
@@ -30,6 +35,27 @@ const pages = [
   { label: 'Settings', path: '/settings', icon: 'settings' },
 ] as const;
 
+const gateway = createORPCClient<ContractRouterClient<typeof neoContract>>(new RPCLink({
+  url: gatewayUrl(),
+  headers: () => {
+    const token = gatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  },
+}));
+
+export function parseDeepLink(raw: string): { path: '/inbox' | '/coding'; id: string } | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'neo:' || !['inbox', 'coding'].includes(url.hostname)) return null;
+    if (!/^\/[^/]+$/.test(url.pathname)) return null;
+    const id = decodeURIComponent(url.pathname.slice(1));
+    if (!id || id.includes('/') || id.length > 256) return null;
+    return { path: url.hostname === 'inbox' ? '/inbox' : '/coding', id };
+  } catch {
+    return null;
+  }
+}
+
 function activePath() {
   const candidate = window.location.pathname;
   return candidate.startsWith('/settings/') || pages.some(({ path }) => path === candidate) ? candidate : '/extensions';
@@ -37,6 +63,7 @@ function activePath() {
 
 function NeoApp() {
   const [path, setPath] = useState(activePath);
+  const [shellError, setShellError] = useState('');
   useEffect(() => {
     const onPop = () => setPath(activePath());
     window.addEventListener('popstate', onPop);
@@ -47,6 +74,33 @@ function NeoApp() {
     if (destination !== path) window.history.pushState({}, '', destination + window.location.search);
     setPath(destination);
   };
+  useEffect(() => {
+    const route = (raw: string) => {
+      const target = parseDeepLink(raw);
+      if (!target) return;
+      const url = new URL(window.location.href);
+      url.pathname = target.path;
+      url.searchParams.delete('openInbox');
+      url.searchParams.delete('openThread');
+      url.searchParams.set(target.path === '/inbox' ? 'openInbox' : 'openThread', target.id);
+      window.history.pushState({}, '', url.pathname + url.search);
+      setPath(target.path);
+      window.dispatchEvent(new CustomEvent('neo:record', { detail: target }));
+    };
+    const onLink = (event: Event) => route((event as CustomEvent<string>).detail);
+    const onStop = () => {
+      void gateway.computers.kill({ engaged: true }).catch((error) =>
+        setShellError(`Cannot stop agents: ${String(error)}`));
+    };
+    window.addEventListener('neo:deep-link', onLink);
+    window.addEventListener('neo:stop-all-agents', onStop);
+    const startup = new URLSearchParams(window.location.search).get('deep_link');
+    if (startup) route(startup);
+    return () => {
+      window.removeEventListener('neo:deep-link', onLink);
+      window.removeEventListener('neo:stop-all-agents', onStop);
+    };
+  }, []);
   const current = pages.find((page) => page.path === (path.startsWith('/settings') ? '/settings' : path))
     ?? pages.find((page) => page.path === '/extensions')!;
 
@@ -70,6 +124,7 @@ function NeoApp() {
       </SideNav>
     }>
       <div className="neo-page">
+        {shellError && <p role="alert">{shellError}</p>}
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
           {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings' ? <Settings onOpen={navigate} /> : <Placeholder name={current.label} />}
         </Suspense>
