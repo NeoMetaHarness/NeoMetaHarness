@@ -10,6 +10,9 @@ import { request as httpRequest } from 'node:http';
 import { WebSocket } from 'ws';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { HermesProjector } from '@neometaharness/vault';
 import { startGateway } from '../src/server.js';
 
 type Gateway = Awaited<ReturnType<typeof startGateway>>;
@@ -336,5 +339,30 @@ test('SEC-15: the app sends its token only to a loopback gateway or the configur
     assert.ok(!gatewayUrl().includes('evil'), 'look-alike hosts are not loopback');
   } finally {
     g.window = saved.window; g.localStorage = saved.localStorage;
+  }
+});
+
+test('SEC-16: projected Hermes secrets reach python-dotenv byte-for-byte; unrepresentable ${...} is refused, never altered', async (t) => {
+  const venv = fileURLToPath(new URL('../../../extensions/engine-hermes/.cache/venv/', import.meta.url));
+  const python = join(venv, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+  if (!existsSync(python)) { t.skip('Hermes venv not built yet (run the engine-hermes tests first)'); return; }
+  const home = await mkdtemp(join(tmpdir(), 'nmh-sec-dotenv-'));
+  try {
+    // python-dotenv (and Hermes' env_loader) expand ${VAR} in every quoting style
+    // with no escape, so such a value cannot be projected faithfully: refuse it.
+    await assert.rejects(new HermesProjector(home).project(new Map([['OPENAI_API_KEY', 'sk-${HOME}']])),
+      /\$\{/, 'a value python-dotenv would rewrite is refused');
+    assert.ok(!existsSync(join(home, '.env')), 'nothing is written for a refused value');
+    const tricky = 'sk-$OPENAI_API_KEY-$HOME-a\'b"c\\d#e f $';
+    assert.ok(tricky.includes('\\'), 'precondition: the probe value contains a backslash');
+    const secrets = new Map([['OPENAI_API_KEY', tricky], ['DEEPSEEK_API_KEY', 'plain-key_1.2']]);
+    await new HermesProjector(home).project(secrets);
+    const parsed = JSON.parse(execFileSync(python, ['-I', '-c',
+      'import json,sys\nfrom dotenv import dotenv_values\nprint(json.dumps(dotenv_values(sys.argv[1])))', join(home, '.env')],
+    { encoding: 'utf8' })) as Record<string, string>;
+    assert.equal(parsed.OPENAI_API_KEY, tricky, 'python-dotenv must see the exact secret');
+    assert.equal(parsed.DEEPSEEK_API_KEY, 'plain-key_1.2');
+  } finally {
+    await rm(home, { recursive: true, force: true, maxRetries: 5 });
   }
 });

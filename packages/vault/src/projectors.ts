@@ -23,7 +23,12 @@ const HERMES_KEYS = new Set([
 
 function envValue(value: string): string {
   if (/[\r\n\0]/.test(value)) throw new Error('Environment values cannot contain newlines or NUL');
-  return /^[a-zA-Z0-9_./:@+=-]+$/.test(value) ? value : JSON.stringify(value);
+  // python-dotenv and Hermes' env_loader expand ${VAR} in every quoting style and
+  // offer no escape, so such a value would silently reach Hermes altered (SEC-16).
+  if (value.includes('${')) throw new Error('Environment values cannot contain "${" (dotenv would expand it)');
+  if (/^[a-zA-Z0-9_./:@+=-]+$/.test(value)) return value;
+  // Single quotes: python-dotenv decodes only \\ and \' inside them.
+  return "'" + value.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
 }
 
 async function readExisting(filename: string): Promise<string> {
