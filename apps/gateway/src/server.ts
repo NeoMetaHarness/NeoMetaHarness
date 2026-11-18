@@ -17,6 +17,10 @@ import {
   type InboxItem,
   type InboxEvent,
   type RegistrySkill,
+  type ModelProviderRecord,
+  type ModelSelectionRecord,
+  type ModelRolesRecord,
+  type ModelRoleName,
 } from '@neometaharness/contracts';
 import {
   VaultService,
@@ -249,6 +253,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Skill registry extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const invokeModels = async (route: string, body: unknown) => {
+    const path = `/x/models/${route}`;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Model Hub extension is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   type SkillRecord = RegistrySkill;
   const withHealth = async (id: string) => {
     const health = await kernel.health(id).catch(() => ({ ok: false }));
@@ -277,6 +286,38 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }),
     },
     x: {
+      models: {
+        providers: {
+          list: os.x.models.providers.list.handler(async ({ context }) => {
+            requireViewer(context);
+            return invokeModels('providers/list', {}) as Promise<ModelProviderRecord[]>;
+          }),
+          put: os.x.models.providers.put.handler(async ({ input, context }) => {
+            requireAdminOrOwner(context);
+            return invokeModels('providers/put', input) as Promise<ModelProviderRecord>;
+          }),
+          delete: os.x.models.providers.delete.handler(async ({ input, context }) => {
+            requireAdminOrOwner(context);
+            return invokeModels('providers/delete', input) as Promise<{ deleted: boolean }>;
+          }),
+        },
+        roles: {
+          get: os.x.models.roles.get.handler(async ({ context }) => {
+            requireViewer(context);
+            return invokeModels('roles/get', {}) as Promise<ModelRolesRecord>;
+          }),
+          set: os.x.models.roles.set.handler(async ({ input, context }) => {
+            requireAdminOrOwner(context);
+            return invokeModels('roles/set', input) as Promise<{ role: ModelRoleName; selection: ModelSelectionRecord }>;
+          }),
+        },
+        override: {
+          set: os.x.models.override.set.handler(async ({ input, context }) => {
+            requireAdminOrOwner(context);
+            return invokeModels('override/set', input) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;
+          }),
+        },
+      },
       'skills-registry': {
         list: os.x['skills-registry'].list.handler(async ({ context }) => {
           authorize('x.skills-registry.list', context);
@@ -700,7 +741,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/skills-registry/')) {
+      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/')) {
         if (!kernel.hasRoute(path) && context.role && context.role !== 'viewer') {
           res.writeHead(404).end();
           return;

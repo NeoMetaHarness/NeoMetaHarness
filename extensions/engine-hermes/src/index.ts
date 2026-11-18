@@ -8,6 +8,8 @@ import type { VaultService } from '@neometaharness/vault';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+type ModelProjector = { projectHermes(profile: string, home: string): Promise<string | undefined> };
+
 export default defineExtension({
   async activate(ctx) {
     const home = resolve(process.env.NMH_HERMES_HOME ?? fileURLToPath(new URL('../.cache/home', import.meta.url)));
@@ -20,7 +22,8 @@ export default defineExtension({
       const computerVersion = computers ? await projectHermesComputer(computers, profile, profileHome) : undefined;
       const memoryVersion = await projectHermesMemory(memory, profile, profileHome);
       const skillsVersion = await skillsBridge?.hermesReady(profile, profileHome);
-      return JSON.stringify([computerVersion, memoryVersion, skillsVersion]);
+      const modelVersion = await ctx.inject<ModelProjector>('modelHub')?.projectHermes(profile, profileHome);
+      return JSON.stringify([computerVersion, memoryVersion, skillsVersion, modelVersion]);
     });
     await service.start();
     ctx.provide('agentRuntime', service);

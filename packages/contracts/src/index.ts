@@ -229,8 +229,44 @@ export const skillsRegistryContract = {
   assignments: oc.output(z.array(skillTarget)),
 };
 
+const modelProviderId = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/);
+const modelProfile = z.string().regex(/^(?:default|[a-z][a-z0-9_-]{0,47})$/);
+const modelRole = z.enum(['default', 'fast', 'reasoning', 'coding', 'eval']);
+const modelSelection = z.object({ providerId: modelProviderId, model: z.string().trim().min(1) });
+const modelProvider = z.object({
+  id: modelProviderId, kind: z.literal('openai-compatible'), name: z.string(),
+  baseUrl: z.string().url(), hasKey: z.boolean(),
+});
+const modelRoles = z.object({
+  default: modelSelection.optional(), fast: modelSelection.optional(),
+  reasoning: modelSelection.optional(), coding: modelSelection.optional(), eval: modelSelection.optional(),
+});
+export type ModelProviderRecord = z.infer<typeof modelProvider>;
+export type ModelSelectionRecord = z.infer<typeof modelSelection>;
+export type ModelRolesRecord = z.infer<typeof modelRoles>;
+export type ModelRoleName = z.infer<typeof modelRole>;
+export const modelsContract = {
+  providers: {
+    list: oc.output(z.array(modelProvider)),
+    put: oc.input(z.object({
+      id: modelProviderId, kind: z.literal('openai-compatible'), name: z.string().optional(),
+      baseUrl: z.string().url(), apiKey: z.string().optional(),
+    })).output(modelProvider),
+    delete: oc.input(z.object({ id: modelProviderId })).output(z.object({ deleted: z.boolean() })),
+  },
+  roles: {
+    get: oc.output(modelRoles),
+    set: oc.input(modelSelection.extend({ role: modelRole }))
+      .output(z.object({ role: modelRole, selection: modelSelection })),
+  },
+  override: {
+    set: oc.input(z.object({ profile: modelProfile, providerId: modelProviderId.optional(), model: z.string().trim().min(1).optional() }))
+      .output(z.object({ profile: modelProfile, selection: modelSelection.nullable() })),
+  },
+};
+
 const baseNeoContract = {
-  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'skills-registry': skillsRegistryContract },
+  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'skills-registry': skillsRegistryContract, models: modelsContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
