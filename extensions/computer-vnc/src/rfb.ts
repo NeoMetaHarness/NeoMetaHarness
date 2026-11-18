@@ -70,6 +70,7 @@ export class RfbClient {
   }
   capture(): Promise<Buffer> {
     return this.serial(async () => {
+      const deadline = setTimeout(() => this.io.close('RFB framebuffer update timed out; release and reattach'), 15000);
       try {
         // §7.4.3: non-incremental request guarantees a response even on a static screen.
         const request = Buffer.alloc(10); request[0] = 3;
@@ -88,6 +89,7 @@ export class RfbClient {
         }
         throw new Error('RFB response message limit exceeded');
       } catch (error) { this.close(); throw error; }
+      finally { clearTimeout(deadline); }
     });
   }
   private bounds(x: number, y: number, w: number, h: number) {

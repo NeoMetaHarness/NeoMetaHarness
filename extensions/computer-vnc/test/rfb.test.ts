@@ -8,6 +8,8 @@ test('VNC bit reversal matches independent DES known-answer vector', () => {
   // FIPS DES key 133457799BBCDFF1, plaintext 0123456789ABCDEF -> 85E813540F0AB405.
   const password = Buffer.from('c82cea9ed93dfb8f', 'hex').toString('latin1');
   assert.equal(vncResponse(Buffer.from('0123456789abcdef'.repeat(2), 'hex'), password).toString('hex'), '85e813540f0ab405'.repeat(2));
+  const challenge = Buffer.alloc(16);
+  assert.deepEqual(vncResponse(challenge, 'passwordΩextra'), vncResponse(challenge, 'password'), 'only the first eight bytes participate');
 });
 
 test('RFB 3.8 VNC-auth, fragmented Raw+CopyRect and pointer/key messages', async () => {
