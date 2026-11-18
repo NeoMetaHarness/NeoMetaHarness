@@ -223,8 +223,30 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
     authorize(`vault.${operation}`, context);
-    if (context?.workspaceId && scope.workspaceId !== context.workspaceId && context.role !== 'owner') {
-      throw new ORPCError('FORBIDDEN', { message: 'Cross-workspace vault access forbidden' });
+    if (scope?.workspaceId && scope.workspaceId !== context?.workspaceId) {
+      // Cross-workspace access needs a sufficient role in the target workspace
+      // itself. Scope ids that are not Neo workspaces (the legacy 'default'
+      // scope, engine tenants) belong to the instance: only an owner of the
+      // bootstrap workspace, and the operator's authorizeVault hook still applies.
+      const kysely = auth.kysely;
+      const userId = context?.user?.id;
+      let held: string | undefined;
+      if (kysely && userId) {
+        const memberRole = async (organizationId: string) => (await kysely.selectFrom('member').select('role')
+          .where('userId', '=', userId).where('organizationId', '=', organizationId)
+          .executeTakeFirst() as { role: string } | undefined)?.role;
+        const target = await kysely.selectFrom('organization').select('id')
+          .where('id', '=', scope.workspaceId).executeTakeFirst();
+        if (target) {
+          held = await memberRole(scope.workspaceId);
+        } else {
+          const bootstrap = await kysely.selectFrom('organization').select('id')
+            .orderBy('createdAt').executeTakeFirst() as { id: string } | undefined;
+          held = bootstrap && (await memberRole(bootstrap.id)) === 'owner' ? 'owner' : undefined;
+        }
+      }
+      if (!held) throw new ORPCError('FORBIDDEN', { message: 'Cross-workspace vault access forbidden' });
+      authorize(`vault.${operation}`, { ...context!, workspaceId: scope.workspaceId, role: held as GatewayAuthContext['role'] });
     }
     if (options.authorizeVault && (await options.authorizeVault(operation, scope)) !== true) {
       throw new ORPCError('UNAUTHORIZED', { message: 'Vault access denied' });

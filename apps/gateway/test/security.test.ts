@@ -166,3 +166,34 @@ test('SEC-05: authorization runs before the extension-availability check for eve
     assert.equal((await fetch(`${base}/x/engine-hermes/no-such-route`, json({ json: {} }, as(member.token!)))).status, 404);
   });
 });
+
+const vaultCall = (base: string, op: string, input: unknown, token: string) =>
+  fetch(`${base}/vault/${op}`, json({ json: input }, { authorization: `Bearer ${token}` }));
+
+test('SEC-07: owning one workspace grants no vault access to another workspace or to the legacy instance scope', async () => {
+  await withGateway('server', async (_gateway, base) => {
+    const owner = await signUp(base, 'owner@corp.test');
+    const corp = await (await fetch(`${base}/auth/organization/create`,
+      json({ name: 'Corp', slug: 'corp' }, { authorization: `Bearer ${owner.token}` }))).json() as { id: string };
+    const finance = await (await fetch(`${base}/auth/organization/create`,
+      json({ name: 'Finance', slug: 'finance', keepCurrentActiveOrganization: true }, { authorization: `Bearer ${owner.token}` }))).json() as { id: string };
+    const admin = await signUp(base, 'admin@corp.test');
+    await joinWorkspace(base, owner.token!, corp.id, admin, 'admin@corp.test', 'admin');
+    // The Corp admin creates a side workspace and becomes its owner (allowed after SEC-02).
+    const side = await fetch(`${base}/auth/organization/create`,
+      json({ name: 'Side', slug: 'side' }, { authorization: `Bearer ${admin.token}` }));
+    assert.equal(side.status, 200);
+    const financeScope = { kind: 'workspace', workspaceId: finance.id };
+    assert.equal((await vaultCall(base, 'put', { scope: financeScope, name: 'BANK_KEY', value: 'secret' }, owner.token!)).status, 200,
+      'Finance owner may write Finance secrets');
+    assert.equal((await vaultCall(base, 'list', { scope: financeScope }, admin.token!)).status, 403,
+      'owner of an unrelated workspace must not list Finance secrets');
+    assert.equal((await vaultCall(base, 'put', { scope: financeScope, name: 'BANK_KEY', value: 'evil' }, admin.token!)).status, 403,
+      'owner of an unrelated workspace must not overwrite Finance secrets');
+    const legacy = { kind: 'workspace', workspaceId: 'default' };
+    assert.equal((await vaultCall(base, 'list', { scope: legacy }, admin.token!)).status, 403,
+      'only the instance owner may use the legacy default scope');
+    assert.equal((await vaultCall(base, 'put', { scope: legacy, name: 'HONCHO_URL', value: 'http://x' }, owner.token!)).status, 200,
+      'the instance owner keeps the legacy default scope');
+  });
+});
