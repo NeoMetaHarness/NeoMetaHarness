@@ -12,6 +12,10 @@ import RegistryPanel from './RegistryPanel';
 type Client = ContractRouterClient<typeof neoContract>;
 type Skill = { name: string; provenance?: string; usage?: number; category?: string; enabled?: boolean };
 type HubSkill = { name: string; identifier?: string; category?: string; installed?: boolean };
+type HubReport = {
+  id: string; blocked: boolean; approved?: boolean; files: string[];
+  findings: { file: string; line: number; category: string; description: string }[];
+};
 type Curator = { enabled: boolean; paused: boolean; last_run_at?: string | null };
 type Graph = { nodes: { id: string; label: string; kind: string }[]; edges: { source: string; target: string }[] };
 
@@ -29,6 +33,9 @@ export default function Skills() {
   const [profile, setProfile] = useState('default');
   const [skills, setSkills] = useState<Skill[]>([]);
   const [hub, setHub] = useState<HubSkill[]>([]);
+  const [hubReports, setHubReports] = useState<Record<string, HubReport>>({});
+  const [hubImported, setHubImported] = useState<string[]>([]);
+  const [hubApprovalReason, setHubApprovalReason] = useState('');
   const [curator, setCurator] = useState<Curator | null>(null);
   const [graph, setGraph] = useState<Graph>({ nodes: [], edges: [] });
   const [description, setDescription] = useState('');
@@ -79,6 +86,43 @@ export default function Skills() {
     } finally {
       if (mounted.current && selected.current === name) setLoading(false);
     }
+  }
+
+  async function scanHub(identifier: string) {
+    setBusy(true);
+    setError('');
+    try {
+      const report = await http.x['skills-registry'].hub.scan({ profile, identifier });
+      setHubReports((previous) => ({ ...previous, [identifier]: report }));
+      setNotice(report.blocked ? 'Hub scan found potential risks' : 'Hub scan passed');
+    } catch (reason) { setError(`Hub scan failed: ${String(reason)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function approveHub(identifier: string) {
+    const report = hubReports[identifier];
+    if (!report) return;
+    setBusy(true);
+    setError('');
+    try {
+      const approved = await http.x['skills-registry'].hub.approve({ id: report.id, reason: hubApprovalReason.trim() });
+      setHubReports((previous) => ({ ...previous, [identifier]: approved }));
+      setNotice('Hub scan approved by administrator');
+    } catch (reason) { setError(`Hub approval failed: ${String(reason)}`); }
+    finally { setBusy(false); }
+  }
+
+  async function installHub(identifier: string) {
+    const report = hubReports[identifier];
+    if (!report) return;
+    setBusy(true);
+    setError('');
+    try {
+      const installed = await http.x['skills-registry'].hub.install({ profile, identifier, reportId: report.id });
+      setHubImported((previous) => [...previous, identifier]);
+      setNotice(`Imported ${installed.name} into Registry. Evaluate this version before assignment.`);
+    } catch (reason) { setError(`Hub install failed: ${String(reason)}`); }
+    finally { setBusy(false); }
   }
 
   async function changeCurator(paused: boolean) {
@@ -219,11 +263,33 @@ export default function Skills() {
       </section>
       <section className="skills-panel" data-testid="skills-hub">
         <h2>Skills Hub</h2><p>Official catalog</p>
-        {hub.length === 0 && !loading ? <p>No catalog entries available.</p> : <ul>{hub.map((item) =>
-          <li key={item.identifier ?? item.name}><strong>{item.name}</strong><span>{item.category ?? 'general'}</span>
-            <Button label={item.installed ? 'Installed' : 'Install in P4-2'} variant="secondary" size="sm" isDisabled>
-              {item.installed ? 'Installed' : 'Install in P4-2'}</Button>
-          </li>)}</ul>}
+        {hub.length === 0 && !loading ? <p>No catalog entries available.</p> : <ul>{hub.map((item) => {
+          const identifier = item.identifier ?? item.name;
+          const report = hubReports[identifier];
+          const installed = hubImported.includes(identifier);
+          return <li key={identifier} data-testid={`hub-${identifier}`}>
+            <strong>{item.name}</strong><span>{item.category ?? 'general'}</span>
+            <Button label="Scan" variant="secondary" size="sm" isDisabled={busy || loading}
+              data-testid={`hub-scan-${identifier}`} onClick={() => void scanHub(identifier)}>Scan</Button>
+            {report && <div className="hub-scan-report" data-testid={`hub-report-${identifier}`}>
+              <p role="status">{report.blocked ? report.approved ? 'Approved by admin' : 'Blocked by scan' : 'Scan passed'}
+                {' ? '}{report.files.length} files</p>
+              {report.findings.length > 0 && <ul>{report.findings.map((finding, index) =>
+                <li key={index}>{finding.file}:{finding.line} ? {finding.category} ? {finding.description}</li>
+              )}</ul>}
+              {report.blocked && !report.approved && <div>
+                <label>Admin approval reason
+                  <input value={hubApprovalReason} onChange={(event) => setHubApprovalReason(event.target.value)} />
+                </label>
+                <Button label="Approve scan" size="sm" isDisabled={busy || !hubApprovalReason.trim()}
+                  data-testid={`hub-approve-${identifier}`} onClick={() => void approveHub(identifier)}>Approve scan</Button>
+              </div>}
+              <Button label={installed ? 'Imported' : 'Install in Registry'} size="sm" isDisabled={busy || installed || (report.blocked && !report.approved)}
+                data-testid={`hub-install-${identifier}`} onClick={() => void installHub(identifier)}>
+                {installed ? 'Imported' : 'Install in Registry'}</Button>
+            </div>}
+          </li>;
+        })}</ul>}
       </section>
     </div>
     </div>

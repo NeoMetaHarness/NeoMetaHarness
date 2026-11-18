@@ -440,6 +440,22 @@ export class HermesRuntime {
       .then(async (r) => await r.json() as { skills: Record<string, unknown>[] });
   }
 
+  async previewHubSkill(profile: string, identifier: string): Promise<{
+    name: string; identifier: string; skill_md: string; files: string[];
+  }> {
+    if (!identifier || identifier.length > 500) throw new Error('Invalid Hub identifier');
+    const path = `/api/skills/hub/preview?profile=${encodeURIComponent(profileName(profile))}&identifier=${encodeURIComponent(identifier)}`;
+    return this.request('dashboard', path).then(async (r) => await r.json() as {
+      name: string; identifier: string; skill_md: string; files: string[];
+    });
+  }
+
+  async scanHubSkill(profile: string, identifier: string): Promise<{ policy: string; findings: unknown[] }> {
+    if (!identifier || identifier.length > 500) throw new Error('Invalid Hub identifier');
+    const path = `/api/skills/hub/scan?profile=${encodeURIComponent(profileName(profile))}&identifier=${encodeURIComponent(identifier)}`;
+    return this.request('dashboard', path).then(async (r) => await r.json() as { policy: string; findings: unknown[] });
+  }
+
   async curatorStatus(profile: string): Promise<Record<string, unknown>> {
     return this.request('dashboard', this.skillPath('/api/curator', profile))
       .then(async (r) => await r.json() as Record<string, unknown>);

@@ -48,5 +48,11 @@ export default defineExtension({
       const { engine, targetId, ceiling } = body as { engine: 'hermes' | 'dsh'; targetId: string; ceiling: 'suggest' | 'auto-low' | 'auto' };
       return registry.setCeiling(engine, targetId, ceiling);
     });
+    ctx.route('hub/scan', ({ body }) => registry.scanHub(body as Parameters<typeof registry.scanHub>[0]));
+    ctx.route('hub/approve', ({ body }) => {
+      const { id, actor, reason } = body as { id: string; actor: string; reason: string };
+      return registry.approveHub(id, actor, reason);
+    });
+    ctx.route('hub/install', ({ body }) => registry.installHub(body as Parameters<typeof registry.installHub>[0]));
   },
 });

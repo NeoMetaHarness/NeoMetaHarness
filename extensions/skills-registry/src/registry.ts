@@ -6,6 +6,7 @@ import { appendFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, unlink, rmdir
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { parse } from 'yaml';
+import { inspectHub, type HubPreview, type HubReport, type UpstreamScan } from './hub.js';
 import type { SkillProjection } from '@neometaharness/kernel';
 
 const exec = promisify(execFile);
@@ -85,7 +86,9 @@ export class SkillRegistry implements SkillProjection {
   private readonly evaluationsFile: string;
   private readonly auditFile: string;
   private readonly ceilingsFile: string;
+  private readonly hubReportsFile: string;
   private ceilings: Record<string, Autonomy> = {};
+  private hubReports: Record<string, HubReport> = {};
   private evaluations: Record<string, Evaluation> = {};
   private assignments: Assignment[] = [];
   private readonly homes = new Map<string, string>();
@@ -100,6 +103,7 @@ export class SkillRegistry implements SkillProjection {
     this.evaluationsFile = join(dataDir, 'evaluations.json');
     this.auditFile = join(dataDir, 'audit.jsonl');
     this.ceilingsFile = join(dataDir, 'ceilings.json');
+    this.hubReportsFile = join(dataDir, 'hub-reports.json');
   }
 
   private async git(...args: string[]): Promise<string> {
@@ -114,6 +118,9 @@ export class SkillRegistry implements SkillProjection {
     }
     if (existsSync(this.ceilingsFile)) {
       this.ceilings = JSON.parse(await readFile(this.ceilingsFile, 'utf8')) as Record<string, Autonomy>;
+    }
+    if (existsSync(this.hubReportsFile)) {
+      this.hubReports = JSON.parse(await readFile(this.hubReportsFile, 'utf8')) as Record<string, HubReport>;
     }
     if (!existsSync(join(this.repo, '.git'))) await this.git('init');
     await this.migrateLegacy();
@@ -302,6 +309,53 @@ export class SkillRegistry implements SkillProjection {
       await this.refreshAll(name);
       return result;
     });
+  }
+
+  async scanHub(input: { profile: string; identifier: string; preview: HubPreview; upstream: UpstreamScan }): Promise<HubReport> {
+    return this.serialize(async () => {
+      safeName(input.profile);
+      const report = inspectHub(input.profile, input.identifier, input.preview, input.upstream);
+      const previous = this.hubReports[report.id];
+      if (previous?.approved) Object.assign(report, { approved: true,
+        approvedBy: previous.approvedBy, approvedReason: previous.approvedReason });
+      this.hubReports[report.id] = report;
+      await this.saveHubReports();
+      return report;
+    });
+  }
+
+  private async saveHubReports(): Promise<void> {
+    await writeFile(this.hubReportsFile, JSON.stringify(this.hubReports, null, 2) + '\n');
+  }
+
+  async approveHub(id: string, actor: string, reason: string): Promise<HubReport> {
+    return this.serialize(async () => {
+      if (!reason.trim() || reason.length > 1000) throw new Error('Approval requires an audit reason');
+      const report = this.hubReports[id];
+      if (!report || !report.blocked) throw new Error('Unknown or already safe Hub scan');
+      await appendFile(this.auditFile, JSON.stringify({ action: 'hub.approve', id, actor,
+        identifier: report.identifier, reason: reason.trim(), at: Date.now() }) + '\n');
+      report.approved = true;
+      report.approvedBy = actor;
+      report.approvedReason = reason.trim();
+      await this.saveHubReports();
+      return report;
+    });
+  }
+
+  async installHub(input: { reportId: string; profile: string; identifier: string;
+    preview: HubPreview; upstream: UpstreamScan }): Promise<SkillRecord> {
+    safeName(input.profile);
+    const report = inspectHub(input.profile, input.identifier, input.preview, input.upstream);
+    const stored = this.hubReports[input.reportId];
+    if (!stored || report.id !== input.reportId) throw new Error('Hub contents changed; re-scan before installing');
+    if (report.blocked && !stored.approved) throw new Error('Hub security scan blocked installation; admin approval required');
+    if (report.findings.some((item) => item.category === 'path-escape' || item.category === 'unavailable-file'
+      || item.category === 'manifest' || item.category === 'identity')) {
+      throw new Error('Hub bundle cannot be represented safely by the registry');
+    }
+    return this.import({ name: report.name, content: input.preview.skill_md,
+      sourceProfile: input.profile, sourcePath: `hub:${input.identifier}`, trust: 'untrusted' });
   }
 
   private async versionContent(revision: { hash: string; path: string }): Promise<string> {

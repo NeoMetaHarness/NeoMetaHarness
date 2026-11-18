@@ -451,6 +451,26 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             return invokeSkills('ceiling/set', input) as Promise<{ ceiling: 'suggest' | 'auto-low' | 'auto' }>;
           }),
         },
+        hub: {
+          scan: os.x['skills-registry'].hub.scan.handler(async ({ input, context }) => {
+            authorize('x.skills-registry.hub.scan', context);
+            const [preview, upstream] = await Promise.all([
+              invokeHermes('skills/preview', input), invokeHermes('skills/scan', input),
+            ]);
+            return invokeSkills('hub/scan', { ...input, preview, upstream }) as Promise<any>;
+          }),
+          approve: os.x['skills-registry'].hub.approve.handler(async ({ input, context }) => {
+            authorize('x.skills-registry.hub.approve', context);
+            return invokeSkills('hub/approve', { ...input, actor: context.user!.id }) as Promise<any>;
+          }),
+          install: os.x['skills-registry'].hub.install.handler(async ({ input, context }) => {
+            authorize('x.skills-registry.hub.install', context);
+            const [preview, upstream] = await Promise.all([
+              invokeHermes('skills/preview', input), invokeHermes('skills/scan', input),
+            ]);
+            return invokeSkills('hub/install', { ...input, preview, upstream }) as Promise<SkillRecord>;
+          }),
+        },
       },
       'memory-honcho': {
         status: os.x['memory-honcho'].status.handler(async ({ input, context }) => {
@@ -559,6 +579,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           hub: os.x['engine-hermes'].skills.hub.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.skills.hub', context);
             return invokeHermes('skills/hub', input) as Promise<{ skills: { name: string }[] }>;
+          }),
+          preview: os.x['engine-hermes'].skills.preview.handler(async ({ input, context }) => {
+            authorize('x.engine-hermes.skills.preview', context);
+            return invokeHermes('skills/preview', input) as Promise<{ name: string; identifier: string; skill_md: string; files: string[] }>;
+          }),
+          scan: os.x['engine-hermes'].skills.scan.handler(async ({ input, context }) => {
+            authorize('x.engine-hermes.skills.scan', context);
+            return invokeHermes('skills/scan', input) as Promise<{ policy: string; findings: unknown[] }>;
           }),
           curator: os.x['engine-hermes'].skills.curator.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.skills.curator', context);

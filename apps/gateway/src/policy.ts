@@ -29,6 +29,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   // x.engine-hermes
   'x.engine-hermes.skills.list': 'viewer',
   'x.engine-hermes.skills.hub': 'viewer',
+  'x.engine-hermes.skills.preview': 'viewer',
+  'x.engine-hermes.skills.scan': 'viewer',
   'x.engine-hermes.skills.curator': 'viewer',
   'x.engine-hermes.skills.pause': 'member',
   'x.engine-hermes.skills.run': 'member',
@@ -89,6 +91,9 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.skills-registry.override': 'admin',
   'x.skills-registry.ceiling.get': 'viewer',
   'x.skills-registry.ceiling.set': 'admin',
+  'x.skills-registry.hub.scan': 'member',
+  'x.skills-registry.hub.approve': 'admin',
+  'x.skills-registry.hub.install': 'member',
 
   // x.channels (channel tokens are workspace config)
   'x.channels.list': 'viewer',

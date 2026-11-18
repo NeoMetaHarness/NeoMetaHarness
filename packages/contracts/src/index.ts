@@ -135,6 +135,12 @@ export const hermesContract = {
     hub: oc.input(z.object({ profile: z.string().min(1) })).output(z.object({
       skills: z.array(z.object({ name: z.string(), installed: z.boolean().optional() }).passthrough()),
     }).passthrough()),
+    preview: oc.input(z.object({ profile: z.string().min(1), identifier: z.string().min(1).max(500) })).output(z.object({
+      name: z.string(), identifier: z.string(), skill_md: z.string(), files: z.array(z.string()),
+    }).passthrough()),
+    scan: oc.input(z.object({ profile: z.string().min(1), identifier: z.string().min(1).max(500) })).output(z.object({
+      policy: z.string(), findings: z.array(z.unknown()),
+    }).passthrough()),
     curator: oc.input(z.object({ profile: z.string().min(1) })).output(z.object({
       enabled: z.boolean(), paused: z.boolean(),
     }).passthrough()),
@@ -249,6 +255,13 @@ const skillEval = z.object({
   checks: z.array(z.object({ prompt: z.string(), passed: z.boolean(), missing: z.array(z.string()) })).optional(),
   overrideBy: z.string().optional(), overrideReason: z.string().optional(),
 });
+const hubReport = z.object({
+  id: z.string().length(64), profile: skillName, identifier: z.string(), name: skillName,
+  blocked: z.boolean(), approved: z.boolean().optional(),
+  approvedBy: z.string().optional(), approvedReason: z.string().optional(),
+  files: z.array(z.string()),
+  findings: z.array(z.object({ file: z.string(), line: z.number(), category: z.string(), description: z.string() })),
+});
 export const registrySkillSchema = z.object({
   name: skillId, version: z.number().int().positive(), trust: skillTrust,
   sourceProfile: z.string(), sourcePath: z.string(), updatedAt: z.number().int(),
@@ -280,6 +293,12 @@ export const skillsRegistryContract = {
     get: oc.input(skillTarget.omit({ name: true })).output(z.object({ ceiling: skillAutonomy })),
     set: oc.input(skillTarget.omit({ name: true }).extend({ ceiling: skillAutonomy }))
       .output(z.object({ ceiling: skillAutonomy })),
+  },
+  hub: {
+    scan: oc.input(z.object({ profile: skillName, identifier: z.string().min(1).max(500) })).output(hubReport),
+    approve: oc.input(z.object({ id: z.string().length(64), reason: z.string().trim().min(1).max(1000) })).output(hubReport),
+    install: oc.input(z.object({ profile: skillName, identifier: z.string().min(1).max(500), reportId: z.string().length(64) }))
+      .output(registrySkillSchema),
   },
 };
 

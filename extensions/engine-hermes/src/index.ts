@@ -100,6 +100,14 @@ export default defineExtension({
     ctx.route('kanban/dispatch', ({ body }) => service.dispatchKanban((body as { workspace: string }).workspace));
     ctx.route('skills/list', ({ body }) => service.listSkills((body as { profile: string }).profile));
     ctx.route('skills/hub', ({ body }) => service.officialSkills((body as { profile: string }).profile));
+    ctx.route('skills/preview', ({ body }) => {
+      const { profile, identifier } = body as { profile: string; identifier: string };
+      return service.previewHubSkill(profile, identifier);
+    });
+    ctx.route('skills/scan', ({ body }) => {
+      const { profile, identifier } = body as { profile: string; identifier: string };
+      return service.scanHubSkill(profile, identifier);
+    });
     ctx.route('skills/curator', ({ body }) => service.curatorStatus((body as { profile: string }).profile));
     ctx.route('skills/pause', ({ body }) => {
       const { profile, paused } = body as { profile: string; paused: boolean };
