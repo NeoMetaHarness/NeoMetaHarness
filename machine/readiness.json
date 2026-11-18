@@ -215,9 +215,12 @@
       "follow_up": "run on Node >=24.9 (upstream requirement); real LLM adapter via model hub; computer/browser providers are stubs"
     },
     "P2-4": {
-      "title": "agents service in gateway + Hermes AgentRuntime adapter",
-      "status": "in_progress",
-      "owner": "codex"
+      "title": "Agents service live in the gateway on Hermes (HermesAgentRuntime + agents.* RPC)",
+      "status": "done",
+      "owner": "codex",
+      "evidence": "pnpm --dir packages/agents test:hermes",
+      "verified_by_pm": "2026-11-18 x2: 2 bots, serial per bot + parallel across bots, approval deny, room fan-out, task, Hermes cron, disabled -> 503, re-enabled OK; full 12-suite regression green",
+      "follow_up": "bot-specific cron profiles, timezone, routine bookkeeping"
     },
     "P2-3": {
       "title": "Agents page (Astryx chat over engine-hermes: bots, streaming, approvals, stop)",
@@ -250,6 +253,13 @@
       "title": "Computers page + headless-Chrome computer provider",
       "status": "in_progress",
       "owner": "sol-a"
+    }
+  },
+  "p5_tasks": {
+    "P5-1": {
+      "title": "engine-superagent first slice: neo/app Source -> Eval -> Ticket -> worker delegates to a Hermes bot via Neo MCP -> report -> Inbox RPC",
+      "status": "in_progress",
+      "owner": "codex"
     }
   }
 }
