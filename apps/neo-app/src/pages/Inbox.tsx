@@ -77,6 +77,19 @@ export default function Inbox() {
       report.className = 'inbox-report';
       report.dataset.testid = 'inbox-report';
       report.append(textNode('h3', 'Report'), textNode('p', item.report.summary, 'inbox-summary'));
+      if (item.report.postmortem) {
+        const review = item.report.postmortem;
+        const section = document.createElement('div');
+        section.className = 'inbox-report-group';
+        section.dataset.testid = 'inbox-postmortem';
+        section.append(textNode('strong', 'Post-mortem'),
+          textNode('p', `What worked: ${review.worked}`),
+          textNode('p', `What failed: ${review.failed}`),
+          textNode('p', review.reusable ? 'Reusable procedure suggested' : 'No reusable procedure identified'));
+        if (review.procedure) section.append(textNode('p', review.procedure));
+        if (review.skill) section.append(textNode('p', `Skill proposal: ${review.skill}`));
+        report.append(section);
+      }
       for (const [title, entries] of [['Tests run', item.report.tests], ['Risks', item.report.risks]] as const) {
         const group = document.createElement('div');
         group.className = 'inbox-report-group';

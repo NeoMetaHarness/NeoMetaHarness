@@ -31,7 +31,7 @@ export type Evaluation = {
 export type SkillRecord = {
   name: string; version: number; trust: Trust; sourceProfile: string;
   sourcePath: string; updatedAt: number; checks?: SkillCheck[]; autonomy?: Autonomy;
-  evaluation?: Evaluation;
+  evaluation?: Evaluation; provenance?: string;
 };
 
 function declaredChecks(content: string): SkillCheck[] {
@@ -213,7 +213,8 @@ export class SkillRegistry implements SkillProjection {
     return { metadata: await this.record(name), content: await readFile(join(this.skillDir(name), 'SKILL.md'), 'utf8') };
   }
 
-  async import(input: { name: string; content: string; sourceProfile: string; sourcePath: string; trust?: Trust }): Promise<SkillRecord> {
+  async import(input: { name: string; content: string; sourceProfile: string; sourcePath: string;
+    trust?: Trust; provenance?: string; autonomy?: 'suggest' }): Promise<SkillRecord> {
     return this.serialize(async () => {
       safeName(input.sourceProfile);
       const name = input.name.includes('/') ? safeIdentity(input.name) : identity(input.sourceProfile, input.name);
@@ -226,12 +227,15 @@ export class SkillRegistry implements SkillProjection {
       const previous = existsSync(join(folder, 'metadata.json')) ? await this.get(name) : undefined;
       if (previous?.content === content && previous.metadata.sourceProfile === input.sourceProfile
         && previous.metadata.trust === (input.trust ?? 'observed')
-        && previous.metadata.sourcePath === input.sourcePath) return previous.metadata;
+        && previous.metadata.sourcePath === input.sourcePath
+        && previous.metadata.provenance === input.provenance
+        && previous.metadata.autonomy === input.autonomy) return previous.metadata;
       const next: SkillRecord = {
         name, version: (previous?.metadata.version ?? 0) + 1,
         sourceProfile: input.sourceProfile, sourcePath: input.sourcePath,
         trust: input.trust ?? 'observed', updatedAt: Date.now(), checks: declaredChecks(content),
-        autonomy: declaredAutonomy(content),
+        autonomy: input.autonomy ?? declaredAutonomy(content),
+        ...(input.provenance ? { provenance: input.provenance } : {}),
       };
       await mkdir(folder, { recursive: true });
       await writeFile(join(folder, 'SKILL.md'), content, 'utf8');

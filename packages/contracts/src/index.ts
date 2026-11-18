@@ -268,6 +268,7 @@ export const registrySkillSchema = z.object({
   checks: z.array(z.object({ prompt: z.string(), expected: z.array(z.string()) })).optional(),
   autonomy: skillAutonomy.optional(),
   evaluation: skillEval.optional(),
+  provenance: z.string().optional(),
 });
 export type RegistrySkill = z.infer<typeof registrySkillSchema>;
 const skillTarget = z.object({ name: skillId, engine: z.enum(['hermes', 'dsh']), targetId: z.string().min(1) });
@@ -277,6 +278,7 @@ export const skillsRegistryContract = {
   import: oc.input(z.object({
     name: skillInput, content: z.string().min(1).max(200000), sourceProfile: skillName,
     sourcePath: z.string(), trust: skillTrust.optional(),
+    provenance: z.string().optional(), autonomy: z.literal('suggest').optional(),
   })).output(registrySkillSchema),
   sync: oc.input(z.object({ profile: skillName })).output(z.array(registrySkillSchema)),
   versions: oc.input(z.object({ name: skillId })).output(z.array(z.object({
@@ -470,6 +472,10 @@ export const inboxReportSchema = z.object({
   changes: z.array(z.string()).default([]),
   tests: z.array(z.string()).default([]),
   risks: z.array(z.string()).default([]),
+  postmortem: z.object({
+    worked: z.string(), failed: z.string(), reusable: z.boolean(),
+    procedure: z.string().optional(), skill: z.string().optional(),
+  }).optional(),
 });
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),

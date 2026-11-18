@@ -13,6 +13,11 @@ import { blockedReason } from './ask-policy.js';
 import { DecisionLog } from './decision-log.js';
 
 type Report = NonNullable<InboxItem['report']>;
+type Postmortem = NonNullable<Report['postmortem']>;
+type SkillImporter = { import(input: {
+  name: string; content: string; sourceProfile: string; sourcePath: string;
+  provenance: string; autonomy: 'suggest'; trust: 'untrusted';
+}): Promise<{ name: string }> };
 type Candidate = { evalId: string; triggers: { id: string }[] };
 type Ticket = { id: string; origin: { triggerId: string }; inputs: { id: string }[] };
 type Assignment = { id: string };
@@ -42,6 +47,7 @@ export class NeoSourceAdapter {
 
 class SuperagentService {
   constructor(private readonly models: ModelFactory, private readonly decisions: DecisionLog,
+    private readonly registry: () => SkillImporter | undefined,
     private readonly worker: WorkerHost = new PresetWorkerHost(models)) {}
   private readonly items = new Map<string, InboxItem>();
   private readonly candidates = new Map<string, Candidate>();
@@ -158,6 +164,53 @@ class SuperagentService {
     return next;
   }
 
+  private async finish(item: InboxItem, report: Report): Promise<InboxItem> {
+    const complete = report.status === 'ready' || report.status === 'blocked'
+      ? { ...report, postmortem: await this.postmortem(item, report) } : report;
+    if (this.closed) return this.items.get(item.id) ?? item;
+    return this.update(item, { status: report.status, report: complete });
+  }
+
+  private async postmortem(item: InboxItem, report: Report): Promise<Postmortem> {
+    const started = Date.now();
+    let outcome = 'failed';
+    let summary: Postmortem = { worked: report.summary, failed: report.risks.join('; ') || 'None reported', reusable: false };
+    try {
+      const { adapter, provider, model } = await this.models('eval', item);
+      const request = createUserMessage({ content: [{ type: 'text', text: JSON.stringify({
+        kind: 'postmortem', ticketId: item.ticketId ?? item.id,
+        text: item.text, source: item.source, status: report.status,
+        summary: report.summary, tests: report.tests, risks: report.risks,
+      }) }], source: { kind: 'user' } });
+      let response = '';
+      for await (const chunk of adapter.stream({ provider, model, messages: [request] })) {
+        if (chunk.type === 'block-end' && chunk.block.type === 'text') response += chunk.block.text;
+      }
+      summary = z.object({ worked: z.string(), failed: z.string(), reusable: z.boolean(),
+        procedure: z.string().optional() }).parse(JSON.parse(response));
+      if (this.closed) return summary;
+      if (summary.reusable && summary.procedure?.trim()) {
+        const provenance = `superagent:${item.ticketId ?? item.id}`;
+        const name = `ticket-${item.id.replaceAll('-', '').slice(0, 24)}`;
+        const content = `---\nname: ${name}\ndescription: Reusable procedure from Neo ticket ${item.id}\nautonomy: suggest\nprovenance: ${provenance}\n---\n\n# Procedure\n\n${summary.procedure.trim()}\n`;
+        const registry = this.registry();
+        if (registry) {
+          const skill = await registry.import({ name, content, sourceProfile: 'superagent',
+            sourcePath: provenance, provenance, autonomy: 'suggest', trust: 'untrusted' });
+          summary = { ...summary, skill: skill.name };
+        }
+      }
+      outcome = 'ready';
+    } catch (error) {
+      summary = { ...summary, failed: `${summary.failed}. Post-mortem review: ${error instanceof Error ? error.message : String(error)}` };
+    } finally {
+      if (!this.closed) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+        inputsSummary: item.text.slice(0, 240), candidates: [], chosenAction: 'postmortem',
+        modelRole: 'eval', latencyMs: Date.now() - started, outcome });
+    }
+    return summary;
+  }
+
   private async fromChannel(message: ChannelMessage): Promise<void> {
     if (this.closed || !/(^|\s)@neo\b/i.test(message.text)) return;
     const text = message.text.replace(/(^|\s)@neo\b/i, '$1').trim();
@@ -180,7 +233,7 @@ class SuperagentService {
     const reason = blockedReason(request.requesterRole, request.mode, request.text);
     if (reason) {
       const report: Report = { status: 'blocked', summary: reason, changes: [], tests: [], risks: [reason], options: [] };
-      return this.update(item, { status: 'blocked', report });
+      return this.finish(item, report);
     }
     await this.sources.get(source)!.receive(item);
     this.engine.evaluateDue();
@@ -235,8 +288,8 @@ class SuperagentService {
     if (item.status !== 'suggestion') throw new Error(`Cannot accept ${item.status} ticket`);
     const reason = blockedReason(item.requesterRole ?? 'member', 'act', item.text);
     if (reason) {
-      return this.update(item, { status: 'blocked', report: { status: 'blocked', summary: reason,
-        changes: [], tests: [], risks: [reason], options: [] } });
+      return this.finish(item, { status: 'blocked', summary: reason,
+        changes: [], tests: [], risks: [reason], options: [] });
     }
     const candidate = this.candidates.get(`${item.source ?? 'neo/app'}:${item.id}`);
     if (!candidate) throw new Error('Suggestion Eval expired');
@@ -293,7 +346,7 @@ class SuperagentService {
         status: 'ready', summary: result.summary, changes: [], tests: result.tests, risks: result.risks, options: [],
       };
       this.engine.report(ticketId, { state: 'ready', summary: report.summary });
-      this.update(item, { status: 'ready', report });
+      await this.finish(item, report);
     } catch (error) {
       if (this.closed) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -303,7 +356,7 @@ class SuperagentService {
       const report: Report = { status, summary: `Hermes delegation ${status}: ${message}`, changes: [], tests: [],
         risks: [message], options: [] };
       this.engine.report(ticketId, { state: status, summary: report.summary });
-      this.update(item, { status, report });
+      await this.finish(item, report);
     } finally {
       if (!this.closed) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: [assignmentId], chosenAction: 'delegate',
@@ -357,7 +410,9 @@ export default defineExtension({
     const models = process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_TEST_ADAPTER
       ? (await import(process.env.NMH_SUPERAGENT_TEST_ADAPTER) as { createModelFactory: ModelFactory }).createModelFactory
       : modelHubFactory(() => ctx.inject<ModelHubResolver>('modelHub'));
-    const service = new SuperagentService(models, new DecisionLog(join(dataDir, 'engine-superagent', 'traces')));
+    const service = new SuperagentService(models,
+      new DecisionLog(join(dataDir, 'engine-superagent', 'traces')),
+      () => ctx.inject<SkillImporter>('skillRegistry'));
     const channel = ctx.inject<ChannelSource>('channelSource')
       ?? (process.env.NODE_ENV === 'test' ? new FakeChannelSource() : undefined);
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, apiKeyToken, channel);

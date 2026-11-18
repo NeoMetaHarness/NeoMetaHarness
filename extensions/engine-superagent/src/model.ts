@@ -25,8 +25,12 @@ export class GatewayModelAdapter extends LlmAdapter {
   }
 
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    const postmortem = options.messages.some((message) => message.content.some((block) =>
+      block.type === 'text' && block.text.includes('"kind":"postmortem"')));
     const instructions = this.role === 'eval'
-      ? 'You are the Neo task evaluator. Decide whether the requested task should be accepted. Return only a JSON object with the exact shape {"decision":"accept"} or {"decision":"decline"}. No Markdown or extra text.'
+      ? postmortem
+        ? 'Review this completed Neo ticket. Return only JSON {"worked":"short explanation","failed":"short explanation","reusable":false,"procedure":"optional reusable steps"}. Set reusable true only for a genuinely repeatable procedure. Never include secrets.'
+        : 'You are the Neo task evaluator. Decide whether the requested task should be accepted. Return only a JSON object with the exact shape {"decision":"accept"} or {"decision":"decline"}. No Markdown or extra text.'
       : 'You are the Neo delegation worker. The user message is JSON containing botId and text. Call the available agents.send_to_bot MCP tool once with those exact values. Wait for its tool result before answering. If the tool is unavailable, report the failure clearly.';
     const messages = options.messages.map((message) => {
       const text = message.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n');

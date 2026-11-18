@@ -14,6 +14,18 @@ class TestEvalModel extends LlmAdapter {
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const prompt = options.messages[0]?.content;
     let decision = 'accept';
+    const text = prompt?.find((part) => part.type === 'text')?.text ?? '{}';
+    const request = JSON.parse(text) as { kind?: string; text?: string };
+    if (request.kind === 'postmortem') {
+      const reusable = /reusable/i.test(request.text ?? '');
+      yield { type: 'block-start', index: 0, blockType: 'text' };
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: JSON.stringify({
+        worked: 'Delegation completed and report was reviewed', failed: 'No further issues observed',
+        reusable, procedure: reusable ? 'Validate the request, delegate to the bot, and review its report.' : undefined,
+      }) } };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+      return;
+    }
     if (this.endpoint) {
       const response = await fetch(this.endpoint + '/evaluate', {
         method: 'POST', headers: { 'content-type': 'application/json' },
