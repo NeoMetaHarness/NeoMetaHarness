@@ -17,10 +17,14 @@ const rpc = createORPCClient<Client>(new RPCLink({
   },
 }));
 const memory = rpc.x['memory-local'];
+const honcho = rpc.x['memory-honcho'];
 const workspace = 'default';
 
 export default function Memory() {
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [honchoEntries, setHonchoEntries] = useState<Entry[]>([]);
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'local' | 'honcho'>('all');
+  const [honchoStatus, setHonchoStatus] = useState<'ok' | 'degraded' | 'off'>('off');
   const [search, setSearch] = useState('');
   const [text, setText] = useState('');
   const [subject, setSubject] = useState<'user' | 'bot'>('user');
@@ -33,6 +37,18 @@ export default function Memory() {
     try {
       const found = await memory.list({ workspace, query });
       setEntries(found);
+      try {
+        const status = await honcho.status({ workspace });
+        setHonchoStatus(status);
+        if (status === 'ok') {
+          setHonchoEntries(await honcho.list({ workspace, query }));
+        } else {
+          setHonchoEntries([]);
+        }
+      } catch {
+        setHonchoStatus('degraded');
+        setHonchoEntries([]);
+      }
       setError('');
     } catch (reason) { setError('Memory unavailable: ' + String(reason)); }
   }, []);
@@ -91,9 +107,15 @@ export default function Memory() {
     } catch (reason) { setError('Export failed: ' + String(reason)); }
   }
 
+  const shown = sourceFilter === 'local' ? entries
+    : sourceFilter === 'honcho' ? honchoEntries : [...entries, ...honchoEntries];
+
   return <section className="memory-page" data-testid="memory-page">
     <header className="page-header memory-header">
-      <div><h1>Memory</h1><p>Review what your agents remember and where each entry came from.</p></div>
+      <div><h1>Memory</h1><p>Review what your agents remember and where each entry came from.</p>
+        <span data-testid="honcho-status" className={'honcho-status honcho-' + honchoStatus}
+          role="status">Honcho {honchoStatus}</span>
+      </div>
       <Button label="Export Markdown" data-testid="memory-export" variant="secondary"
         onClick={() => void download()}>Export Markdown</Button>
     </header>
@@ -122,10 +144,15 @@ export default function Memory() {
     </form>
     <section className="memory-library">
       <div className="memory-heading"><h2>Library</h2>
+        <label>Source <select data-testid="memory-source-filter" value={sourceFilter}
+          onChange={(event) => setSourceFilter(event.target.value as 'all' | 'local' | 'honcho')}>
+          <option value="all">All</option><option value="local">Local</option>
+          <option value="honcho">Honcho</option>
+        </select></label>
         <label>Search <input data-testid="memory-search" value={search}
           onChange={(event) => { setSearch(event.target.value); void refresh(event.target.value); }} /></label>
       </div>
-      <ul data-testid="memory-list">{entries.map((entry) =>
+      <ul data-testid="memory-list">{shown.map((entry) =>
         <li key={entry.id} data-testid="memory-entry" className="memory-entry">
           <p>{entry.text}</p>
           <div className="memory-meta">
@@ -134,14 +161,14 @@ export default function Memory() {
             <span>Provenance: {entry.provenance}</span>
             <time dateTime={new Date(entry.updated_at).toISOString()}>{new Date(entry.updated_at).toLocaleString()}</time>
           </div>
-          <div className="memory-actions">
+          {!entry.id.startsWith('nmh:') && <div className="memory-actions">
             <Button label="Edit" size="sm" variant="secondary" isDisabled={busy}
               onClick={() => { setEditing(entry.id); setText(entry.text); }}>Edit</Button>
             <Button label="Delete" size="sm" variant="secondary" isDisabled={busy}
               onClick={() => void remove(entry.id)}>Delete</Button>
-          </div>
+          </div>}
         </li>)}</ul>
-      {!entries.length && !error && <p>No memories found.</p>}
+      {!shown.length && !error && <p>No memories found.</p>}
     </section>
   </section>;
 }
