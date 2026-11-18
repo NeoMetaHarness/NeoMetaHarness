@@ -384,8 +384,9 @@
     },
     "P6-2": {
       "title": "Decision log (Panda-compatible traces) + ticket post-mortems -> skill proposals",
-      "status": "in_progress",
-      "owner": "codex"
+      "status": "done",
+      "owner": "codex",
+      "evidence": "PM rerun 2x + regression 31/33 (p2-3 shutdown timeout under load -> PASS on rerun; p4-3 caught a PM merge bug: skills re-versioned on every sync -> fixed 05aece8, PASS); P6-2 PASS authenticated scripted build_first; Panda-style JSONL traces with resolved model ids (PandaOrchestratorAPI.md:75-95,214-225); post-mortems on Inbox; reusable procedures -> registry at suggest with superagent:<ticket> provenance"
     },
     "P6-3": {
       "title": "neo/upstream self-maintenance source (read-only) + Inbox question/approval/failure items",
