@@ -276,6 +276,13 @@
     },
     "P4-4": {
       "title": "DSH memory context plugin + per-owner skill identity + workspace in memory bridge",
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "PM rerun 2x + full regression 24/24 on main: P4-4 PASS (DSH model request contains <memory-context>; turn write-back with dsh:<session> provenance visible on /memory; legacy skills migrated to profile-qualified identities with history; memory disable removes DSH plugin and DSH keeps working); DSH via its --patch plugin config (no engine change)",
+      "follow_up": "Hermes profiles without workspace metadata fall back to 'default'"
+    },
+    "P4-5": {
+      "title": "memory-honcho L2 (self-hosted) behind MemoryStore + L1<->L2 sync",
       "status": "in_progress",
       "owner": "sol-b"
     }
