@@ -381,6 +381,9 @@ export const channelsContract = {
 
 const baseNeoContract = {
   system: {
+    restore: oc.input(z.object({ archive: z.string().min(1), dataDir: z.string().min(1),
+      passphrase: z.string().min(12), force: z.boolean().default(false) }))
+      .output(z.object({ dataDir: z.string(), databaseFile: z.string(), files: z.number().int(), format: z.number().int() })),
     backup: oc.input(z.object({ out: z.string().min(1), passphrase: z.string().min(12) }))
       .output(z.object({ out: z.string(), files: z.number().int(), format: z.number().int() })),
   },

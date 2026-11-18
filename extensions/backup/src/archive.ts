@@ -23,7 +23,8 @@ function key(passphrase: string, salt: Buffer): Buffer {
 }
 function safePath(path: string): boolean {
   return typeof path === 'string' && path.length > 0 && !path.includes('\\') && !path.includes(':') &&
-    !path.includes('\0') && !isAbsolute(path) && path.split('/').every(p => p && p !== '.' && p !== '..' && !/[. ]$/.test(p));
+    !/[\x00-\x1f]/.test(path) && !isAbsolute(path) && path.split('/').every(p => p && p !== '.' && p !== '..' &&
+      !/[. ]$/.test(p) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p));
 }
 function inside(root: string, path: string): boolean {
   const rel = relative(resolve(root), resolve(path));

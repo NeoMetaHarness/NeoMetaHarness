@@ -17,6 +17,7 @@ export function destructiveToolApproval(tool: string, detail: string): boolean {
 
 export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'system.backup': 'owner',
+  'system.restore': 'owner',
   // x.engine-t3
   'x.engine-t3.create': 'member',
   'x.engine-t3.send': 'member',

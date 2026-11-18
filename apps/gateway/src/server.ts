@@ -253,6 +253,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     options.vaultKeyFile ?? join(dirname(resolve(options.databaseFile)), 'vault-keys', 'master.key'));
   const kernel = new NeoKernel(db, {
     backupSource: backupStorage,
+    backupProtectedPaths: [dataDir, dirname(resolve(options.databaseFile)), resolve(options.extensionsDir ?? defaultExtensions)],
     computers,
     vault,
     auth,
@@ -376,6 +377,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
   const router = {
     system: {
+      restore: os.system.restore.handler(async ({ input, context }) => {
+        authorize('system.restore', context);
+        if (!kernel.hasRoute('/x/backup/restore')) throw new ORPCError('NOT_FOUND', { message: 'Backup extension is disabled' });
+        return kernel.invokeRoute('/x/backup/restore', 'RPC', input) as Promise<{ dataDir: string; databaseFile: string; files: number; format: number }>;
+      }),
       backup: os.system.backup.handler(async ({ input, context }) => {
         authorize('system.backup', context);
         if (!kernel.hasRoute('/x/backup/backup')) throw new ORPCError('NOT_FOUND', { message: 'Backup extension is disabled' });
