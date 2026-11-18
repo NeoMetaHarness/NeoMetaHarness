@@ -16,6 +16,19 @@ type Catalog = Awaited<ReturnType<Client['x']['engine-t3']['threads']['list']>>;
 type Thread = Catalog['threads'][number];
 type Message = { id: number; role: 'user' | 'assistant'; text?: string };
 type Approval = { id: string; kind: string; busy: boolean };
+type ProjectedItem = { item?: { type?: string; messageId?: string; text?: string } };
+
+// T3 v0.1.9 orchestration.subscribeThread snapshot carries the thread projection
+// (packages/contracts/src/orchestrationV2.ts:3958-3972, :2040-2062).
+function historyFromSnapshot(payload: unknown): ProjectedItem[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const projection = (payload as { projection?: {
+    visibleTurnItems?: ProjectedItem[]; turnItems?: ProjectedItem[];
+  } }).projection;
+  if (!projection) return [];
+  const items = projection.visibleTurnItems ?? projection.turnItems ?? [];
+  return items.filter((row) => row.item?.type === 'user_message' || row.item?.type === 'assistant_message');
+}
 const http = createORPCClient<Client>(new HttpLink({
   url: gatewayUrl(),
   headers: () => {
@@ -118,6 +131,19 @@ export default function Coding() {
 
   function receive(id: string, event: T3Event) {
     if (!live.current || selected.current !== id) return;
+    if (event.kind === 'snapshot') {
+      const history = historyFromSnapshot(event.payload);
+      if (history.length) {
+        const restored = history.map(({ item }) => {
+          const messageId = ++nextId.current;
+          if (item?.messageId) messageIds.current.set(item.messageId, messageId);
+          if (item?.type === 'assistant_message') queued.current.set(messageId, item.text ?? '');
+          return { id: messageId, role: item?.type === 'user_message' ? 'user' : 'assistant',
+            text: item?.type === 'user_message' ? item.text ?? '' : undefined } satisfies Message;
+        });
+        setMessages(restored);
+      }
+    }
     if (event.kind === 'snapshot' || event.kind === 'synchronized') {
       setSubscribed(true);
       setStatus((previous) => previous === 'Connecting' ? 'Ready' : previous);
