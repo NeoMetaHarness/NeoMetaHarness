@@ -7,12 +7,18 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { HermesEvent } from '@neometaharness/contracts';
+import { DshProjector, type VaultService, type VaultScope } from '@neometaharness/vault';
 
 const exec = promisify(execFile);
 const extensionDir = fileURLToPath(new URL('../', import.meta.url));
 const repoDir = resolve(extensionDir, '../..');
 const cacheDir = join(extensionDir, '.cache');
 const terminalStates = new Set(['completed', 'cancelled', 'interrupted', 'failed']);
+
+/** Share the vault's OS-only projection between installer and Hermes processes. */
+export async function hermesBaseEnvironment(): Promise<Record<string, string>> {
+  return new DshProjector([]).project(new Map());
+}
 
 function upstreamPath(): string {
   const lock = JSON.parse(readFileSync(join(repoDir, 'upstream.lock.json'), 'utf8')) as {
@@ -39,7 +45,7 @@ async function pythonPath(upstream: string): Promise<string> {
   if (existsSync(python) && installed.trim() === upstream) return python;
 
   await mkdir(cacheDir, { recursive: true });
-  const uvEnv = { ...process.env, UV_CACHE_DIR: join(cacheDir, 'uv-cache') };
+  const uvEnv = { ...await hermesBaseEnvironment(), UV_CACHE_DIR: join(cacheDir, 'uv-cache') };
   if (!existsSync(python)) {
     await exec('uv', ['venv', venv, '--python', '3.14'], { env: uvEnv, maxBuffer: 2_000_000 });
   }
@@ -63,7 +69,7 @@ function profileName(name: string): string {
 
 function secret(): string { return randomBytes(32).toString('hex'); }
 
-/** Supplied later by @neometaharness/vault without changing Hermes lifecycle code. */
+/** Per-profile credentials. The vault implementation migrates existing profile keys. */
 export interface CredentialSource {
   get(profile: string): Promise<string | undefined>;
   set(profile: string, key: string): Promise<void>;
@@ -95,6 +101,35 @@ export class ProfileFileCredentials implements CredentialSource {
   }
   async delete(_profile: string): Promise<void> {
     // Hermes removes its own profile directory and the contained .env file.
+  }
+}
+
+/** The encrypted vault owns credentials, while Hermes still reads its profile .env. */
+export class VaultCredentials implements CredentialSource {
+  private readonly files: ProfileFileCredentials;
+  constructor(private readonly vault: VaultService, home: string) {
+    this.files = new ProfileFileCredentials(home);
+  }
+  private scope(profile: string): VaultScope {
+    return { kind: 'engine', workspaceId: 'default', subjectId: `engine-hermes/${profileName(profile)}` };
+  }
+  async get(profile: string): Promise<string | undefined> {
+    const scope = this.scope(profile);
+    let key = await this.vault.get(scope, 'API_SERVER_KEY');
+    if (!key) {
+      key = await this.files.get(profile);
+      if (key) await this.vault.put(scope, 'API_SERVER_KEY', key);
+    }
+    if (key && await this.files.get(profile) !== key) await this.files.set(profile, key);
+    return key;
+  }
+  async set(profile: string, key: string): Promise<void> {
+    await this.vault.put(this.scope(profile), 'API_SERVER_KEY', key);
+    await this.files.set(profile, key);
+  }
+  async delete(profile: string): Promise<void> {
+    await this.vault.delete(this.scope(profile), 'API_SERVER_KEY');
+    await this.files.delete(profile);
   }
 }
 
@@ -190,17 +225,18 @@ export class HermesRuntime {
     if (this.stopped) throw new Error('Hermes extension has stopped');
     const port = await freePort();
     const home = this.profileHome(profile);
+    const runtimeEnv = await hermesBaseEnvironment();
     const child = spawn(this.python, ['-u', join(extensionDir, 'src/bridge.py'), surface, '--port', String(port)], {
       cwd: this.upstream,
       detached: process.platform !== 'win32',
       windowsHide: true,
       stdio: [surface === 'api' ? 'pipe' : 'ignore', 'ignore', 'pipe'],
       env: {
-        ...process.env, HERMES_HOME: home, API_SERVER_KEY: key,
+        ...runtimeEnv, HERMES_HOME: home, API_SERVER_KEY: key,
         HERMES_DASHBOARD_SESSION_TOKEN: this.dashboardToken,
         HERMES_DISABLE_LAZY_INSTALLS: '1', HERMES_EXEC_ASK: '1', API_SERVER_ENABLED: 'true',
         PYTHONDONTWRITEBYTECODE: '1',
-        PYTHONPATH: [this.upstream, process.env.PYTHONPATH].filter(Boolean).join(process.platform === 'win32' ? ';' : ':'),
+        PYTHONPATH: this.upstream,
       },
     });
     let errorText = '';

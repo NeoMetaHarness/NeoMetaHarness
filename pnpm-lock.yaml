@@ -322,6 +322,9 @@ importers:
       '@neometaharness/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@neometaharness/vault':
+        specifier: workspace:*
+        version: link:../../packages/vault
     devDependencies:
       '@neometaharness/contracts':
         specifier: workspace:*

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": { "test": "tsx test/e2e.test.ts", "typecheck": "tsc --noEmit" },
-  "dependencies": { "@neometaharness/kernel": "workspace:*", "@neometaharness/computers": "workspace:*" },
+  "dependencies": { "@neometaharness/kernel": "workspace:*", "@neometaharness/computers": "workspace:*", "@neometaharness/vault": "workspace:*" },
   "devDependencies": {
     "@neometaharness/contracts": "workspace:*",
     "@orpc/client": "1.16.2",

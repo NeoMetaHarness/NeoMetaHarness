@@ -1,13 +1,19 @@
 import { defineExtension } from '@neometaharness/kernel';
 import type { ComputerRegistry } from '@neometaharness/computers';
 import { projectHermesComputer } from '@neometaharness/computers/hermes';
-import { HermesRuntime } from './runtime.js';
+import { HermesRuntime, ProfileFileCredentials, VaultCredentials } from './runtime.js';
+import type { VaultService } from '@neometaharness/vault';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export default defineExtension({
   async activate(ctx) {
+    const home = resolve(process.env.NMH_HERMES_HOME ?? fileURLToPath(new URL('../.cache/home', import.meta.url)));
+    const vault = ctx.inject<VaultService>('vault');
+    const credentials = vault ? new VaultCredentials(vault, home) : new ProfileFileCredentials(home);
     const computers = ctx.inject<ComputerRegistry>('computers');
-    const service = new HermesRuntime(undefined, computers
-      ? (profile, home) => projectHermesComputer(computers, profile, home)
+    const service = new HermesRuntime(credentials, computers
+      ? (profile, profileHome) => projectHermesComputer(computers, profile, profileHome)
       : undefined);
     await service.start();
     ctx.provide('agentRuntime', service);

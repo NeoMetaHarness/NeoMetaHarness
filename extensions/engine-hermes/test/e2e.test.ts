@@ -13,6 +13,7 @@ import { createORPCClient } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type HermesEvent } from '@neometaharness/contracts';
 import { coalesceText } from '../../../apps/gateway/src/coalesce.js';
+import { hermesBaseEnvironment } from '../src/runtime.js';
 
 const extension = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(extension, '../..');
@@ -164,6 +165,18 @@ async function closeGateway(child?: ChildProcess): Promise<void> {
 }
 
 async function main() {
+  const previousSecret = process.env.NEO_TEST_SECRET;
+  process.env.NEO_TEST_SECRET = 'secret-must-stay-in-parent';
+  try {
+    const projected = await hermesBaseEnvironment();
+    assert.equal(Object.hasOwn(projected, 'NEO_TEST_SECRET'), false,
+      'Hermes child process environment must exclude inherited secrets');
+    assert.ok(Object.keys(projected).every((key) =>
+      ['PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'HOME', 'USERPROFILE'].includes(key.toUpperCase())));
+  } finally {
+    if (previousSecret === undefined) delete process.env.NEO_TEST_SECRET;
+    else process.env.NEO_TEST_SECRET = previousSecret;
+  }
   const batches = await Array.fromAsync(coalesceText((async function* (): AsyncGenerator<HermesEvent> {
     yield { kind: 'text.delta', sequence: 1, messageId: 'run', textDelta: 'a' };
     yield { kind: 'text.delta', sequence: 2, messageId: 'run', textDelta: 'b' };
