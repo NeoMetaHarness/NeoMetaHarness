@@ -474,13 +474,29 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           }),
         },
         cron: {
-          list: os.x['engine-hermes'].cron.list.handler(async ({ context }) => {
+          list: os.x['engine-hermes'].cron.list.handler(async ({ input, context }) => {
             requireViewer(context);
-            return invokeHermes('cron/list', {}) as Promise<Record<string, unknown>[]>;
+            return invokeHermes('cron/list', input ?? {}) as Promise<Record<string, unknown>[]>;
           }),
           create: os.x['engine-hermes'].cron.create.handler(async ({ input, context }) => {
             requireMember(context);
             return invokeHermes('cron/create', input) as Promise<{ id: string }>;
+          }),
+          update: os.x['engine-hermes'].cron.update.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('cron/update', input) as Promise<Record<string, unknown>>;
+          }),
+          pause: os.x['engine-hermes'].cron.pause.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('cron/pause', input) as Promise<Record<string, unknown>>;
+          }),
+          trigger: os.x['engine-hermes'].cron.trigger.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('cron/trigger', input) as Promise<Record<string, unknown>>;
+          }),
+          history: os.x['engine-hermes'].cron.history.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('cron/history', input) as Promise<{ runs: Record<string, unknown>[]; limit: number }>;
           }),
           delete: os.x['engine-hermes'].cron.delete.handler(async ({ input, context }) => {
             requireMember(context);

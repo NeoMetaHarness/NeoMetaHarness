@@ -237,6 +237,7 @@ export class HermesRuntime {
       stdio: [surface === 'api' ? 'pipe' : 'ignore', 'ignore', 'pipe'],
       env: {
         ...runtimeEnv, HERMES_HOME: home, API_SERVER_KEY: key,
+        ...(surface === 'dashboard' ? { HERMES_DESKTOP: '1' } : {}),
         HERMES_DASHBOARD_SESSION_TOKEN: this.dashboardToken,
         HERMES_DISABLE_LAZY_INSTALLS: '1', HERMES_EXEC_ASK: '1', API_SERVER_ENABLED: 'true',
         PYTHONDONTWRITEBYTECODE: '1',
@@ -351,12 +352,45 @@ export class HermesRuntime {
       this.closingProfiles.delete(canonical);
     }
   }
-  async listCron(): Promise<Record<string, unknown>[]> { return this.request('dashboard', '/api/cron/jobs').then(async (r) => await r.json() as Record<string, unknown>[]); }
-  async createCron(prompt: string, schedule: string): Promise<{ id: string }> {
-    return this.request('dashboard', '/api/cron/jobs', { method: 'POST', body: { prompt, schedule } }).then(async (r) => await r.json() as { id: string });
+  // Hermes v0.23.2: hermes_cli/web_routers/cron.py:776-849 and web_models.py:328-358.
+  private cronPath(id?: string, profile?: string): string {
+    const path = `/api/cron/jobs${id ? `/${encodeURIComponent(id)}` : ''}`;
+    return profile ? `${path}?profile=${encodeURIComponent(profileName(profile))}` : path;
   }
-  async deleteCron(id: string): Promise<{ ok: boolean }> {
-    return this.request('dashboard', `/api/cron/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(async (r) => await r.json() as { ok: boolean });
+  async listCron(profile?: string): Promise<Record<string, unknown>[]> {
+    return this.request('dashboard', profile ? this.cronPath(undefined, profile) : '/api/cron/jobs')
+      .then(async (r) => await r.json() as Record<string, unknown>[]);
+  }
+  async createCron(prompt: string, schedule: string, profile?: string, name?: string): Promise<{ id: string }> {
+    return this.request('dashboard', this.cronPath(undefined, profile), { method: 'POST', body: { prompt, schedule, name } })
+      .then(async (r) => await r.json() as { id: string });
+  }
+  async updateCron(id: string, changes: { prompt?: string; schedule?: string; name?: string }, profile?: string) {
+    return this.request('dashboard', this.cronPath(id, profile), { method: 'PUT', body: { updates: changes } })
+      .then(async (r) => await r.json());
+  }
+  async pauseCron(id: string, paused: boolean, profile?: string) {
+    const path = this.cronPath(id, profile);
+    const [url, query] = path.split('?');
+    return this.request('dashboard', `${url}/${paused ? 'pause' : 'resume'}${query ? `?${query}` : ''}`, { method: 'POST' })
+      .then(async (r) => await r.json());
+  }
+  async triggerCron(id: string, profile?: string) {
+    const [url, query] = this.cronPath(id, profile).split('?');
+    return this.request('dashboard', `${url}/trigger${query ? `?${query}` : ''}`, { method: 'POST' })
+      .then(async (r) => await r.json());
+  }
+  async cronHistory(id: string, profile?: string) {
+    // Hermes creates the profile's SessionDB on API server startup; the dashboard
+    // history endpoint requires that store even for jobs with no previous runs.
+    await this.server(profile ?? 'default');
+    const [url, query] = this.cronPath(id, profile).split('?');
+    return this.request('dashboard', `${url}/runs${query ? `?${query}&limit=20` : '?limit=20'}`)
+      .then(async (r) => await r.json());
+  }
+  async deleteCron(id: string, profile?: string): Promise<{ ok: boolean }> {
+    return this.request('dashboard', this.cronPath(id, profile), { method: 'DELETE' })
+      .then(async (r) => await r.json() as { ok: boolean });
   }
 
   private skillPath(path: string, profile: string): string {

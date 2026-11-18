@@ -18,7 +18,8 @@
     "test:p4-4": "node test/p4-4.mjs",
     "test:p3-2": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p3-2.mjs",
     "test:p5-2": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p5-2.mjs",
-    "test:p2-5": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p2-5.mjs"
+    "test:p2-5": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p2-5.mjs",
+    "test:p2-7a": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p2-7.mjs routines"
   },
   "dependencies": {
     "@neometaharness/ui": "workspace:*",

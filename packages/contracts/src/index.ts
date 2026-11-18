@@ -166,10 +166,21 @@ export const hermesContract = {
       .output(z.object({ status: z.string() })),
   },
   cron: {
-    list: oc.output(z.array(z.record(z.string(), z.unknown()))),
-    create: oc.input(z.object({ prompt: z.string().min(1), schedule: z.string().min(1) }))
+    list: oc.input(z.object({ profile: z.string().min(1).optional() }).optional())
+      .output(z.array(z.record(z.string(), z.unknown()))),
+    create: oc.input(z.object({ prompt: z.string().min(1), schedule: z.string().min(1),
+      profile: z.string().min(1).optional(), name: z.string().optional() }))
       .output(z.object({ id: z.string() }).passthrough()),
-    delete: oc.input(z.object({ id: z.string().min(1) })).output(z.unknown()),
+    update: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional(),
+      prompt: z.string().min(1).optional(), schedule: z.string().min(1).optional(), name: z.string().optional() }))
+      .output(z.record(z.string(), z.unknown())),
+    pause: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional(), paused: z.boolean() }))
+      .output(z.record(z.string(), z.unknown())),
+    trigger: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional() }))
+      .output(z.record(z.string(), z.unknown())),
+    history: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional() }))
+      .output(z.object({ runs: z.array(z.record(z.string(), z.unknown())), limit: z.number() })),
+    delete: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional() })).output(z.unknown()),
   },
 };
 
