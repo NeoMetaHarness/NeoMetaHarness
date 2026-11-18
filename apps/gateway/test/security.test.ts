@@ -328,7 +328,9 @@ test('SEC-15: the app sends its token only to a loopback gateway or the configur
   g.localStorage = { getItem: (k: string) => store.get(k) ?? null };
   const at = (search: string) => { g.window = { location: { search, origin: 'https://app.neo.test' } }; };
   try {
-    const { gatewayUrl, gatewayToken } = await import('../../neo-app/src/config.ts');
+    // Loaded by URL at runtime (tsx) so the gateway's typecheck doesn't compile the app's Vite-typed source.
+    const { gatewayUrl, gatewayToken } = await import(new URL('../../neo-app/src/config.ts', import.meta.url).href) as {
+      gatewayUrl: () => string; gatewayToken: () => string | null };
     at('?gateway=https%3A%2F%2Fevil.test');
     assert.notEqual(gatewayUrl(), 'https://evil.test', 'a foreign ?gateway= override is ignored');
     assert.match(gatewayUrl(), /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/, 'falls back to the configured loopback gateway');
