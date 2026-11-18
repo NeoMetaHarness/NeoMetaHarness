@@ -866,7 +866,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
       if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/')) {
         const honchoDisabledRead = path === '/x/memory-honcho/status' || path === '/x/memory-honcho/list';
-        if (!kernel.hasRoute(path) && !honchoDisabledRead && !path.startsWith('/x/channels/') && context.role && context.role !== 'viewer') {
+        const extensionPath = path.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+        if (!kernel.hasRoute(extensionPath) && !honchoDisabledRead && !path.startsWith('/x/channels/') && context.role && context.role !== 'viewer') {
           res.writeHead(404).end();
           return;
         }
