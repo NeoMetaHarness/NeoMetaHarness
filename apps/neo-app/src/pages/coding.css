@@ -13,6 +13,8 @@
 .coding-conversation-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent); }
 .coding-conversation-title h2 { font-size: 18px; margin: 0; }
 .coding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.coding-actions label { align-self: center; font-size: 12px; }
+.coding-actions select { max-width: 155px; padding: 7px; font: inherit; color: inherit; background: var(--surface, transparent); border: 1px solid currentColor; }
 .coding-conversation > div:last-child { flex: 1; min-height: 0; }
 .coding-empty { margin: auto; opacity: .7; }
 .coding-stream { min-width: 0; overflow-wrap: anywhere; }

@@ -160,6 +160,12 @@ export class T3ControlPlane {
     return this.runtime.runPromise(this.client['orchestration.getTurnDiff'](input));
   }
 
+  rollback(input: { threadId: string; scopeId: string; checkpointId: string }) {
+    // T3 v0.1.9 packages/contracts/src/orchestrationV2.ts:3334-3340.
+    // Do not modify shared workspace files (CheckpointRestoreSafety.ts:10-11).
+    return this.dispatch({ type: 'checkpoint.rollback', ...input, restoreFiles: false });
+  }
+
   async stop(input: { threadId: string; runId?: string }) {
     if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
     return this.runtime.runPromise(this.client['orchestration.forceStopThread'](input));

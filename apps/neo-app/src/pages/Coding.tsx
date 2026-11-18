@@ -17,6 +17,7 @@ type Thread = Catalog['threads'][number];
 type Message = { id: number; role: 'user' | 'assistant'; text?: string };
 type Approval = { id: string; kind: string; busy: boolean };
 type ProjectedItem = { item?: { type?: string; messageId?: string; text?: string } };
+type Checkpoint = { id: string; scopeId: string; status: string; ordinalWithinScope: number };
 
 // T3 v0.1.9 orchestration.subscribeThread snapshot carries the thread projection
 // (packages/contracts/src/orchestrationV2.ts:3958-3972, :2040-2062).
@@ -54,6 +55,10 @@ export default function Coding() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [diff, setDiff] = useState<string | null>(null);
+  const [turnCount, setTurnCount] = useState(0);
+  const [selectedTurn, setSelectedTurn] = useState(1);
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
+  const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
   const [status, setStatus] = useState('Loading');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -133,6 +138,13 @@ export default function Coding() {
     if (!live.current || selected.current !== id) return;
     if (event.kind === 'snapshot') {
       const history = historyFromSnapshot(event.payload);
+      const count = history.filter(({ item }) => item?.type === 'user_message').length;
+      setTurnCount(count);
+      setSelectedTurn(count || 1);
+      const projection = (event.payload as { projection?: { checkpoints?: Checkpoint[] } })?.projection;
+      const ready = projection?.checkpoints?.filter((checkpoint) => checkpoint.status === 'ready') ?? [];
+      setCheckpoints(ready);
+      setSelectedCheckpoint(ready.at(-1)?.id ?? '');
       if (history.length) {
         const restored = history.map(({ item }) => {
           const messageId = ++nextId.current;
@@ -190,6 +202,10 @@ export default function Coding() {
     setMessages([]);
     setApproval(null);
     setDiff(null);
+    setTurnCount(0);
+    setSelectedTurn(1);
+    setCheckpoints([]);
+    setSelectedCheckpoint('');
     setRunning(false);
     setError('');
     setStatus('Connecting');
@@ -247,6 +263,7 @@ export default function Coding() {
     setDraft('');
     setStatus('Running');
     setRunning(true);
+    setTurnCount((previous) => { setSelectedTurn(previous + 1); return previous + 1; });
     // Some adapters reuse message ids between turns. Bind each turn's ids to its own stream.
     messageIds.current.clear();
     const assistantId = ++nextId.current;
@@ -302,10 +319,30 @@ export default function Coding() {
   async function showDiff() {
     if (!threadId) return;
     try {
-      const result = await http.x['engine-t3'].diff({ threadId, fromTurnCount: 0, toTurnCount: 1 });
+      const result = await http.x['engine-t3'].diff({
+        threadId, fromTurnCount: selectedTurn - 1, toTurnCount: selectedTurn,
+      });
       setDiff(result.diff || 'No changes');
     } catch {
       setDiff('Diff not available');
+    }
+  }
+
+  async function restoreCheckpoint() {
+    const checkpoint = checkpoints.find((entry) => entry.id === selectedCheckpoint);
+    if (!threadId || !checkpoint || busy || running ||
+      !window.confirm('Restore the conversation to this checkpoint? Workspace files will stay as they are.')) return;
+    setBusy(true);
+    setError('');
+    try {
+      await http.x['engine-t3'].rollback({
+        threadId, scopeId: checkpoint.scopeId, checkpointId: checkpoint.id,
+      });
+      openThread(threadId);
+    } catch (reason) {
+      setError(`Could not restore checkpoint: ${String(reason)}`);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -356,7 +393,21 @@ export default function Coding() {
             <div className="coding-conversation-title">
               <h2>{current?.title ?? 'Coding thread'}</h2>
               <div className="coding-actions">
-                <Button label="View first-turn diff" variant="secondary" data-testid="coding-diff" onClick={() => void showDiff()}>Diff</Button>
+                <label htmlFor="coding-diff-turn">Diff for turn</label>
+                <select id="coding-diff-turn" data-testid="coding-diff-turn" value={Math.min(selectedTurn, Math.max(1, turnCount))}
+                  onChange={(event) => { setSelectedTurn(Number(event.target.value)); setDiff(null); }}>
+                  {Array.from({ length: turnCount }, (_, index) => <option key={index + 1} value={index + 1}>Turn {index + 1}</option>)}
+                </select>
+                <Button label="View selected turn diff" variant="secondary" data-testid="coding-diff"
+                  isDisabled={turnCount === 0} onClick={() => void showDiff()}>Diff</Button>
+                <label htmlFor="coding-checkpoint">Checkpoint</label>
+                {checkpoints.length ? <select id="coding-checkpoint" data-testid="coding-checkpoint" value={selectedCheckpoint}
+                  onChange={(event) => setSelectedCheckpoint(event.target.value)}>
+                  {checkpoints.map((checkpoint) => <option key={checkpoint.id} value={checkpoint.id}>
+                    Checkpoint {checkpoint.ordinalWithinScope + 1}</option>)}
+                </select> : <span data-testid="coding-checkpoint-unavailable">Not available</span>}
+                <Button label="Restore to checkpoint" variant="secondary" data-testid="coding-restore"
+                  isDisabled={!selectedCheckpoint || busy || running} onClick={() => void restoreCheckpoint()}>Restore</Button>
                 <Button label="Settle" variant="secondary" data-testid="coding-settle" onClick={() => void settle()}>Settle</Button>
                 {running && <Button label="Stop" data-testid="coding-stop" onClick={() => void stop()}>Stop</Button>}
               </div>

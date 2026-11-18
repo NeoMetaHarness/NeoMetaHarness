@@ -18,6 +18,7 @@ export default defineExtension({
     ctx.route('settle', ({ body }) => service.settle((body as { threadId: string }).threadId));
     ctx.route('stop', ({ body }) => service.stop(body as Parameters<typeof service.stop>[0]));
     ctx.route('diff', ({ body }) => service.diff(body as Parameters<typeof service.diff>[0]));
+    ctx.route('rollback', ({ body }) => service.rollback(body as Parameters<typeof service.rollback>[0]));
     ctx.route('threads/list', () => service.listThreads());
 
     if (process.env.NMH_T3_URL && process.env.NMH_T3_SCOPED_SESSION) {

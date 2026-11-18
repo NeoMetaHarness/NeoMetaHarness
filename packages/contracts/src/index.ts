@@ -71,6 +71,9 @@ export const t3Contract = {
     threadId: z.string().min(1), fromTurnCount: z.number().int().nonnegative(),
     toTurnCount: z.number().int().nonnegative(), ignoreWhitespace: z.boolean().optional(),
   })).output(z.object({ threadId: z.string(), fromTurnCount: z.number(), toTurnCount: z.number(), diff: z.string() })),
+  rollback: oc.input(z.object({
+    threadId: z.string().min(1), scopeId: z.string().min(1), checkpointId: z.string().min(1),
+  })).output(z.object({ sequence: z.number().int() })),
   threads: {
     list: oc.output(z.object({
       projects: z.array(z.object({
