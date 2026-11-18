@@ -306,10 +306,10 @@ async function trial(previewPort) {
     for (let retry = 0; retry < 30; retry++) {
       await registry.sync({ profile: 'bota' });
       imported = await registry.list();
-      if (imported.some((item) => item.name === 'neo-learned-workflow')) break;
+      if (imported.some((item) => item.name === 'bota/neo-learned-workflow')) break;
       await sleep(200);
     }
-    const skill = imported.find((item) => item.name === 'neo-learned-workflow');
+    const skill = imported.find((item) => item.name === 'bota/neo-learned-workflow');
     assert.ok(skill, 'Hermes skill_manage did not write a skill in bot A home');
     assert.equal(skill.version, 1);
     assert.equal(skill.sourceProfile, 'bota');
@@ -323,8 +323,8 @@ async function trial(previewPort) {
       await page.eventually('!!document.querySelector("[data-testid=skills-page]")', 'Skills lazy route');
       await page.evaluate('document.querySelector("[data-testid=registry-tab]").click()');
       await page.eventually('!!document.querySelector("[data-testid=registry-panel]")', 'Registry tab');
-      await page.eventually('!!document.querySelector("[data-testid=registry-skill-neo-learned-workflow]")', 'Registry skill');
-      await page.evaluate('document.querySelector("[data-testid=registry-skill-neo-learned-workflow] button").click()');
+      await page.eventually('!!document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow]")', 'Registry skill');
+      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] button").click()');
       await page.eventually('document.querySelector("[data-testid=registry-details]")?.textContent.includes("1 versions")', 'Registry version listing');
       await page.evaluate(`(() => {
         const input = document.querySelector('[data-testid=registry-target]');
@@ -348,7 +348,7 @@ async function trial(previewPort) {
       assert.equal(dshDirs.length, 1, 'Expected one isolated DSH state directory');
       const dshHome = join(dshRoot, dshDirs[0], 'home');
       await registry.assign({ name: skill.name, engine: 'dsh', targetId: dsh.sessionId, assigned: true });
-      const projected = join(dshHome, 'skills', skill.name);
+      const projected = join(dshHome, 'skills', skill.name.split('/')[1]);
       assert.ok((await readFile(join(projected, 'SKILL.md'), 'utf8')).includes('Check the inputs'));
       await rpc.x['engine-dsh'].prompt({ sessionId: dsh.sessionId, text: 'Apply neo-learned-workflow to the papaya checksum protocol' });
       await rpc.x['engine-dsh'].wait({ sessionId: dsh.sessionId });
@@ -363,7 +363,7 @@ async function trial(previewPort) {
       assert.equal(v2.version, 2);
       const diff = await registry.diff({ name: skill.name, from: 1, to: 2 });
       assert.ok(diff.diff.includes('papaya checksum twice'));
-      await page.evaluate('document.querySelector("[data-testid=registry-skill-neo-learned-workflow] button").click()');
+      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] button").click()');
       await page.eventually('document.querySelector("[data-testid=registry-details]")?.textContent.includes("2 versions")', 'v2 in Registry UI');
       await page.evaluate('document.querySelector("[data-testid=registry-to]").value = "2"');
       await page.evaluate('document.querySelector("[data-testid=registry-diff-button]").click()');
@@ -376,12 +376,20 @@ async function trial(previewPort) {
       console.log('P4-3_STAGE diff and rollback create version 3, restoring v1 exact content');
 
       const metadataOnly = await registry.import({
-        name: skill.name, content: original, sourceProfile: 'botb',
-        sourcePath: 'reviewed/by/botb', trust: 'confirmed',
+        name: skill.name, content: original, sourceProfile: 'bota',
+        sourcePath: 'reviewed/by/bota', trust: 'confirmed',
       });
       assert.equal(metadataOnly.version, 4);
       assert.equal((await registry.versions({ name: skill.name })).length, 4,
         'Metadata-only revisions must be included in the Git version history');
+      const otherProfile = await registry.import({
+        name: 'neo-learned-workflow', content: original, sourceProfile: 'botb',
+        sourcePath: 'reviewed/by/botb', trust: 'confirmed',
+      });
+      assert.equal(otherProfile.name, 'botb/neo-learned-workflow');
+      assert.equal(otherProfile.version, 1, 'Another profile owns an independent skill history');
+      assert.equal((await registry.versions({ name: otherProfile.name })).length, 1);
+      assert.equal((await registry.versions({ name: skill.name })).length, 4);
       const originalRevision = await registry.rollback({ name: skill.name, version: 1 });
       assert.equal(originalRevision.version, 5);
       assert.equal(originalRevision.sourceProfile, 'bota');
@@ -392,7 +400,7 @@ async function trial(previewPort) {
 
       await rpc.extensions.disable({ id: 'skills-registry' });
       assert.equal((await fetch(base + '/x/skills-registry/list', { headers: authHeaders() })).status, 404);
-      await assert.rejects(readFile(join(temporary, 'hermes-home', 'profiles', 'botb', 'skills', skill.name, 'SKILL.md'), 'utf8'));
+      await assert.rejects(readFile(join(temporary, 'hermes-home', 'profiles', 'botb', 'skills', skill.name.split('/')[1], 'SKILL.md'), 'utf8'));
       await assert.rejects(readFile(join(projected, 'SKILL.md'), 'utf8'));
       assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: authHeaders() })).status, 200);
       await runHermes(rpc, base, 'botb', 'run');

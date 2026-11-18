@@ -70,11 +70,11 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
       })}>Sync from {profile}</Button>
     <div className="skills-registry-grid">
       <ul data-testid="registry-list" aria-label="Registry skills">
-        {skills.map((item) => <li key={item.name} data-testid={`registry-skill-${item.name}`}>
+        {skills.map((item) => <li key={item.name} data-testid={`registry-skill-${item.name.replace('/', '--')}`}>
           <button type="button" className="skills-registry-select" onClick={() => void action(async () => { await loadVersions(item.name); })}>
-            <strong>{item.name}</strong> <span>v{item.version} � {item.trust}</span>
+            <strong>{item.name}</strong> <span>v{item.version} · {item.trust}</span>
           </button>
-          <small>Source bot {item.sourceProfile} � {item.sourcePath}</small>
+          <small>Source bot {item.sourceProfile} · {item.sourcePath}</small>
         </li>)}
         {!skills.length && <li>Registry is empty. Sync a learned skill from a bot.</li>}
       </ul>

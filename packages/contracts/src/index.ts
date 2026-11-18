@@ -202,27 +202,29 @@ export const memoryContract = {
 };
 
 const skillName = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);
+const skillId = z.string().regex(/^[a-z][a-z0-9_-]{0,79}\/[a-z][a-z0-9_-]{0,79}$/);
+const skillInput = z.union([skillName, skillId]);
 const skillTrust = z.enum(['untrusted', 'observed', 'confirmed']);
 export const registrySkillSchema = z.object({
-  name: skillName, version: z.number().int().positive(), trust: skillTrust,
+  name: skillId, version: z.number().int().positive(), trust: skillTrust,
   sourceProfile: z.string(), sourcePath: z.string(), updatedAt: z.number().int(),
 });
 export type RegistrySkill = z.infer<typeof registrySkillSchema>;
-const skillTarget = z.object({ name: skillName, engine: z.enum(['hermes', 'dsh']), targetId: z.string().min(1) });
+const skillTarget = z.object({ name: skillId, engine: z.enum(['hermes', 'dsh']), targetId: z.string().min(1) });
 export const skillsRegistryContract = {
   list: oc.output(z.array(registrySkillSchema)),
-  get: oc.input(z.object({ name: skillName })).output(z.object({ metadata: registrySkillSchema, content: z.string() })),
+  get: oc.input(z.object({ name: skillId })).output(z.object({ metadata: registrySkillSchema, content: z.string() })),
   import: oc.input(z.object({
-    name: skillName, content: z.string().min(1).max(200000), sourceProfile: skillName,
+    name: skillInput, content: z.string().min(1).max(200000), sourceProfile: skillName,
     sourcePath: z.string(), trust: skillTrust.optional(),
   })).output(registrySkillSchema),
   sync: oc.input(z.object({ profile: skillName })).output(z.array(registrySkillSchema)),
-  versions: oc.input(z.object({ name: skillName })).output(z.array(z.object({
+  versions: oc.input(z.object({ name: skillId })).output(z.array(z.object({
     version: z.number().int().positive(), hash: z.string(), metadata: registrySkillSchema,
   }))),
-  diff: oc.input(z.object({ name: skillName, from: z.number().int().positive(), to: z.number().int().positive() }))
+  diff: oc.input(z.object({ name: skillId, from: z.number().int().positive(), to: z.number().int().positive() }))
     .output(z.object({ diff: z.string() })),
-  rollback: oc.input(z.object({ name: skillName, version: z.number().int().positive() })).output(registrySkillSchema),
+  rollback: oc.input(z.object({ name: skillId, version: z.number().int().positive() })).output(registrySkillSchema),
   assign: oc.input(skillTarget.extend({ assigned: z.boolean() })).output(z.object({ assigned: z.boolean() })),
   assignments: oc.output(z.array(skillTarget)),
 };
