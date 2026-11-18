@@ -1,0 +1,17 @@
+.skills-page { padding-bottom: 36px; }
+.skills-header { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+.skills-header label { display: grid; gap: 6px; font-weight: 600; }
+.skills-header select, .skills-learn textarea { background: transparent; color: inherit; border: 1px solid currentColor; font: inherit; padding: 10px; }
+.skills-learn textarea { width: 100%; min-height: 100px; resize: vertical; }
+.skills-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }
+.skills-panel { min-width: 0; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); padding: 20px; }
+.skills-panel h2 { font-size: 21px; margin: 0 0 12px; }
+.skills-panel ul { margin: 0; padding: 0; list-style: none; max-height: 440px; overflow-y: auto; }
+.skills-panel li { display: flex; align-items: center; gap: 10px; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); padding: 11px 0; flex-wrap: wrap; }
+.skills-panel li strong { overflow-wrap: anywhere; }
+.skills-panel li span { opacity: .65; font-size: 13px; margin-left: auto; }
+.skills-panel-title, .skills-actions { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.skills-learn form { display: grid; gap: 12px; justify-items: start; }
+.skills-stream { min-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.skills-notice { border-left: 3px solid currentColor; padding: 8px 14px; }
+@media(max-width: 800px) { .skills-grid { grid-template-columns: 1fr; } .skills-header { flex-direction: column; align-items: stretch; } }
