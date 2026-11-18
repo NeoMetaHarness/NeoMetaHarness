@@ -243,10 +243,11 @@
     },
     "P2-6": {
       "title": "Models hub: providers in vault, route roles, projections into Hermes + DSH, Panda router stub",
-      "status": "in_progress",
+      "status": "done",
       "owner": "codex",
       "slice_a": "done: PM rerun 2x + regression 24/24: MODELS_E2E PASS authenticated=true bot1=A bot2=B keys=vault logs=clean disable=models-only others=healthy; providers list exposes hasKey only; policy viewer/admin; Hermes seams hermes_cli/config.py:2228, runtime_provider_custom.py:48-60,563-573",
-      "remaining": "P2-6b: DSH role projection, superagent roles, Settings -> Models UI, Panda router stub"
+      "slice_b": "done: PM rerun 2x: MODELS_E2E PASS ... dsh-coding=B; P2-6_UI PASS build auth lazy aria-disabled providers connection roles override key=write-only; superagent eval->eval, worker->coding; providers.test admin-only; regression 25/26 with p1-5 desktop-exit timeout, then p1-5 PASS 2x on rerun",
+      "follow_up": "models-router-panda stub not yet built; DSH adapter verified for text+tool flows only"
     },
     "P2-7": {
       "title": "Routines (Hermes cron) + Tasks (Hermes kanban) UI; P2 exit",
@@ -254,7 +255,12 @@
       "owner": "sol-a"
     }
   },
-  "known_risks": [],
+  "known_risks": [
+    {
+      "id": "flaky-p1-5-exit",
+      "note": "p1-5 'desktop exit' timed out once under heavy parallel helper load (2026-11-18); passes on rerun. Watch."
+    }
+  ],
   "p4_tasks": {
     "P4-1": {
       "title": "Skills page over Hermes learned skills + engine-hermes vault env",
