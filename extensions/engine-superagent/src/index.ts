@@ -4,6 +4,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { z } from 'zod';
 import { defineExtension } from '@neometaharness/kernel';
 import type { InboxEvent, InboxItem } from '@neometaharness/contracts';
+import type { VaultService } from '@neometaharness/vault';
 import { loadPinnedSuperagent } from './pinned.js';
 import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './model.js';
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
@@ -14,6 +15,7 @@ import { DecisionLog } from './decision-log.js';
 import { BridgeKey, BRIDGE_KEY_ROTATE_MS, writeTokenFile, type BridgeKeyHandle } from './bridge-key.js';
 import { checkUpstreams } from './upstream-source.js';
 import { InboxStore } from './inbox-store.js';
+import { PollingGitHubSource, type GitHubConfig, type GitHubEvent, type GitHubSource } from './github-source.js';
 
 type Report = NonNullable<InboxItem['report']>;
 type Postmortem = NonNullable<Report['postmortem']>;
@@ -67,6 +69,7 @@ class SuperagentService {
   private readonly assignments = new Map<string, string>();
   private readonly terminalReports = new Set<string>();
   private readonly upstreamItems = new Map<string, string>();
+  private github?: GitHubSource;
   private workerReady?: Promise<void>;
   private workerHome = '';
   private gatewayUrl!: () => string;
@@ -82,7 +85,7 @@ class SuperagentService {
     this.token = tokenFile;
     const upstream = await loadPinnedSuperagent();
     const repo = new upstream.MemoryRepositories();
-    const kinds = ['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream'];
+    const kinds = ['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github'];
     const sourceKinds = kinds.map((kind) => ({
       kind, title: { en: kind, zh: kind },
       description: { en: `Neo source ${kind}`, zh: `Neo source ${kind}` },
@@ -185,8 +188,44 @@ class SuperagentService {
     const complete = report.status === 'ready' || report.status === 'blocked'
       ? { ...report, postmortem: await this.postmortem(item, report) } : report;
     if (this.closed) return this.items.get(item.id) ?? item;
+    if (item.source === 'neo/github' && item.github?.kind === 'comment'
+      && item.mode === 'act' && complete.status === 'ready') {
+      return this.update(item, { status: 'approval', kind: 'approval', report: complete,
+        approval: { destructive: true, reason: 'Approve posting this report as a GitHub comment' } });
+    }
     return this.update(item, { status: report.status, report: complete });
   }
+
+  attachGithub(source: GitHubSource): void { this.github = source; }
+
+  async ingestGithub(event: GitHubEvent): Promise<void> {
+    if (this.closed) return;
+    const now = Date.now();
+    const github: InboxItem['github'] = { repo: event.repo, url: event.url,
+      kind: event.kind, ...(event.kind === 'comment' ? { issue: event.issue } : {}) };
+    if (event.kind === 'comment') {
+      const item = await this.ask({ text: event.text, botId: 'neo-system', mode: event.mode,
+        requesterRole: 'owner' }, 'neo/github', (created) => { created.github = github; });
+      if (event.mode === 'observe' && item.status === 'suggestion') {
+        await this.finish({ ...item, github }, { status: 'ready',
+          summary: `Observed @neo request in ${event.repo}: ${event.text}`,
+          changes: [], tests: [], risks: [], options: [] });
+      }
+      return;
+    }
+    const summary = `GitHub check "${event.name}" in ${event.repo} concluded ${event.conclusion}`;
+    const item: InboxItem = { id: randomUUID(), text: summary, botId: 'neo-system',
+      source: 'neo/github', github, requesterRole: 'owner', mode: 'observe', status: 'failed',
+      kind: 'failure', report: { status: 'failed', summary, changes: [], tests: [], risks: [summary], options: [] },
+      createdAt: now, updatedAt: now };
+    this.update(item, {});
+  }
+
+  githubConfigure(input: GitHubConfig & { token?: string }): Promise<void> {
+    return this.github!.configure({ mode: input.mode, repositories: input.repositories }, input.token);
+  }
+  githubStatus() { return this.github!.status(); }
+  githubPoll() { return this.github!.poll(); }
 
   private async postmortem(item: InboxItem, report: Report): Promise<Postmortem> {
     const started = Date.now();
@@ -345,6 +384,22 @@ class SuperagentService {
     if (item.approval?.destructive && role !== 'admin' && role !== 'owner') {
       throw new Error('Destructive approval requires admin or owner');
     }
+    if (item.source === 'neo/github') {
+      if (role !== 'admin' && role !== 'owner') throw new Error('GitHub publishing requires admin approval');
+      if (input.decision === 'deny') {
+        const reason = `GitHub reply denied: ${input.reason.trim()}`;
+        return this.update(item, { status: 'blocked', kind: undefined,
+          approval: { destructive: true, reason, decision: 'denied' },
+          report: { status: 'blocked', summary: reason, changes: [], tests: [], risks: [reason], options: [] } });
+      }
+      if (item.mode !== 'act' || !item.github?.issue || item.github.posted || item.report?.status !== 'ready') {
+        throw new Error('GitHub reply needs an unposted act report');
+      }
+      await this.github!.reply(item.github.repo, item.github.issue, item.report.summary);
+      return this.update(item, { status: 'ready', kind: undefined,
+        github: { ...item.github, posted: true },
+        approval: { destructive: true, reason: input.reason.trim(), decision: 'approved' } });
+    }
     const approval = { destructive: item.approval?.destructive ?? false, reason: input.reason.trim(),
       decision: (input.decision === 'approve' ? 'approved' : 'denied') as 'approved' | 'denied' };
     const updated = this.update(item, { approval });
@@ -470,6 +525,7 @@ class SuperagentService {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.github?.stop();
     this.unsubscribeChannel?.();
     await this.cron?.stop();
     for (const listener of this.listeners) listener();
@@ -484,7 +540,8 @@ export default defineExtension({
     const gatewayUrl = ctx.inject<() => string>('gatewayUrl');
     const dataDir = ctx.inject<string>('extensionDataDir');
     const auth = ctx.inject<any>('auth');
-    if (!gatewayUrl || !dataDir) throw new Error('Superagent needs Gateway endpoint and isolated storage');
+    const vault = ctx.inject<VaultService>('vault');
+    if (!gatewayUrl || !dataDir || !vault) throw new Error('Superagent needs Gateway, vault and isolated storage');
 
     // SEC-11: a 7-day member key for a real workspace owner, rotated daily
     // through an owner-only file the MCP bridge re-reads per call. Crash
@@ -517,9 +574,15 @@ export default defineExtension({
     const service = new SuperagentService(models,
       new DecisionLog(join(dataDir, 'engine-superagent', 'traces')),
       () => ctx.inject<SkillImporter>('skillRegistry'));
+    const github = new PollingGitHubSource(join(dataDir, 'engine-superagent', 'github.json'),
+      vault, (event) => service.ingestGithub(event), fetch,
+      process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_GITHUB_API_URL
+        ? process.env.NMH_SUPERAGENT_GITHUB_API_URL : 'https://api.github.com');
+    service.attachGithub(github);
     const channel = ctx.inject<ChannelSource>('channelSource')
       ?? (process.env.NODE_ENV === 'test' ? new FakeChannelSource() : undefined);
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
+    await github.start();
     ctx.effect(() => async () => {
       clearInterval(rotation);
       if (current) await bridgeKey.revoke(current.id).catch(() => {});
@@ -537,6 +600,9 @@ export default defineExtension({
     }, (body as { role: 'viewer' | 'member' | 'admin' | 'owner' }).role));
     ctx.route('retry', ({ body }) => service.retry(body as { id: string }));
     ctx.route('upstream/check', () => service.checkUpstream());
+    ctx.route('github/configure', async ({ body }) => { await service.githubConfigure(body as GitHubConfig & { token?: string }); return { ok: true }; });
+    ctx.route('github/status', () => service.githubStatus());
+    ctx.route('github/poll', () => service.githubPoll());
     ctx.route('cron/list', () => service.cronList());
     ctx.route('cron/create', ({ body }) => service.cronCreate(body));
     ctx.route('cron/delete', ({ body }) => service.cronDelete(body as { id: string }));

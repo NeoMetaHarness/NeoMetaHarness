@@ -421,7 +421,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('inbox.approval.decide', context);
         const items = await invokeInbox('list', {}) as InboxItem[];
         const item = items.find((entry) => entry.id === input.id);
-        if (item?.approval?.destructive && context.role !== 'admin' && context.role !== 'owner') {
+        if ((item?.approval?.destructive || item?.source === 'neo/github') && context.role !== 'admin' && context.role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Destructive approval requires admin or owner' });
         }
         return invokeInbox('approval/decide', { ...input, role: context.role }) as Promise<InboxItem>;
@@ -434,6 +434,20 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('inbox.upstream.check', context);
         return invokeInbox('upstream/check', {}) as Promise<{ checked: number; drift: number }>;
       }) },
+      github: {
+        configure: os.inbox.github.configure.handler(async ({ input, context }) => {
+          authorize('inbox.github.configure', context);
+          return invokeInbox('github/configure', input) as Promise<{ ok: boolean }>;
+        }),
+        status: os.inbox.github.status.handler(async ({ context }) => {
+          authorize('inbox.github.status', context);
+          return invokeInbox('github/status', {});
+        }),
+        poll: os.inbox.github.poll.handler(async ({ context }) => {
+          authorize('inbox.github.poll', context);
+          return invokeInbox('github/poll', {}) as Promise<{ checked: number; created: number; pausedUntil: number | null }>;
+        }),
+      },
       events: os.inbox.events.handler(async function* ({ input, signal, context }) {
         authorize('inbox.events', context);
         const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;

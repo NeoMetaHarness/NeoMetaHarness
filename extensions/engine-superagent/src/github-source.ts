@@ -1,0 +1,186 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import type { VaultService } from '@neometaharness/vault';
+
+export type GitHubRepository = { name: string; ref: string };
+export type GitHubConfig = { repositories: GitHubRepository[]; mode: 'observe' | 'act' };
+export type GitHubEvent =
+  | { kind: 'comment'; key: string; repo: string; issue: number; url: string; text: string; mode: 'observe' | 'act' }
+  | { kind: 'check'; key: string; repo: string; url: string; name: string; conclusion: string };
+
+export interface GitHubSource {
+  configure(config: GitHubConfig, token?: string): Promise<void>;
+  status(): Promise<{ repositories: GitHubRepository[]; mode: 'observe' | 'act'; hasToken: boolean; pausedUntil: number | null; stopped: boolean }>;
+  poll(): Promise<{ checked: number; created: number; pausedUntil: number | null }>;
+  reply(repo: string, issue: number, text: string): Promise<void>;
+  stop(): void;
+}
+
+const scope = { kind: 'workspace' as const, workspaceId: 'default' };
+const credential = 'engine-superagent.github.token';
+const validRepo = /^[\w.-]+\/[\w.-]+$/;
+const validRef = /^[\w./-]+$/;
+const pollIntervalMs = 120_000;
+
+type SavedState = { config: GitHubConfig; seen: string[] };
+type Comment = {
+  id: number; body?: string | null; html_url?: string;
+  issue_url?: string; pull_request_url?: string;
+};
+type CheckRun = { id: number; name: string; status: string; conclusion?: string | null; html_url?: string };
+
+/** GitHub REST API: /issues/comments, /pulls/comments, /commits/{ref}/check-runs,
+ * and POST /issues/{issue_number}/comments.
+ * https://docs.github.com/en/rest/issues/comments
+ * https://docs.github.com/en/rest/pulls/comments
+ * https://docs.github.com/en/rest/checks/runs
+ */
+export class PollingGitHubSource implements GitHubSource {
+  private config: GitHubConfig = { repositories: [], mode: 'observe' };
+  private seen = new Set<string>();
+  private pausedUntil: number | null = null;
+  private stopped = false;
+  private timer?: ReturnType<typeof setTimeout>;
+  private active?: Promise<{ checked: number; created: number; pausedUntil: number | null }>;
+  private readonly abort = new AbortController();
+
+  constructor(private readonly file: string, private readonly vault: VaultService,
+    private readonly onEvent: (event: GitHubEvent) => Promise<void>,
+    private readonly transport: typeof fetch = fetch,
+    private readonly baseUrl = 'https://api.github.com') {}
+
+  async start(): Promise<void> {
+    try {
+      const saved = JSON.parse(await readFile(this.file, 'utf8')) as SavedState;
+      this.config = saved.config;
+      this.seen = new Set(saved.seen.slice(-4000));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (this.config.repositories.length) this.schedule(0);
+  }
+
+  async configure(config: GitHubConfig, token?: string): Promise<void> {
+    if (this.stopped) throw new Error('GitHub source has stopped');
+    for (const repo of config.repositories) {
+      if (!validRepo.test(repo.name) || !validRef.test(repo.ref) || repo.ref.includes('..')) {
+        throw new Error('Invalid GitHub repository or ref');
+      }
+    }
+    if (token) await this.vault.put(scope, credential, token);
+    this.config = { mode: config.mode, repositories: [...config.repositories] };
+    this.pausedUntil = null;
+    await this.save();
+    this.schedule(0);
+  }
+
+  async status() {
+    return { ...this.config, hasToken: Boolean(await this.vault.get(scope, credential)),
+      pausedUntil: this.pausedUntil, stopped: this.stopped };
+  }
+
+  private async save(): Promise<void> {
+    await mkdir(dirname(this.file), { recursive: true });
+    const pending = `${this.file}.${randomUUID()}.tmp`;
+    await writeFile(pending, JSON.stringify({ config: this.config, seen: [...this.seen].slice(-4000) }), 'utf8');
+    await rename(pending, this.file);
+  }
+
+  private schedule(delay: number): void {
+    if (this.timer) clearTimeout(this.timer);
+    if (this.stopped || !this.config.repositories.length || this.pausedUntil === Number.MAX_SAFE_INTEGER) return;
+    this.timer = setTimeout(() => {
+      void this.poll().catch(() => {}).finally(() => {
+        if (!this.stopped) this.schedule(Math.max(pollIntervalMs, (this.pausedUntil ?? 0) - Date.now()));
+      });
+    }, delay);
+    this.timer.unref?.();
+  }
+
+  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const token = await this.vault.get(scope, credential);
+    if (!token) throw new Error('GitHub token must be configured in the workspace vault');
+    const response = await this.transport(`${this.baseUrl}${path}`, {
+      ...init, headers: { accept: 'application/vnd.github+json',
+        authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28',
+        ...(init?.body ? { 'content-type': 'application/json' } : {}) },
+      signal: this.abort.signal,
+    });
+    if (response.status === 403 || response.status === 429 || response.status === 401) {
+      const retryAfter = Number(response.headers.get('retry-after'));
+      const resetAt = Number(response.headers.get('x-ratelimit-reset')) * 1000;
+      this.pausedUntil = response.status === 429
+        ? Math.max(Date.now() + 60_000, Date.now() + (Number.isFinite(retryAfter) ? retryAfter * 1000 : 0),
+          Number.isFinite(resetAt) ? resetAt : 0)
+        : Number.MAX_SAFE_INTEGER;
+      throw new Error(`GitHub polling paused after HTTP ${response.status}`);
+    }
+    if (!response.ok) throw new Error(`GitHub REST HTTP ${response.status}`);
+    return response.json() as Promise<T>;
+  }
+
+  poll() {
+    if (this.active) return this.active;
+    if (this.stopped || (this.pausedUntil !== null && Date.now() < this.pausedUntil)) {
+      return Promise.resolve({ checked: 0, created: 0, pausedUntil: this.pausedUntil });
+    }
+    this.active = this.runPoll().finally(() => { this.active = undefined; });
+    return this.active;
+  }
+
+  private async runPoll(): Promise<{ checked: number; created: number; pausedUntil: number | null }> {
+    let checked = 0;
+    let created = 0;
+    try {
+      for (const { name, ref } of this.config.repositories) {
+        if (this.stopped) break;
+        const path = `/repos/${name}`;
+        const comments = [
+          ...await this.request<Comment[]>(`${path}/issues/comments?per_page=100`),
+          ...await this.request<Comment[]>(`${path}/pulls/comments?per_page=100`),
+        ];
+        const checks = await this.request<{ check_runs: CheckRun[] }>(
+          `${path}/commits/${encodeURIComponent(ref)}/check-runs?per_page=100`);
+        for (const comment of comments) {
+          checked++;
+          const request = /(?:^|\s)@neo\b\s*([\s\S]*)/i.exec(comment.body ?? '');
+          const issue = /\/(?:issues|pulls)\/(\d+)(?:$|\?)/.exec(comment.issue_url ?? comment.pull_request_url ?? '');
+          const key = `comment:${name}:${comment.id}`;
+          if (!request?.[1]?.trim() || !issue || this.seen.has(key)) continue;
+          await this.onEvent({ kind: 'comment', key, repo: name, issue: Number(issue[1]),
+            url: comment.html_url ?? '', text: request[1].trim(), mode: this.config.mode });
+          this.seen.add(key);
+          created++;
+        }
+        for (const check of checks.check_runs) {
+          checked++;
+          const key = `check:${name}:${check.id}`;
+          if (!['failure', 'timed_out', 'action_required'].includes(check.conclusion ?? '') || this.seen.has(key)) continue;
+          await this.onEvent({ kind: 'check', key, repo: name,
+            url: check.html_url ?? '', name: check.name, conclusion: check.conclusion! });
+          this.seen.add(key);
+          created++;
+        }
+      }
+    } finally {
+      if (created) await this.save();
+    }
+    return { checked, created, pausedUntil: this.pausedUntil };
+  }
+
+  async reply(repo: string, issue: number, text: string): Promise<void> {
+    if (this.stopped || !validRepo.test(repo) || !Number.isSafeInteger(issue) || issue < 1) {
+      throw new Error('Invalid GitHub comment destination');
+    }
+    await this.request(`/repos/${repo}/issues/${issue}/comments`, {
+      method: 'POST', body: JSON.stringify({ body: text }),
+    });
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.abort.abort();
+  }
+}

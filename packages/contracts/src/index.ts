@@ -508,7 +508,9 @@ export const inboxReportSchema = z.object({
 });
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
-  source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream']).optional(),
+  source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github']).optional(),
+  github: z.object({ repo: z.string(), issue: z.number().int().optional(),
+    url: z.string(), kind: z.enum(['comment', 'check']), posted: z.boolean().optional() }).optional(),
   upstream: z.object({ name: z.string(), pinned: z.string(), latest: z.string(),
     changelog: z.string().url().nullable() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).optional(),
@@ -543,6 +545,16 @@ export const inboxContract = {
     decision: z.enum(['approve', 'deny']), reason: z.string().trim().min(1) })).output(inboxItemSchema) },
   retry: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
   upstream: { check: oc.output(z.object({ checked: z.number().int(), drift: z.number().int() })) },
+  github: {
+    configure: oc.input(z.object({ repositories: z.array(z.object({
+      name: z.string().regex(/^[\w.-]+\/[\w.-]+$/), ref: z.string().default('main'),
+    })).max(30), mode: z.enum(['observe', 'act']).default('observe'),
+      token: z.string().min(1).optional() })).output(z.object({ ok: z.boolean() })),
+    status: oc.output(z.object({ repositories: z.array(z.object({ name: z.string(), ref: z.string() })),
+      mode: z.enum(['observe', 'act']), hasToken: z.boolean(), pausedUntil: z.number().nullable(), stopped: z.boolean() })),
+    poll: oc.output(z.object({ checked: z.number().int(), created: z.number().int(),
+      pausedUntil: z.number().nullable() })),
+  },
   events: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))
     .output(eventIterator(inboxEventSchema)),
   cron: {
