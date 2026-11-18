@@ -9,6 +9,7 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "test:p3-4": "pnpm --dir apps/neo-app build && pnpm --dir extensions/computer-vnc typecheck && pnpm --dir extensions/computer-vnc test && pnpm --dir apps/gateway exec tsx ../../apps/neo-app/test/p3-4.mjs",
     "check": "node scripts/check.mjs",
     "upstream:check": "node scripts/upstream.mjs",
     "org:scaffold": "node scripts/org/scaffold.mjs",
