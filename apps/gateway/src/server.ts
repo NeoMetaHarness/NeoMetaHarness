@@ -212,6 +212,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Hermes extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const invokeChannels = async (route: string, body: unknown) => {
+    const path = `/x/channels/${route}`;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Channels extension is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   const invokeDsh = async (route: string, body: unknown) => {
     const path = `/x/engine-dsh/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'DSH extension is disabled' });
@@ -262,6 +267,24 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }),
     },
     x: {
+      channels: {
+        list: os.x.channels.list.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeChannels('list', input) as Promise<any>;
+        }),
+        connect: os.x.channels.connect.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeChannels('connect', input) as Promise<{ connected: boolean }>;
+        }),
+        disconnect: os.x.channels.disconnect.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeChannels('disconnect', input) as Promise<{ disconnected: boolean }>;
+        }),
+        status: os.x.channels.status.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeChannels('status', input) as Promise<any>;
+        }),
+      },
       'skills-registry': {
         list: os.x['skills-registry'].list.handler(async ({ context }) => {
           requireViewer(context);
@@ -685,7 +708,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/skills-registry/')) {
+      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/channels/')) {
         if (!kernel.hasRoute(path) && context.role && context.role !== 'viewer') {
           res.writeHead(404).end();
           return;

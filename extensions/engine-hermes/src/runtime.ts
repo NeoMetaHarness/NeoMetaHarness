@@ -42,7 +42,8 @@ async function pythonPath(upstream: string): Promise<string> {
   const python = process.platform === 'win32' ? join(venv, 'Scripts/python.exe') : join(venv, 'bin/python');
   const marker = join(venv, '.neo-hermes-upstream');
   const installed = await readFile(marker, 'utf8').catch(() => '');
-  if (existsSync(python) && installed.trim() === upstream) return python;
+  const dependencySet = `${upstream}|web,sms,telegram`;
+  if (existsSync(python) && installed.trim() === dependencySet) return python;
 
   await mkdir(cacheDir, { recursive: true });
   const uvEnv = { ...await hermesBaseEnvironment(), UV_CACHE_DIR: join(cacheDir, 'uv-cache') };
@@ -53,11 +54,11 @@ async function pythonPath(upstream: string): Promise<string> {
   // Hermes places the dashboard in [web] and the run API's aiohttp in [sms].
   // Use Hermes's frozen lock so both surfaces have pinned, reproducible deps.
   await exec('uv', ['export', '--project', upstream, '--frozen', '--no-dev',
-    '--no-emit-project', '--extra', 'web', '--extra', 'sms',
+    '--no-emit-project', '--extra', 'web', '--extra', 'sms', '--extra', 'telegram',
     '--format', 'requirements-txt', '--output-file', requirements, '--quiet'],
   { env: uvEnv, maxBuffer: 4_000_000 });
   await exec('uv', ['pip', 'sync', '--python', python, requirements], { env: uvEnv, maxBuffer: 2_000_000 });
-  await writeFile(marker, `${upstream}\n`, 'utf8');
+  await writeFile(marker, `${dependencySet}\n`, 'utf8');
   return python;
 }
 
@@ -147,7 +148,8 @@ async function freePort(): Promise<number> {
 async function killTree(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null) return;
   if (process.platform === 'win32') {
-    await exec('taskkill.exe', ['/PID', String(child.pid), '/T', '/F']).catch(() => {});
+    await exec(join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'taskkill.exe'),
+      ['/PID', String(child.pid), '/T', '/F']).catch(() => {});
   } else {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill(); }
   }
@@ -301,6 +303,29 @@ export class HermesRuntime {
 
   async listProfiles(): Promise<{ profiles: { name: string; path: string }[] }> {
     return this.request('dashboard', '/api/profiles').then(async (r) => await r.json() as { profiles: { name: string; path: string }[] });
+  }
+
+  /** Channel adapters use the same pinned Hermes install and Neo-owned profile. */
+  channelRuntime(profile: string): { home: string; python: string; upstream: string } {
+    const home = this.profileHome(profile);
+    if (this.stopped || !this.python || !existsSync(home)) throw new Error('Hermes profile unavailable');
+    return { home, python: this.python, upstream: this.upstream };
+  }
+
+  /** Pinned Hermes dashboard messaging API, with no credential mutation. */
+  async channelPlatforms(profile: string): Promise<{ platforms: Record<string, unknown>[] }> {
+    const name = profileName(profile);
+    const response = await this.request('dashboard', `/api/messaging/platforms?profile=${encodeURIComponent(name)}`);
+    return response.json() as Promise<{ platforms: Record<string, unknown>[] }>;
+  }
+
+  /** Hermes owns platform configuration, while Neo Vault owns every secret. */
+  async channelEnabled(profile: string, platform: string, enabled: boolean): Promise<void> {
+    const name = profileName(profile);
+    if (!/^[a-z][a-z0-9_-]*$/.test(platform)) throw new Error('Invalid messaging platform');
+    await this.request('dashboard', `/api/messaging/platforms/${platform}`, {
+      method: 'PUT', body: { profile: name, enabled },
+    });
   }
   async createProfile(name: string): Promise<{ ok: boolean; name: string; path: string }> {
     const canonical = profileName(name);

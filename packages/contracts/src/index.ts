@@ -229,8 +229,24 @@ export const skillsRegistryContract = {
   assignments: oc.output(z.array(skillTarget)),
 };
 
+export const channelsPlatformSchema = z.object({
+  id: z.string(), name: z.string(), description: z.string().optional(),
+  enabled: z.boolean(), configured: z.boolean(), gatewayRunning: z.boolean(),
+  error: z.string().optional(),
+});
+export const channelsContract = {
+  list: oc.input(z.object({ profile: z.string().min(1) }))
+    .output(z.object({ platforms: z.array(channelsPlatformSchema) })),
+  connect: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('telegram'), token: z.string().min(1).max(4096) }))
+    .output(z.object({ connected: z.boolean() })),
+  disconnect: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('telegram') }))
+    .output(z.object({ disconnected: z.boolean() })),
+  status: oc.input(z.object({ profile: z.string().min(1) }))
+    .output(z.object({ platforms: z.array(channelsPlatformSchema) })),
+};
+
 const baseNeoContract = {
-  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'skills-registry': skillsRegistryContract },
+  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'skills-registry': skillsRegistryContract, channels: channelsContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
