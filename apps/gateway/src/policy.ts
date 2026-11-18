@@ -73,6 +73,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.models.providers.list': 'viewer',
   'x.models.providers.put': 'admin',
   'x.models.providers.delete': 'admin',
+  'x.models.providers.test': 'admin',
+  'x.models.override.get': 'viewer',
   'x.models.roles.get': 'viewer',
   'x.models.roles.set': 'admin',
   'x.models.override.set': 'admin',

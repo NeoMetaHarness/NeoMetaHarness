@@ -11,6 +11,7 @@ const Skills = lazy(() => import('./pages/Skills'));
 const Memory = lazy(() => import('./pages/Memory'));
 const Computers = lazy(() => import('./pages/Computers'));
 const Coding = lazy(() => import('./pages/Coding'));
+const Models = lazy(() => import('./pages/Models'));
 const Placeholder = lazy(() => import('./pages/Placeholder'));
 const pages = [
   { label: 'Inbox', path: '/inbox', icon: 'inbox' },
@@ -25,7 +26,7 @@ const pages = [
 
 function activePath() {
   const candidate = window.location.pathname;
-  return pages.some(({ path }) => path === candidate) ? candidate : '/extensions';
+  return candidate === '/settings/models' || pages.some(({ path }) => path === candidate) ? candidate : '/extensions';
 }
 
 function NeoApp() {
@@ -40,7 +41,8 @@ function NeoApp() {
     if (destination !== path) window.history.pushState({}, '', destination + window.location.search);
     setPath(destination);
   };
-  const current = pages.find((page) => page.path === path) ?? pages.find((page) => page.path === '/extensions')!;
+  const current = pages.find((page) => page.path === (path.startsWith('/settings') ? '/settings' : path))
+    ?? pages.find((page) => page.path === '/extensions')!;
 
   return <NeoTheme>
     <AppShell variant="section" contentPadding={0} sideNav={
@@ -51,7 +53,7 @@ function NeoApp() {
             label={page.label}
             href={page.path + window.location.search}
             icon={page.icon}
-            isSelected={path === page.path}
+            isSelected={path === page.path || (page.path === '/settings' && path.startsWith('/settings/'))}
             onClick={(event) => {
               if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
               event.preventDefault();
@@ -63,7 +65,11 @@ function NeoApp() {
     }>
       <div className="neo-page">
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
-          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : <Placeholder name={current.label} />}
+          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/settings/models' ? <Models /> : path === '/settings' ? <section><h1>Settings</h1><a href={'/settings/models' + window.location.search} onClick={(event) => {
+            if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            navigate('/settings/models');
+          }}>Models — providers, roles and bot overrides</a></section> : <Placeholder name={current.label} />}
         </Suspense>
       </div>
     </AppShell>

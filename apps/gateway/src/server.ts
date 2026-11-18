@@ -316,6 +316,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             requireAdminOrOwner(context);
             return invokeModels('providers/delete', input) as Promise<{ deleted: boolean }>;
           }),
+          test: os.x.models.providers.test.handler(async ({ input, context }) => {
+            requireAdminOrOwner(context);
+            return invokeModels('providers/test', input) as Promise<{ ok: boolean; models: number; status: number }>;
+          }),
         },
         roles: {
           get: os.x.models.roles.get.handler(async ({ context }) => {
@@ -328,6 +332,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           }),
         },
         override: {
+          get: os.x.models.override.get.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeModels('override/get', input) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;
+          }),
           set: os.x.models.override.set.handler(async ({ input, context }) => {
             requireAdminOrOwner(context);
             return invokeModels('override/set', input) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;

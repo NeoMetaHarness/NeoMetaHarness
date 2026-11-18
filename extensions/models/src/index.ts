@@ -16,8 +16,13 @@ export default defineExtension({
     ctx.route('providers/list', () => hub.state().providers);
     ctx.route('providers/put', ({ body }) => hub.saveProvider(body as Parameters<ModelHub['saveProvider']>[0]));
     ctx.route('providers/delete', ({ body }) => hub.deleteProvider((body as { id: string }).id));
+    ctx.route('providers/test', ({ body }) => hub.testProvider((body as { id: string }).id));
     ctx.route('roles/get', () => hub.state().roles);
     ctx.route('roles/set', ({ body }) => hub.setRole(body as Parameters<ModelHub['setRole']>[0]));
+    ctx.route('override/get', ({ body }) => {
+      const profile = (body as { profile: string }).profile;
+      return { profile, selection: hub.state().overrides[profile] ?? null };
+    });
     ctx.route('override/set', ({ body }) => hub.setOverride(body as Parameters<ModelHub['setOverride']>[0]));
   },
 });

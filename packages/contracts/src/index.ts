@@ -262,6 +262,8 @@ export const modelsContract = {
       baseUrl: z.string().url(), apiKey: z.string().optional(),
     })).output(modelProvider),
     delete: oc.input(z.object({ id: modelProviderId })).output(z.object({ deleted: z.boolean() })),
+    test: oc.input(z.object({ id: modelProviderId }))
+      .output(z.object({ ok: z.boolean(), models: z.number().int(), status: z.number().int() })),
   },
   roles: {
     get: oc.output(modelRoles),
@@ -269,6 +271,8 @@ export const modelsContract = {
       .output(z.object({ role: modelRole, selection: modelSelection })),
   },
   override: {
+    get: oc.input(z.object({ profile: modelProfile }))
+      .output(z.object({ profile: modelProfile, selection: modelSelection.nullable() })),
     set: oc.input(z.object({ profile: modelProfile, providerId: modelProviderId.optional(), model: z.string().trim().min(1).optional() }))
       .output(z.object({ profile: modelProfile, selection: modelSelection.nullable() })),
   },
