@@ -54,7 +54,8 @@ await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
     patch: {}, providerInstanceMutation: {
       operation: 'upsert', instanceId: providerId,
       instance: { driver: 'acpRegistry', displayName: 'NMH isolated fake ACP', enabled: true,
-        config: { source: 'local', commandPath: process.execPath, commandArgs: [fakeAgentPath] } },
+        config: { source: 'local', commandPath: process.execPath,
+          commandArgs: [fakeAgentPath, ...(process.env.T3_TEST_FAKE_WORKSPACE ? [workspaceRoot] : [])] } },
     },
   });
   yield* client[WS_METHODS.projectsMutate]({

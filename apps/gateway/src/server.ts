@@ -589,6 +589,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           authorize('x.engine-t3.diff', context);
           return invokeT3('diff', input) as Promise<{ threadId: string; fromTurnCount: number; toTurnCount: number; diff: string }>;
         }),
+        rollback: os.x['engine-t3'].rollback.handler(async ({ input, context }) => {
+          authorize('x.engine-t3.rollback', context);
+          return invokeT3('rollback', input) as Promise<{ sequence: number }>;
+        }),
+        providers: {
+          list: os.x['engine-t3'].providers.list.handler(async ({ context }) => {
+            authorize('x.engine-t3.providers.list', context);
+            return invokeT3('providers/list', {}) as Promise<{ providers: {
+              id: string; name: string; status: string;
+              models: { id: string; name: string; isDefault: boolean }[];
+            }[] }>;
+          }),
+        },
         threads: {
           list: os.x['engine-t3'].threads.list.handler(async ({ context }) => {
             authorize('x.engine-t3.threads.list', context);

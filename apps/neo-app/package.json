@@ -27,7 +27,8 @@
     "test:p2-5": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p2-5.mjs",
     "test:p2-7": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p2-7.mjs",
     "test:p2-7a": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p2-7.mjs routines",
-    "test:p2-7b": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p2-7.mjs kanban"
+    "test:p2-7b": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p2-7.mjs kanban",
+    "test:p5-4": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p5-4.mjs"
   },
   "dependencies": {
     "@neometaharness/ui": "workspace:*",

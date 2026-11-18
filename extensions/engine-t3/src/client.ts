@@ -39,6 +39,7 @@ export type T3Event = {
   type?: string;
   payload?: unknown;
   textDelta?: string;
+  fullText?: boolean;
   messageId?: string;
 };
 
@@ -56,7 +57,7 @@ function normalized(raw: unknown): T3Event {
     // T3 may send separate fragments for the same message id. Retain the
     // full source payload so clients can also reconcile message revisions.
     return { kind: 'text.delta', sequence: frame.sequence as number, messageId: payload.id,
-      textDelta: payload.text, payload: event.payload };
+      textDelta: payload.text, fullText: true, payload: event.payload };
   }
   return { kind: 'event', sequence: frame.sequence as number, type: event.type as string, payload: event.payload };
 }

@@ -231,9 +231,13 @@ async function main() {
     await eventually(() => viewer.evaluate('!!document.querySelector("[data-testid=coding-page]")'), 'lazy-loaded Coding route');
     await eventually(() => viewer.evaluate('!!document.querySelector("[data-testid=coding-title]")'), 'isolated T3 project visible');
     await viewer.type('[data-testid=coding-title]', 'P5-2 isolated thread');
-    if (!(await viewer.evaluate('document.querySelector("[data-testid=coding-provider]")?.value'))) {
-      await viewer.type('[data-testid=coding-provider]', providerId);
-    }
+    await viewer.evaluate(`(() => {
+      const select = document.querySelector('[data-testid=coding-provider]');
+      select.value = '${providerId}';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=coding-provider]")?.value === "nmhFakeAcp"'),
+      'scripted provider selected');
     console.log('P5-2_CREATE_FORM', await viewer.evaluate(`JSON.stringify({
       title: document.querySelector('[data-testid=coding-title]')?.value,
       provider: document.querySelector('[data-testid=coding-provider]')?.value,

@@ -48,6 +48,7 @@ export const t3EventSchema = z.object({
   type: z.string().optional(),
   payload: z.unknown().optional(),
   textDelta: z.string().optional(),
+  fullText: z.boolean().optional(),
   messageId: z.string().optional(),
   coalescedCount: z.number().int().positive().optional(),
 });

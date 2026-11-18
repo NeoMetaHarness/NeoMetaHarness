@@ -102,15 +102,16 @@ export default function Coding() {
       if (firstProject) {
         const preferred = providerResult.providers.find((provider) =>
           provider.id === 'neo-coding' || provider.name === 'neo-coding');
+        const projectDefault = providerResult.providers.find((provider) =>
+          provider.id === firstProject.defaultModelSelection?.instanceId);
+        const chosen = preferred ?? projectDefault ?? providerResult.providers[0];
         setProviderId((previous) => {
           if (previous && providerResult.providers.some((provider) => provider.id === previous)) return previous;
-          const projectDefault = providerResult.providers.find((provider) =>
-            provider.id === firstProject.defaultModelSelection?.instanceId);
-          return preferred?.id ?? projectDefault?.id ?? providerResult.providers[0]?.id ?? '';
+          return chosen?.id ?? '';
         });
         setModel((previous) => previous === 'default'
-          ? preferred?.models.find((item) => item.isDefault)?.id
-            ?? preferred?.models[0]?.id ?? firstProject.defaultModelSelection?.model ?? previous : previous);
+          ? chosen?.models.find((item) => item.isDefault)?.id
+            ?? chosen?.models[0]?.id ?? previous : previous);
       }
       setStatus((previous) => previous === 'disabled' ? 'Ready' : previous === 'Loading' ? 'Ready' : previous);
       if (!silent) setError('');
@@ -193,13 +194,16 @@ export default function Coding() {
       // Reconcile revisions and snapshots without repeating already-rendered text.
       const text = event.textDelta ?? '';
       const previousText = rendered.current.get(messageId) ?? '';
-      if (text.startsWith(previousText)) append(messageId, text.slice(previousText.length));
+      if (!event.fullText) {
+        append(messageId, text);
+        rendered.current.set(messageId, previousText + text);
+      } else if (text.startsWith(previousText)) append(messageId, text.slice(previousText.length));
       else {
         views.current.get(messageId)?.reset();
         if (views.current.has(messageId)) append(messageId, text);
         else queued.current.set(messageId, text);
       }
-      rendered.current.set(messageId, text);
+      if (event.fullText) rendered.current.set(messageId, text);
       return;
     }
     if (event.kind !== 'event') return;
@@ -394,9 +398,11 @@ export default function Coding() {
               data-testid={`project-${entry.id}`} onClick={() => {
                 setProjectId(entry.id);
                 const preferred = providers.find((provider) => provider.id === 'neo-coding' || provider.name === 'neo-coding');
-                setProviderId(preferred?.id ?? entry.defaultModelSelection?.instanceId ?? providers[0]?.id ?? '');
-                setModel(preferred?.models.find((model) => model.isDefault)?.id
-                  ?? (preferred ? preferred.models[0]?.id : entry.defaultModelSelection?.model) ?? 'default');
+                const projectDefault = providers.find((provider) => provider.id === entry.defaultModelSelection?.instanceId);
+                const chosen = preferred ?? projectDefault ?? providers[0];
+                setProviderId(chosen?.id ?? '');
+                setModel(chosen?.models.find((model) => model.isDefault)?.id
+                  ?? chosen?.models[0]?.id ?? 'default');
                 setThreadId('');
                 selected.current = '';
                 connection.current?.socket.close();

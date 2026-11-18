@@ -39,7 +39,9 @@ export async function* coalesceText(source: AsyncIterable<T3Event>, windowMs = 3
         if (pending && pending.messageId === event.messageId) {
           pending = {
             ...pending, sequence: event.sequence, payload: event.payload,
-            textDelta: (pending.textDelta ?? '') + event.textDelta,
+            // T3 message.updated contains a complete revision. Keep the most recent one.
+            textDelta: pending.fullText && event.fullText
+              ? event.textDelta : (pending.textDelta ?? '') + event.textDelta,
             coalescedCount: (pending.coalescedCount ?? 1) + 1,
           };
         } else {
