@@ -13,6 +13,7 @@
     "deploy:check": "node scripts/deploy-check.mjs && node --test scripts/test/deploy.test.mjs",
     "neo:backup": "pnpm --dir apps/gateway exec tsx src/backup-cli.ts",
     "neo:restore": "pnpm --dir apps/gateway exec tsx src/restore-cli.ts",
+    "test:p7-3": "pnpm --dir apps/neo-app build && pnpm --dir apps/gateway exec tsx --test test/backup.test.ts && pnpm --dir apps/gateway exec tsx test/p7-3.ts",
     "check": "node scripts/check.mjs",
     "upstream:check": "node scripts/upstream.mjs",
     "org:scaffold": "node scripts/org/scaffold.mjs",

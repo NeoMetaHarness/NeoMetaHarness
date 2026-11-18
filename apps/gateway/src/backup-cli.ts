@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
+import { resolve } from 'node:path';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -17,5 +18,5 @@ try {
     url: values.url ?? process.env.NEO_GATEWAY_URL ?? 'http://127.0.0.1:3000',
     headers: { authorization: `Bearer ${token}` },
   }));
-  console.log(JSON.stringify(await rpc.system.backup({ out: values.out, passphrase })));
+  console.log(JSON.stringify(await rpc.system.backup({ out: resolve(process.env.INIT_CWD ?? process.cwd(), values.out), passphrase })));
 } catch (error) { console.error(error instanceof Error ? error.message : 'Backup failed'); process.exitCode = 1; }

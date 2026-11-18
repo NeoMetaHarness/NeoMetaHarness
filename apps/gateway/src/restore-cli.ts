@@ -7,5 +7,6 @@ const { values } = parseArgs({ options: { archive: { type: 'string' }, 'data-dir
 try {
   if (!values.archive || !values['data-dir']) throw new Error('--archive and --data-dir are required');
   const passphrase = readFileSync(process.env.NEO_BACKUP_PASSPHRASE_FILE ?? 0, 'utf8').trimEnd();
-  console.log(JSON.stringify(await restoreBackup({ archive: values.archive, dataDir: values['data-dir'], passphrase, force: values.force }, [resolve('.')])));
+  const cwd = process.env.INIT_CWD ?? process.cwd();
+  console.log(JSON.stringify(await restoreBackup({ archive: resolve(cwd, values.archive), dataDir: resolve(cwd, values['data-dir']), passphrase, force: values.force }, [resolve(cwd)])));
 } catch (error) { console.error(error instanceof Error ? error.message : 'Restore failed'); process.exitCode = 1; }

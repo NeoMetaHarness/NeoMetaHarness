@@ -17,6 +17,7 @@ Built on giants:
 6. [ADR 0001: desktop shell (Tauri 2)](docs/adr/0001-desktop-shell.md)
 7. [Org structure](docs/06-org-structure.md): NeoMetaHarness GitHub org, BrowserHarness-style
 8. [Research notes: PandaCode family](docs/07-research-nuggets.md)
+9. [Encrypted backup and restore](docs/17-backup-restore.md): archive inventory, separate vault key custody, CLI and recovery procedure
 9. [Upstream registry](upstream/registry.yaml)
 10. [Self-host with Docker Compose](docs/deploy/docker-compose.md)
 

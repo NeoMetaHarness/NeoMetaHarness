@@ -35,6 +35,11 @@ consistent recovery point. SQLite itself is always a consistent online snapshot;
 extension files changing while read cause failure. Filesystem and SQLite writes
 are not a single distributed transaction.
 
+SQLite files in engine homes are also snapshotted with `VACUUM INTO`; WAL/SHM
+files are excluded. Inbox records are persisted by the Neo superagent adapter.
+On restart, unfinished Inbox items become blocked with a resubmit instruction:
+upstream in-memory tickets cannot resume. Completed reports remain available.
+
 Restore works offline, without a running Gateway (and therefore without a token):
 
 ```text

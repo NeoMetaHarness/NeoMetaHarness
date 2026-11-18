@@ -380,12 +380,16 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       restore: os.system.restore.handler(async ({ input, context }) => {
         authorize('system.restore', context);
         if (!kernel.hasRoute('/x/backup/restore')) throw new ORPCError('NOT_FOUND', { message: 'Backup extension is disabled' });
-        return kernel.invokeRoute('/x/backup/restore', 'RPC', input) as Promise<{ dataDir: string; databaseFile: string; files: number; format: number }>;
+        try {
+          return await kernel.invokeRoute('/x/backup/restore', 'RPC', input) as { dataDir: string; databaseFile: string; files: number; format: number };
+        } catch (error) { throw new ORPCError('BAD_REQUEST', { message: error instanceof Error ? error.message : 'Restore failed' }); }
       }),
       backup: os.system.backup.handler(async ({ input, context }) => {
         authorize('system.backup', context);
         if (!kernel.hasRoute('/x/backup/backup')) throw new ORPCError('NOT_FOUND', { message: 'Backup extension is disabled' });
-        return kernel.invokeRoute('/x/backup/backup', 'RPC', input) as Promise<{ out: string; files: number; format: number }>;
+        try {
+          return await kernel.invokeRoute('/x/backup/backup', 'RPC', input) as { out: string; files: number; format: number };
+        } catch (error) { throw new ORPCError('BAD_REQUEST', { message: error instanceof Error ? error.message : 'Backup failed' }); }
       }),
     },
     agents: agentApi.router,

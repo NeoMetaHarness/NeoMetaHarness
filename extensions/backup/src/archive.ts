@@ -1,8 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
-import { lstat, readdir, readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { lstat, readdir, readFile, writeFile, mkdir, mkdtemp, rm, open } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { DatabaseSync } from 'node:sqlite';
 
 const MAGIC = Buffer.from('NEOBK001');
 const LIMIT = 256 * 1024 * 1024;
@@ -35,15 +36,29 @@ export async function createBackup(source: BackupSource, options: { out: string;
   const stage = await mkdtemp(join(tmpdir(), 'neo-backup-'));
   const files: Entry[] = [];
   let total = 0;
-  const add = async (filename: string, path: string) => {
+  const add = async (filename: string, path: string, snapshot = false) => {
     if (!safePath(path) || files.some(f => f.path.toLowerCase() === path.toLowerCase())) throw new Error('Invalid or duplicate backup path');
     const before = await lstat(filename);
     if (!before.isFile() || before.isSymbolicLink()) throw new Error('Backup refuses links and special files');
     total += before.size;
     if (total > LIMIT) throw new Error('Backup exceeds 256 MiB file limit');
-    const data = await readFile(filename);
+    const handle = await open(filename, 'r');
+    const header = Buffer.alloc(16);
+    try { await handle.read(header, 0, 16, 0); } finally { await handle.close(); }
+    const engineDatabase = !snapshot && header.equals(Buffer.from('SQLite format 3\0'));
+    let data: Buffer;
+    if (engineDatabase) {
+      // Engine-owned SQLite homes also need an online snapshot, including WAL.
+      const temporary = join(stage, `engine-${files.length}.sqlite`);
+      const database = new DatabaseSync(filename, { readOnly: true });
+      try { database.prepare('VACUUM INTO ?').run(temporary); }
+      finally { database.close(); }
+      data = await readFile(temporary);
+      total += Math.max(0, data.length - before.size);
+      if (total > LIMIT) throw new Error('Backup exceeds 256 MiB file limit');
+    } else data = await readFile(filename);
     const after = await lstat(filename);
-    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error('File changed during backup; pause writers and retry');
+    if (!engineDatabase && (before.size !== after.size || before.mtimeMs !== after.mtimeMs)) throw new Error('File changed during backup; pause writers and retry');
     files.push({ path, sha256: sha256(data), size: data.length, content: data.toString('base64') });
   };
   const walk = async (root: string, target: string) => {
@@ -60,7 +75,7 @@ export async function createBackup(source: BackupSource, options: { out: string;
   };
   try {
     await source.snapshot(join(stage, 'neo.sqlite'));
-    await add(join(stage, 'neo.sqlite'), 'neo.sqlite');
+    await add(join(stage, 'neo.sqlite'), 'neo.sqlite', true);
     for (const root of source.roots) await walk(root.source, root.target);
     const manifest: Manifest = { format: 1, neo: '0.1.0', createdAt: new Date().toISOString(), versions: source.versions,
       database: 'neo.sqlite', masterKeyIncluded: false, files: files.map(({ content, ...entry }) => entry) };
@@ -73,6 +88,7 @@ export async function createBackup(source: BackupSource, options: { out: string;
     return { out: resolve(options.out), files: files.length, format: 1 };
   } finally {
     archiveKey.fill(0);
+    if (dirname(resolve(stage)) !== resolve(tmpdir()) || !resolve(stage).startsWith(join(resolve(tmpdir()), 'neo-backup-'))) throw new Error('Unsafe backup cleanup');
     await rm(stage, { recursive: true, force: true });
   }
 }
@@ -94,12 +110,15 @@ export async function verifyArchive(filename: string, passphrase: string): Promi
   finally { archiveKey.fill(0); }
   const { manifest, files } = payload;
   if (manifest?.format !== 1 || manifest.neo !== '0.1.0' || manifest.database !== 'neo.sqlite' || manifest.masterKeyIncluded !== false ||
+      !manifest.versions || typeof manifest.versions !== 'object' || Array.isArray(manifest.versions) ||
+      Object.values(manifest.versions).some(v => typeof v !== 'string') ||
       !Array.isArray(files) || !Array.isArray(manifest.files) || files.length !== manifest.files.length) throw new Error('Unsupported manifest version or structure');
   const seen = new Set<string>();
   let total = 0;
   for (let i = 0; i < files.length; i++) {
     const file = files[i], entry = manifest.files[i];
     if (!safePath(file.path) || (file.path !== 'neo.sqlite' && !file.path.startsWith('extensions/')) ||
+        file.path.split('/').some((p: string) => excluded.has(p.toLowerCase()) || /^(master\.key|auth\.secret|desktop.*token)$/i.test(p)) ||
         seen.has(file.path.toLowerCase()) || typeof file.content !== 'string') throw new Error('Invalid archive path');
     seen.add(file.path.toLowerCase());
     const content = Buffer.from(file.content, 'base64');
