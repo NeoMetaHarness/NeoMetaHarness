@@ -49,7 +49,6 @@ test('runtime missing dependency degrades, and disabling a provider unwinds depe
   const enabled = new Map<string, boolean>([['provider', true], ['dependent', true], ['missing-user', true]]);
   const db: DatabaseProvider = {
     migrate: async () => {},
-    close: async () => {},
     getEnabled: async (id) => enabled.get(id) ?? false,
     setEnabled: async (id, value) => { enabled.set(id, value); },
     close: async () => {},

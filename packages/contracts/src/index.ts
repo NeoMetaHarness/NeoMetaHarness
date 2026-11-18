@@ -7,6 +7,7 @@ export const extensionStatusSchema = z.object({
   status: z.enum(['running', 'disabled', 'degraded']),
   reason: z.string().optional(),
   health: z.object({ ok: z.boolean(), pid: z.number().optional() }).optional(),
+  routes: z.array(z.string()).optional(),
 });
 
 export const computerActionSchema = z.discriminatedUnion('action', [

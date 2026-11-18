@@ -126,7 +126,7 @@ export class NeoKernel {
   status(id: string): ExtensionStatus {
     const entry = this.entries.get(id);
     if (!entry) throw new Error(`Unknown extension: ${id}`);
-    return { id, desired: entry.desired, status: entry.status, ...(entry.reason ? { reason: entry.reason } : {}) };
+    return { id, desired: entry.desired, status: entry.status, ...(entry.reason ? { reason: entry.reason } : {}), routes: this.routesFor(id) };
   }
 
   async health(id: string): Promise<Health | undefined> {
