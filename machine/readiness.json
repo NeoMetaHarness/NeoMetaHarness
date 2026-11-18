@@ -177,10 +177,10 @@
     },
     "P1-6": {
       "title": "Auth in the gateway",
-      "status": "rework",
+      "status": "done",
       "owner": "antigravity",
-      "rejected_2026_11_18": "desktop loopback fallback = auth bypass (default mode desktop; tokenless 127.0.0.1 -> owner; WS upgrade has no Origin check -> any website can drive gateway as owner; same-host reverse proxy -> all owner)",
-      "required": "no ambient authority; default mode server; desktop token file (owner-only) + NEO_DESKTOP_TOKEN; WS Origin allowlist + ticket auth; tests for 401/foreign-origin/no-token/ticket"
+      "evidence": "PM review of two rework rounds; PM rerun on main: gateway 10/10 (incl. auth-gateway RBAC + WS boundary), auth 5/5, full regression 22/22 (PM fixed packages/agents test:hermes to authenticate). Better Auth 1.7.25 + api-key; no ambient authority; default mode server; random persisted auth.secret (0600/DACL); random never-stored desktop password; prior desktop sessions revoked; non-members -> role null -> 403; viewer read / member write / admin lifecycle+computers+vault delete; WS Origin allowlist + bearer subprotocol + 15s single-use tickets; ?token= rejected; superagent mints/revokes scoped member API key for its MCP bridge",
+      "follow_up": "Better Auth baseURL mutated after listen (bearer flows verified; cookie flows not exercised); Tauri passes desktop token in webview URL query (local only)"
     },
     "P1-5": {
       "title": "Tauri 2 desktop shell (gateway sidecar, tray, clean exit)",
@@ -235,9 +235,7 @@
       "owner": "sol-a"
     }
   },
-  "known_risks": [
-    "2026-11-18: main gateway has no auth yet (P1-6 pending); it binds 127.0.0.1 but WS has no Origin check, so a local web page could drive it. Dev-only; P1-6 must land before any release build."
-  ],
+  "known_risks": [],
   "p4_tasks": {
     "P4-1": {
       "title": "Skills page over Hermes learned skills + engine-hermes vault env",
