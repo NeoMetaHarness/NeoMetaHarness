@@ -5,9 +5,8 @@ import { z } from 'zod';
 import { defineExtension } from '@neometaharness/kernel';
 import type { InboxEvent, InboxItem } from '@neometaharness/contracts';
 import { loadPinnedSuperagent } from './pinned.js';
-import { vaultModelFactory, type ModelFactory } from './model.js';
+import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './model.js';
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
-import type { VaultService } from '@neometaharness/vault';
 
 type Report = NonNullable<InboxItem['report']>;
 type Candidate = { evalId: string; triggers: { id: string }[] };
@@ -270,10 +269,9 @@ export default defineExtension({
       }
     }
 
-    const vault = ctx.inject<VaultService>('vault');
     const models = process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_TEST_ADAPTER
       ? (await import(process.env.NMH_SUPERAGENT_TEST_ADAPTER) as { createModelFactory: ModelFactory }).createModelFactory
-      : vaultModelFactory(vault);
+      : modelHubFactory(() => ctx.inject<ModelHubResolver>('modelHub'));
     const service = new SuperagentService(models);
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, apiKeyToken);
     ctx.effect(() => async () => {

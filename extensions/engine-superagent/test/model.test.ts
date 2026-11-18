@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import type { VaultService } from '@neometaharness/vault';
-import { vaultModelFactory } from '../src/model.js';
+import { modelHubFactory } from '../src/model.js';
 
 type Request = { headers: { authorization?: string }; body: {
   model: string;
@@ -34,12 +33,15 @@ try {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
-  const secrets: Record<string, string> = {
-    SUPERAGENT_LLM_URL: `http://127.0.0.1:${address.port}/v1`,
-    SUPERAGENT_LLM_MODEL: 'fake-llm', SUPERAGENT_API_KEY: 'local-test-token',
-  };
-  const vault = { get: async (_scope: unknown, key: string) => secrets[key] } as VaultService;
-  const models = vaultModelFactory(vault);
+  const resolved: { role: string; profile?: string }[] = [];
+  const models = modelHubFactory(() => ({
+    active: true,
+    async resolve(role, profile) {
+      resolved.push({ role, profile });
+      return { baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        model: role === 'eval' ? 'fake-eval' : 'fake-coding', apiKey: 'local-test-token' };
+    },
+  }));
   const input = { botId: 'bot', text: 'hello' };
   const evaluation = await models('eval', input);
   const worker = await models('worker', input);
@@ -69,8 +71,10 @@ try {
   assert.ok(seen[0]!.body.messages[0]!.content.includes('task evaluator'));
   assert.ok(seen[1]!.body.messages[0]!.content.includes('delegation worker'));
   assert.equal(seen[1]!.body.tools?.[0]?.function.name, tool);
-  assert.ok(seen.every((request) => request.body.model === 'fake-llm'));
-  console.log('SUPERAGENT_MODEL PASS vault=true auth=true eval=true tool_calls=true unique_workers=true');
+  assert.deepEqual(resolved.map(({ role, profile }) => [role, profile]),
+    [['eval', 'bot'], ['coding', 'bot'], ['coding', 'bot']]);
+  assert.deepEqual(seen.map((request) => request.body.model), ['fake-eval', 'fake-coding']);
+  console.log('SUPERAGENT_MODEL PASS hub_roles=eval,coding auth=true tool_calls=true unique_workers=true');
 } finally {
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));

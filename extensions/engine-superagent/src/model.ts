@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { LlmAdapter, ToolCallId, attributionHeaders } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm';
-import type { VaultService } from '@neometaharness/vault';
 
 export type ModelRole = 'eval' | 'worker';
 export interface ModelBinding {
@@ -11,6 +10,10 @@ export interface ModelBinding {
   configureTool?(tool: string): void;
 }
 export type ModelFactory = (role: ModelRole, input: { botId: string; text: string; mode?: string }) => Promise<ModelBinding>;
+export interface ModelHubResolver {
+  active: boolean;
+  resolve(role: 'eval' | 'coding', profile?: string): Promise<{ baseUrl: string; model: string; apiKey?: string }>;
+}
 
 /** OpenAI-compatible model endpoint chosen through Neo configuration and scoped vault credentials. */
 export class GatewayModelAdapter extends LlmAdapter {
@@ -73,16 +76,15 @@ export class GatewayModelAdapter extends LlmAdapter {
   }
 }
 
-export function vaultModelFactory(vault?: VaultService): ModelFactory {
-  return async (role) => {
-    const scope = { kind: 'engine', workspaceId: 'default', subjectId: 'engine-superagent' } as const;
-    const endpoint = await vault?.get(scope, 'SUPERAGENT_LLM_URL') || process.env.NMH_SUPERAGENT_LLM_URL;
-    const model = await vault?.get(scope, 'SUPERAGENT_LLM_MODEL') || process.env.NMH_SUPERAGENT_LLM_MODEL;
-    if (!endpoint || !model) throw new Error('Superagent model unavailable: configure SUPERAGENT_LLM_URL and SUPERAGENT_LLM_MODEL in the vault or NMH_SUPERAGENT_LLM_URL and NMH_SUPERAGENT_LLM_MODEL in the environment');
-    const url = new URL(endpoint);
+export function modelHubFactory(getHub: () => ModelHubResolver | undefined): ModelFactory {
+  return async (role, input) => {
+    const hub = getHub();
+    if (!hub?.active) throw new Error('Superagent requires the enabled Model Hub extension');
+    const selection = await hub.resolve(role === 'eval' ? 'eval' : 'coding', input.botId);
+    const url = new URL(selection.baseUrl);
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Superagent model endpoint requires HTTP(S)');
-    const credential = await vault?.get(scope, 'SUPERAGENT_API_KEY');
     // DSH registers adapters by provider name. Each worker turn owns its registration.
-    return { adapter: new GatewayModelAdapter(url.href, credential, role), provider: `neo-superagent-${randomUUID()}`, model };
+    return { adapter: new GatewayModelAdapter(url.href, selection.apiKey, role),
+      provider: `neo-superagent-${randomUUID()}`, model: selection.model };
   };
 }
