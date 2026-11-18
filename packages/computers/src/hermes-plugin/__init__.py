@@ -25,6 +25,8 @@ class NeoGatewayBackend(ComputerUseBackend):
 
     def _act(self, payload):
         # Read per call so reassignment/kill takes effect for the next action.
+        if not self.binding_file.is_file():
+            raise RuntimeError("No computer assigned to this bot. Attach a computer and assign it before using computer_use.")
         binding = json.loads(self.binding_file.read_text(encoding="utf-8"))
         request = Request(
             binding["endpoint"],

@@ -19,11 +19,13 @@ export default defineExtension({
     const memory = ctx.inject<MemoryBridge>('memoryBridge');
     const skillsBridge = ctx.inject<SkillsBridge>('skillsBridge');
     const service = new HermesRuntime(credentials, async (profile, profileHome) => {
-      const computerVersion = computers ? await projectHermesComputer(computers, profile, profileHome) : undefined;
+      const computerBinding = computers ? await projectHermesComputer(computers, profile, profileHome) : undefined;
       const memoryVersion = await projectHermesMemory(memory, profile, profileHome);
       const skillsVersion = await skillsBridge?.hermesReady(profile, profileHome);
       const modelVersion = await ctx.inject<ModelProjector>('modelHub')?.projectHermes(profile, profileHome);
-      return JSON.stringify([computerVersion, memoryVersion, skillsVersion, modelVersion]);
+      // The Neo backend reads binding.json on every action. Swapping the
+      // computer capability never requires restarting this Hermes bot.
+      return JSON.stringify([computerBinding ? 'neo_vnc' : undefined, memoryVersion, skillsVersion, modelVersion]);
     });
     await service.start();
     ctx.provide('agentRuntime', service);
