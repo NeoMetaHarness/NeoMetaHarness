@@ -274,8 +274,10 @@
     },
     "P5-2": {
       "title": "Coding page first slice over engine-t3 (threads, composer, stream, approvals, settle)",
-      "status": "in_progress",
-      "owner": "sol-a"
+      "status": "done",
+      "owner": "sol-a",
+      "evidence": "PM rerun 2x on main: P5-2_GATEWAY_UI PASS project=list thread=create prompts=2 stream=visible approvals=deny+approve settled=true disabled=true sample=healthy; isolated T3 v0.1.9 (temp base-dir, scoped session, scripted provider); seams orchestrationV2.ts:3619/3634/3637, providerPolicy.ts:58-65; full regression 16/16",
+      "follow_up": "reopened threads don't reconstruct history; diff shows first turn only; P3-2 had one release timeout on Sol-A's machine (watch for flake)"
     }
   }
 }
