@@ -11,6 +11,7 @@
     "@neometaharness/contracts": "workspace:*",
     "@neometaharness/db": "workspace:*",
     "@neometaharness/kernel": "workspace:*",
+    "@neometaharness/computers": "workspace:*",
     "@neometaharness/vault": "workspace:*",
     "@orpc/contract": "1.16.2",
     "@orpc/server": "1.16.2",

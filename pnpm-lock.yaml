@@ -172,6 +172,9 @@ importers:
 
   apps/gateway:
     dependencies:
+      '@neometaharness/computers':
+        specifier: workspace:*
+        version: link:../../packages/computers
       '@neometaharness/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -250,6 +253,15 @@ importers:
         specifier: ^7.1.0
         version: 7.3.8(@types/node@22.18.13)(tsx@4.20.6)(yaml@2.9.1)
 
+  extensions/computer-fake:
+    dependencies:
+      '@neometaharness/computers':
+        specifier: workspace:*
+        version: link:../../packages/computers
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+
   extensions/engine-dsh:
     dependencies:
       '@deepseek-ai/dsh':
@@ -261,6 +273,12 @@ importers:
       '@deepseek-ai/dsh-computer-use':
         specifier: 0.2.2-rc.1
         version: 0.2.2-rc.1(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-brand@0.2.2-rc.1(@deepseek-ai/cordis@4.1.0))
+      '@deepseek-ai/dsh-tools':
+        specifier: 0.2.2-rc.1
+        version: 0.2.2-rc.1(71e9b8099add9aaf7bb42662f07c41a3)
+      '@neometaharness/computers':
+        specifier: workspace:*
+        version: link:../../packages/computers
       '@neometaharness/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
@@ -295,6 +313,9 @@ importers:
 
   extensions/engine-hermes:
     dependencies:
+      '@neometaharness/computers':
+        specifier: workspace:*
+        version: link:../../packages/computers
       '@neometaharness/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
@@ -383,6 +404,37 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  packages/computers:
+    dependencies:
+      yaml:
+        specifier: 2.8.1
+        version: 2.8.1
+    devDependencies:
+      '@neometaharness/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@orpc/client':
+        specifier: 1.16.2
+        version: 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/contract':
+        specifier: 1.16.2
+        version: 1.16.2(@opentelemetry/api@1.10.0)
+      '@types/node':
+        specifier: 22.18.13
+        version: 22.18.13
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
+      tsx:
+        specifier: 4.20.6
+        version: 4.20.6
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      ws:
+        specifier: 8.18.3
+        version: 8.18.3
+
   packages/contracts:
     dependencies:
       '@orpc/contract':
@@ -403,6 +455,9 @@ importers:
       '@deepseek-ai/cordis':
         specifier: 4.1.0
         version: 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
+      '@neometaharness/computers':
+        specifier: workspace:*
+        version: link:../computers
       '@neometaharness/contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -5435,6 +5490,11 @@ packages:
 
   yallist@3.1.1:
     resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
+
+  yaml@2.8.1:
+    resolution: {integrity: sha512-lcYcMxX2PO9XMGvAJkJ3OsNMw+/7FKes7/hgerGUYWIoWu5j/+YQqcZr5JnPZWzOsEBgMbSbiSTn/dv/69Mkpw==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
 
   yaml@2.9.1:
     resolution: {integrity: sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==}
@@ -11303,6 +11363,8 @@ snapshots:
   xmlchars@2.2.0: {}
 
   yallist@3.1.1: {}
+
+  yaml@2.8.1: {}
 
   yaml@2.9.1: {}
 

@@ -5,10 +5,11 @@ import { WebSocketServer } from 'ws';
 import { RPCHandler as WSRPCHandler } from '@orpc/server/ws';
 import { RPCHandler as HttpRPCHandler } from '@orpc/server/node';
 import { implement, ORPCError } from '@orpc/server';
-import { neoContract, type T3Event, type HermesEvent, type DshEvent, type VaultOperation } from '@neometaharness/contracts';
+import { computerActionSchema, neoContract, type T3Event, type HermesEvent, type DshEvent, type VaultOperation } from '@neometaharness/contracts';
 import { VaultService, KeyFileProvider, type KeyProvider, type VaultScope } from '@neometaharness/vault';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
 import { NeoKernel } from '@neometaharness/kernel';
+import { ComputerRegistry } from '@neometaharness/computers';
 import { coalesceText } from './coalesce.js';
 
 export interface GatewayOptions {
@@ -27,7 +28,16 @@ export async function startGateway(options: GatewayOptions) {
   const vault = new VaultService(db, options.vaultKeyProvider ?? new KeyFileProvider(
     options.vaultKeyFile ?? join(dirname(resolve(options.databaseFile)), 'vault-keys', 'master.key'),
   ));
+  let gatewayPort = 0;
+  const computers = new ComputerRegistry(
+    () => {
+      if (!gatewayPort) throw new Error('Computer Gateway is not listening');
+      return `http://127.0.0.1:${gatewayPort}/internal/computers/action`;
+    },
+    (notice) => kernel.events.publishComputer(notice),
+  );
   const kernel = new NeoKernel(db, {
+    computers,
     vault,
     extensionDataDir: join(dirname(resolve(options.databaseFile)), 'extensions'),
   });
@@ -127,6 +137,17 @@ export async function startGateway(options: GatewayOptions) {
         return { deleted: await vault.delete(input.scope, input.name) };
       }),
     },
+    computers: {
+      list: os.computers.list.handler(async () => computers.list()),
+      attach: os.computers.attach.handler(async ({ input }) => computers.attach(input.providerId, input.target)),
+      release: os.computers.release.handler(async ({ input }) => ({ released: await computers.release(input.id) })),
+      lease: os.computers.lease.handler(async ({ input }) => computers.lease(input.id, input.holder)),
+      assign: os.computers.assign.handler(async ({ input }) => {
+        computers.assign(input.engine, input.targetId, input.computerId);
+        return input;
+      }),
+      kill: os.computers.kill.handler(async ({ input }) => computers.kill(input.engaged)),
+    },
     events: {
       subscribe: os.events.subscribe.handler(async function* ({ input, signal }) {
         yield* kernel.events.subscribe(input.since, signal);
@@ -150,6 +171,35 @@ export async function startGateway(options: GatewayOptions) {
       }
       if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
       const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+      if (path === '/internal/computers/action') {
+        if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+        const match = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.authorization ?? '');
+        if (!match) { res.writeHead(401).end(); return; }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += (chunk as Buffer).length;
+          if (size > 16_384) { res.writeHead(413).end(); return; }
+          chunks.push(chunk as Buffer);
+        }
+        let payload: unknown;
+        try {
+          payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch {
+          res.writeHead(400).end();
+          return;
+        }
+        const parsed = computerActionSchema.safeParse(payload);
+        if (!parsed.success) { res.writeHead(400).end(); return; }
+        try {
+          const result = await computers.act(match[1]!, parsed.data);
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(403, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ error: (error as Error).message }));
+        }
+        return;
+      }
       if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/')) {
         if (!kernel.hasRoute(path)) { res.writeHead(404).end(); return; }
         const matched = await httpRPC.handle(req, res);
@@ -194,10 +244,12 @@ export async function startGateway(options: GatewayOptions) {
   }
   const address = http.address();
   if (!address || typeof address === 'string') throw new Error('Unexpected gateway address');
+  gatewayPort = address.port;
   return {
     port: address.port,
     kernel,
     vault,
+    computers,
     async close() {
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((done) => wss.close(() => done()));

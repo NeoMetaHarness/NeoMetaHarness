@@ -118,7 +118,8 @@ async function trial(index: number): Promise<void> {
       await client.extensions.enable({ id: 'sample-ts' });
       await client.extensions.enable({ id: 'sample-py' });
       await streamDone;
-      assert.deepEqual(seen.map(({ extensionId, status }) => `${extensionId}:${status}`), [
+      assert.deepEqual(seen.filter((event) => event.type === 'extension.state')
+        .map(({ extensionId, status }) => `${extensionId}:${status}`), [
         'sample-ts:running', 'sample-py:running', 'sample-ts:disabled',
         'sample-py:disabled', 'sample-ts:running', 'sample-py:running',
       ]);

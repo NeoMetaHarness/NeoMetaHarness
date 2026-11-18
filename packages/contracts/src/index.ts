@@ -9,12 +9,34 @@ export const extensionStatusSchema = z.object({
   health: z.object({ ok: z.boolean(), pid: z.number().optional() }).optional(),
 });
 
-export const gatewayEventSchema = z.object({
-  seq: z.number().int(),
-  extensionId: z.string(),
-  status: z.enum(['running', 'disabled', 'degraded']),
-  type: z.literal('extension.state'),
+export const computerActionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('capture') }),
+  z.object({ action: z.literal('click'), x: z.number().finite(), y: z.number().finite() }),
+  z.object({ action: z.literal('type'), text: z.string().max(10000) }),
+  z.object({ action: z.literal('key'), keys: z.string().max(256) }),
+  z.object({ action: z.literal('scroll'), direction: z.string().max(24), amount: z.number().finite() }),
+]);
+
+const computerInfoSchema = z.object({
+  id: z.string(), providerId: z.string(),
+  capabilities: z.object({
+    screen: z.boolean(), input: z.boolean(), browserCdp: z.boolean(),
+    shell: z.boolean(), files: z.boolean(), snapshot: z.boolean(),
+    gpu: z.boolean().optional(),
+  }),
+  holder: z.enum(['agent', 'human']),
 });
+
+export const gatewayEventSchema = z.discriminatedUnion('type', [
+  z.object({ seq: z.number().int(), extensionId: z.string(),
+    status: z.enum(['running', 'disabled', 'degraded']), type: z.literal('extension.state') }),
+  z.object({ seq: z.number().int(), type: z.literal('computer.acting'),
+    computerId: z.string(), engine: z.string(), active: z.boolean(),
+    action: z.enum(['click', 'type', 'capture', 'key', 'scroll']) }),
+  z.object({ seq: z.number().int(), type: z.literal('computer.lease'),
+    computerId: z.string(), holder: z.enum(['agent', 'human']) }),
+  z.object({ seq: z.number().int(), type: z.literal('computer.kill'), engaged: z.boolean() }),
+]);
 
 export type GatewayEvent = z.infer<typeof gatewayEventSchema>;
 export type ExtensionStatus = z.infer<typeof extensionStatusSchema>;
@@ -47,7 +69,7 @@ export const t3Contract = {
 export const dshEventSchema = t3EventSchema;
 export type DshEvent = z.infer<typeof dshEventSchema>;
 export const dshContract = {
-  create: oc.input(z.object({ workspaceId: z.string().min(1), cwd: z.string().min(1) }))
+  create: oc.input(z.object({ workspaceId: z.string().min(1), cwd: z.string().min(1), computerId: z.string().min(1).optional() }))
     .output(z.object({ sessionId: z.string(), pid: z.number().int().positive() })),
   prompt: oc.input(z.object({ sessionId: z.string(), text: z.string().min(1) }))
     .output(z.object({ messageId: z.string() })),
@@ -122,6 +144,18 @@ export const neoContract = {
     put: oc.input(vaultWriteSchema).output(vaultMetadataSchema),
     rotate: oc.input(vaultWriteSchema).output(vaultMetadataSchema),
     delete: oc.input(vaultSelectorSchema).output(z.object({ deleted: z.boolean() })),
+  },
+  computers: {
+    list: oc.output(z.array(computerInfoSchema)),
+    attach: oc.input(z.object({ providerId: z.string().min(1), target: z.string().min(1) }))
+      .output(computerInfoSchema),
+    release: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ released: z.boolean() })),
+    lease: oc.input(z.object({ id: z.string().min(1), holder: z.enum(['agent', 'human']) }))
+      .output(computerInfoSchema),
+    assign: oc.input(z.object({
+      engine: z.enum(['hermes', 'dsh']), targetId: z.string().min(1), computerId: z.string().min(1),
+    })).output(z.object({ engine: z.string(), targetId: z.string(), computerId: z.string() })),
+    kill: oc.input(z.object({ engaged: z.boolean() })).output(z.object({ engaged: z.boolean() })),
   },
   events: {
     subscribe: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DatabaseProvider } from '@neometaharness/db';
 import type { ExtensionStatus, GatewayEvent } from '@neometaharness/contracts';
+import type { ComputerNotice } from '@neometaharness/computers';
 import { dependencyProblem, loadManifest, resolveOrder, type LocatedExtension } from './manifest.js';
 import { ExtensionProcess } from './process.js';
 
@@ -37,6 +38,13 @@ export class GatewayEvents {
 
   publish(extensionId: string, status: ExtensionStatus['status']): void {
     const event: GatewayEvent = { seq: ++this.nextSeq, extensionId, status, type: 'extension.state' };
+    this.history.push(event);
+    if (this.history.length > 1000) this.history.shift();
+    for (const listener of this.listeners) listener(event);
+  }
+
+  publishComputer(notice: ComputerNotice): void {
+    const event: GatewayEvent = { seq: ++this.nextSeq, ...notice };
     this.history.push(event);
     if (this.history.length > 1000) this.history.shift();
     for (const listener of this.listeners) listener(event);

@@ -73,6 +73,7 @@ export default function Extensions() {
       if (event.seq <= latest.current) return;
       latest.current = event.seq;
       setConnection('Live');
+      if (event.type !== 'extension.state') return;
       setObserved((previous) => ({ ...previous, [event.extensionId]: event.seq }));
       setRows((previous) => previous.map((row) => row.id === event.extensionId
         ? { ...row, status: event.status, desired: event.status !== 'disabled', health: event.status === 'disabled' ? undefined : row.health }
