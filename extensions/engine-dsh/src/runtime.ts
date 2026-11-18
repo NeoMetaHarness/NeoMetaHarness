@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { DshEvent } from '@neometaharness/contracts';
 import { DshProjector, type VaultService } from '@neometaharness/vault';
 import type { ComputerRegistry } from '@neometaharness/computers';
+import type { SkillsBridge } from '@neometaharness/kernel';
 
 const extensionRoot = fileURLToPath(new URL('../', import.meta.url));
 const cli = join(extensionRoot, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
@@ -202,7 +203,7 @@ export class DshAgentRuntime {
   private closing = false;
 
   constructor(private readonly vault: VaultService, private readonly dataDir: string,
-    private readonly computers?: ComputerRegistry) {}
+    private readonly computers?: ComputerRegistry, private readonly skills?: SkillsBridge) {}
 
   async create(input: { workspaceId: string; cwd: string; computerId?: string }): Promise<{ sessionId: string; pid: number }> {
     if (this.closing) throw new Error('DSH runtime is stopped');
@@ -219,6 +220,13 @@ export class DshAgentRuntime {
     await mkdir(this.dataDir, { recursive: true });
     const stateDir = join(this.dataDir, randomUUID());
     await mkdir(stateDir);
+    try {
+      await this.skills?.dshReady(sessionId, join(stateDir, 'home'));
+    } catch (error) {
+      this.skills?.forgetDsh(sessionId);
+      await rm(stateDir, { recursive: true, force: true });
+      throw error;
+    }
     const patchSource = await readFile(join(extensionRoot, 'cordis.patch.yml'), 'utf8');
     let patch = patchSource;
     for (const name of ['@deepseek-ai/dsh-computer-use', '@deepseek-ai/dsh-browser-use']) {
@@ -251,6 +259,7 @@ export class DshAgentRuntime {
     } catch (error) {
       await session.stop(true);
       this.computers?.unassign('dsh', sessionId);
+      this.skills?.forgetDsh(sessionId);
       throw error;
     }
   }
@@ -270,6 +279,7 @@ export class DshAgentRuntime {
     await session.stop(true);
     this.sessions.delete(input.sessionId);
     this.computers?.unassign('dsh', input.sessionId);
+    this.skills?.forgetDsh(input.sessionId);
     return { cancelled: true };
   }
 
@@ -278,6 +288,7 @@ export class DshAgentRuntime {
     await session.stop();
     this.sessions.delete(input.sessionId);
     this.computers?.unassign('dsh', input.sessionId);
+    this.skills?.forgetDsh(input.sessionId);
     return { stopped: true };
   }
 
@@ -285,6 +296,7 @@ export class DshAgentRuntime {
     this.closing = true;
     await Promise.all([...this.sessions.values()].map((session) => session.stop(true)));
     for (const id of this.sessions.keys()) this.computers?.unassign('dsh', id);
+    for (const id of this.sessions.keys()) this.skills?.forgetDsh(id);
     this.sessions.clear();
   }
 }

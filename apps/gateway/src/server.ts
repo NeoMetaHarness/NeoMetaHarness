@@ -16,6 +16,7 @@ import {
   type VaultOperation,
   type InboxItem,
   type InboxEvent,
+  type RegistrySkill,
 } from '@neometaharness/contracts';
 import {
   VaultService,
@@ -24,7 +25,7 @@ import {
   type VaultScope,
 } from '@neometaharness/vault';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
-import { NeoKernel } from '@neometaharness/kernel';
+import { NeoKernel, SkillsBridge } from '@neometaharness/kernel';
 import { ComputerRegistry } from '@neometaharness/computers';
 import {
   createNeoAuth,
@@ -145,13 +146,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       return { endpoint: `http://127.0.0.1:${gatewayPort}/internal/memory`, token, profile };
     },
   };
-
+  const skillsBridge = new SkillsBridge();
   const kernel = new NeoKernel(db, {
     computers,
     vault,
     auth,
     memoryRecords: (db as any).memories,
     memoryBridge,
+    skillsBridge,
     extensionDataDir: join(dirname(resolve(options.databaseFile)), 'extensions'),
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
   });
@@ -209,7 +211,12 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Local memory extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
-
+  const invokeSkills = async (route: string, body: unknown) => {
+    const path = `/x/skills-registry/${route}`;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Skill registry extension is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
+  type SkillRecord = RegistrySkill;
   const withHealth = async (id: string) => {
     const health = await kernel.health(id).catch(() => ({ ok: false }));
     return { ...kernel.status(id), ...(health ? { health } : {}) };
@@ -237,6 +244,44 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }),
     },
     x: {
+      'skills-registry': {
+        list: os.x['skills-registry'].list.handler(async ({ context }) => {
+          requireViewer(context);
+          return invokeSkills('list', {}) as Promise<SkillRecord[]>;
+        }),
+        get: os.x['skills-registry'].get.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeSkills('get', input) as Promise<{ metadata: SkillRecord; content: string }>;
+        }),
+        import: os.x['skills-registry'].import.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeSkills('import', input) as Promise<SkillRecord>;
+        }),
+        sync: os.x['skills-registry'].sync.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeSkills('sync', input) as Promise<SkillRecord[]>;
+        }),
+        versions: os.x['skills-registry'].versions.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeSkills('versions', input) as Promise<{ version: number; hash: string; metadata: SkillRecord }[]>;
+        }),
+        diff: os.x['skills-registry'].diff.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeSkills('diff', input) as Promise<{ diff: string }>;
+        }),
+        rollback: os.x['skills-registry'].rollback.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeSkills('rollback', input) as Promise<SkillRecord>;
+        }),
+        assign: os.x['skills-registry'].assign.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeSkills('assign', input) as Promise<{ assigned: boolean }>;
+        }),
+        assignments: os.x['skills-registry'].assignments.handler(async ({ context }) => {
+          requireViewer(context);
+          return invokeSkills('assignments', {}) as Promise<{ name: string; engine: 'hermes' | 'dsh'; targetId: string }[]>;
+        }),
+      },
       'memory-local': {
         list: os.x['memory-local'].list.handler(async ({ input, context }) => {
           requireViewer(context);
@@ -614,7 +659,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/')) {
+      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/skills-registry/')) {
         if (!kernel.hasRoute(path) && context.role && context.role !== 'viewer') {
           res.writeHead(404).end();
           return;

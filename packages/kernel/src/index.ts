@@ -7,6 +7,7 @@ import type { ExtensionStatus, GatewayEvent } from '@neometaharness/contracts';
 import type { ComputerNotice } from '@neometaharness/computers';
 import { dependencyProblem, loadManifest, resolveOrder, type LocatedExtension } from './manifest.js';
 import { ExtensionProcess } from './process.js';
+export { SkillsBridge, type SkillProjection } from './skills.js';
 
 export { dependencyProblem, loadManifest, resolveOrder } from './manifest.js';
 export type { ExtensionManifest, LocatedExtension } from './manifest.js';

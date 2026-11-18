@@ -3,6 +3,7 @@ import type { ComputerRegistry } from '@neometaharness/computers';
 import { projectHermesComputer } from '@neometaharness/computers/hermes';
 import { HermesRuntime, ProfileFileCredentials, VaultCredentials } from './runtime.js';
 import { projectHermesMemory, type MemoryBridge } from './memory.js';
+import type { SkillsBridge } from '@neometaharness/kernel';
 import type { VaultService } from '@neometaharness/vault';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,10 +15,12 @@ export default defineExtension({
     const credentials = vault ? new VaultCredentials(vault, home) : new ProfileFileCredentials(home);
     const computers = ctx.inject<ComputerRegistry>('computers');
     const memory = ctx.inject<MemoryBridge>('memoryBridge');
+    const skillsBridge = ctx.inject<SkillsBridge>('skillsBridge');
     const service = new HermesRuntime(credentials, async (profile, profileHome) => {
       const computerVersion = computers ? await projectHermesComputer(computers, profile, profileHome) : undefined;
       const memoryVersion = await projectHermesMemory(memory, profile, profileHome);
-      return JSON.stringify([computerVersion, memoryVersion]);
+      const skillsVersion = await skillsBridge?.hermesReady(profile, profileHome);
+      return JSON.stringify([computerVersion, memoryVersion, skillsVersion]);
     });
     await service.start();
     ctx.provide('agentRuntime', service);
@@ -26,7 +29,12 @@ export default defineExtension({
 
     ctx.route('profiles/list', () => service.listProfiles());
     ctx.route('profiles/create', ({ body }) => service.createProfile((body as { name: string }).name));
-    ctx.route('profiles/delete', ({ body }) => service.deleteProfile((body as { name: string }).name));
+    ctx.route('profiles/delete', async ({ body }) => {
+      const name = (body as { name: string }).name;
+      const result = await service.deleteProfile(name);
+      skillsBridge?.forgetHermes(name);
+      return result;
+    });
     ctx.route('runs/start', ({ body }) => {
       const { profile, input } = body as { profile: string; input: string };
       return service.startRun(profile, input);
@@ -56,11 +64,44 @@ export default defineExtension({
       const { profile, paused } = body as { profile: string; paused: boolean };
       return service.pauseCurator(profile, paused);
     });
-    ctx.route('skills/run', ({ body }) => service.runCurator((body as { profile: string }).profile));
+    let active = true;
+    ctx.effect(() => () => { active = false; });
+    const syncAfterRun = async (profile: string, runId: string) => {
+      try {
+        for await (const event of service.events(profile, runId)) {
+          if (!active) break;
+          if (event.type === 'run.completed') {
+            await skillsBridge?.sync(profile);
+            break;
+          }
+          if (event.type === 'run.failed' || event.type === 'run.cancelled' || event.type === 'run.interrupted') break;
+        }
+      } catch (error) {
+        if (active) console.error('Skill registry learn sync failed', error);
+      }
+    };
+    ctx.route('skills/run', async ({ body }) => {
+      const profile = (body as { profile: string }).profile;
+      const result = await service.runCurator(profile);
+      if (result.ok && result.pid > 0) {
+        void (async () => {
+          for (let check = 0; check < 300 && active; check++) {
+            await new Promise<void>((done) => setTimeout(done, 1000));
+            try { process.kill(result.pid, 0); } catch {
+              if (active) await skillsBridge?.sync(profile);
+              return;
+            }
+          }
+        })().catch((error) => { if (active) console.error('Skill registry curator sync failed', error); });
+      }
+      return result;
+    });
     ctx.route('skills/graph', ({ body }) => service.learningGraph((body as { profile: string }).profile));
-    ctx.route('skills/learn', ({ body }) => {
+    ctx.route('skills/learn', async ({ body }) => {
       const { profile, description } = body as { profile: string; description: string };
-      return service.learn(profile, description);
+      const result = await service.learn(profile, description);
+      if (skillsBridge) void syncAfterRun(profile, result.run_id);
+      return result;
     });
   },
 });

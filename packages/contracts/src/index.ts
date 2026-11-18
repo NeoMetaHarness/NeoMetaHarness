@@ -201,8 +201,34 @@ export const memoryContract = {
   })),
 };
 
+const skillName = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);
+const skillTrust = z.enum(['untrusted', 'observed', 'confirmed']);
+export const registrySkillSchema = z.object({
+  name: skillName, version: z.number().int().positive(), trust: skillTrust,
+  sourceProfile: z.string(), sourcePath: z.string(), updatedAt: z.number().int(),
+});
+export type RegistrySkill = z.infer<typeof registrySkillSchema>;
+const skillTarget = z.object({ name: skillName, engine: z.enum(['hermes', 'dsh']), targetId: z.string().min(1) });
+export const skillsRegistryContract = {
+  list: oc.output(z.array(registrySkillSchema)),
+  get: oc.input(z.object({ name: skillName })).output(z.object({ metadata: registrySkillSchema, content: z.string() })),
+  import: oc.input(z.object({
+    name: skillName, content: z.string().min(1).max(200000), sourceProfile: skillName,
+    sourcePath: z.string(), trust: skillTrust.optional(),
+  })).output(registrySkillSchema),
+  sync: oc.input(z.object({ profile: skillName })).output(z.array(registrySkillSchema)),
+  versions: oc.input(z.object({ name: skillName })).output(z.array(z.object({
+    version: z.number().int().positive(), hash: z.string(), metadata: registrySkillSchema,
+  }))),
+  diff: oc.input(z.object({ name: skillName, from: z.number().int().positive(), to: z.number().int().positive() }))
+    .output(z.object({ diff: z.string() })),
+  rollback: oc.input(z.object({ name: skillName, version: z.number().int().positive() })).output(registrySkillSchema),
+  assign: oc.input(skillTarget.extend({ assigned: z.boolean() })).output(z.object({ assigned: z.boolean() })),
+  assignments: oc.output(z.array(skillTarget)),
+};
+
 const baseNeoContract = {
-  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract },
+  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'skills-registry': skillsRegistryContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),

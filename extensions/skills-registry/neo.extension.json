@@ -1,0 +1,7 @@
+{
+  "id": "skills-registry",
+  "version": "0.1.0",
+  "displayName": "Neo Skill Registry",
+  "kind": ["skills"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}

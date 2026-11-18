@@ -1,3 +1,6 @@
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 export const name = 'neo-dsh-providers';
 export const inject = ['computerUse', 'browserUse', 'llm'];
 
@@ -12,6 +15,10 @@ const scriptedAdapter = {
   },
   async *stream({ signal, messages }) {
     if (signal?.aborted) throw signal.reason;
+    // The scripted adapter is a fixture. Record its actual model input in the isolated DSH home.
+    if (process.env.DSH_HOME) {
+      appendFileSync(join(process.env.DSH_HOME, 'scripted-model-input.jsonl'), JSON.stringify(messages) + '\n');
+    }
     if (process.env.NEO_COMPUTER_ENDPOINT && !scriptedToolCalled
         && JSON.stringify(messages).includes('trigger_neo_computer')) {
       scriptedToolCalled = true;

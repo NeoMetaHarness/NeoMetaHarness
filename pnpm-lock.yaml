@@ -508,6 +508,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/kernel
 
+  extensions/skills-registry:
+    dependencies:
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+    devDependencies:
+      '@types/node':
+        specifier: 22.18.13
+        version: 22.18.13
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   packages/agents:
     dependencies:
       '@neometaharness/contracts':

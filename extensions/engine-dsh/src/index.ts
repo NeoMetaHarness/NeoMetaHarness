@@ -3,6 +3,7 @@ import type { VaultService } from '@neometaharness/vault';
 import type { ComputerRegistry } from '@neometaharness/computers';
 import { join } from 'node:path';
 import { DshAgentRuntime } from './runtime.js';
+import type { SkillsBridge } from '@neometaharness/kernel';
 
 export default defineExtension({
   activate(ctx) {
@@ -10,7 +11,8 @@ export default defineExtension({
     const dataDir = ctx.inject<string>('extensionDataDir');
     const computers = ctx.inject<ComputerRegistry>('computers');
     if (!vault || !dataDir) throw new Error('DSH requires Gateway vault and extension storage');
-    const runtime = new DshAgentRuntime(vault, join(dataDir, 'engine-dsh'), computers);
+    const bridge = ctx.inject<SkillsBridge>('skillsBridge');
+    const runtime = new DshAgentRuntime(vault, join(dataDir, 'engine-dsh'), computers, bridge);
     ctx.provide('dshAgentRuntime', runtime);
     ctx.effect(() => () => runtime.stop());
     ctx.health(() => ({ ok: true }));
