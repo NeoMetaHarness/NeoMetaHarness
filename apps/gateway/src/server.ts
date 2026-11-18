@@ -97,6 +97,26 @@ export interface GatewayInstance {
 
 const defaultExtensions = fileURLToPath(new URL('../../../extensions/', import.meta.url));
 
+/** Browser origins allowed to call the gateway: loopback dev shells and the Tauri webview. */
+const ALLOWED_ORIGIN = /^(?:https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?|https?:\/\/tauri\.localhost|tauri:\/\/localhost)$/;
+
+/**
+ * DNS-rebinding and cross-site guard shared by HTTP and WS. The gateway only
+ * listens on loopback, so a Host naming anything else means a browser was
+ * pointed here through a rebound hostname. A present Origin must be one of
+ * the app's own origins (Better Auth's CSRF check is disabled). Extra hosts,
+ * e.g. behind a reverse proxy, come from NEO_ALLOWED_HOSTS (comma separated).
+ */
+function refuseRequest(headers: { host?: string; origin?: string }, port: number): 421 | 403 | undefined {
+  const extra = (process.env.NEO_ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+  const host = (headers.host ?? '').toLowerCase();
+  const loopback = [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
+  if (!loopback.includes(host) && !extra.includes(host)) return 421;
+  if (headers.origin && !ALLOWED_ORIGIN.test(headers.origin)
+    && !extra.some((h) => headers.origin === `https://${h}` || headers.origin === `http://${h}`)) return 403;
+  return undefined;
+}
+
 function resolveOrGenerateSecret(dataDir: string, explicitSecret?: string): string {
   if (explicitSecret) return explicitSecret;
   const secretPath = join(dataDir, 'auth.secret');
@@ -796,9 +816,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
   const http = createServer(async (req, res) => {
     try {
+      const refused = refuseRequest(req.headers, gatewayPort);
+      if (refused) { res.writeHead(refused).end(); return; }
       const origin = req.headers.origin;
       // The web/PWA shell runs on a separate localhost port during development.
-      if (origin && /^(?:https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?|https?:\/\/tauri\.localhost|tauri:\/\/localhost)$/.test(origin)) {
+      if (origin && ALLOWED_ORIGIN.test(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Vary', 'Origin');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -1009,9 +1031,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       socket.destroy();
       return;
     }
-    const origin = req.headers.origin;
-    if (origin && !/^(?:https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?|https?:\/\/tauri\.localhost|tauri:\/\/localhost)$/.test(origin)) {
-      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    const refused = refuseRequest(req.headers, gatewayPort);
+    if (refused) {
+      socket.write(refused === 421 ? 'HTTP/1.1 421 Misdirected Request\r\n\r\n' : 'HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
     }

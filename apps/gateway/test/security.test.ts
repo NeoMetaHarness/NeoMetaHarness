@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { request as httpRequest } from 'node:http';
 import { startGateway } from '../src/server.js';
 
 type Gateway = Awaited<ReturnType<typeof startGateway>>;
@@ -105,5 +106,33 @@ test('SEC-03b: an API key can narrow but never widen its owner\'s membership rol
     const widened = await mint(viewer.token!, 'owner');
     assert.equal((await fetch(`${base}/extensions/disable`, json({ json: { id: 'sample-ts' } }, { 'x-api-key': widened }))).status, 403,
       'viewer key claiming owner is capped at viewer');
+  });
+});
+
+function rawRequest(port: number, path: string, headers: Record<string, string>, body = ''): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method: body ? 'POST' : 'GET', headers }, (res) => {
+      res.resume(); resolve(res.statusCode ?? 0);
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+test('SEC-04: requests carrying a non-loopback Host (DNS rebinding) or a foreign Origin are refused before any handler', async () => {
+  await withGateway('server', async (gateway, base) => {
+    const port = gateway.port;
+    const signup = JSON.stringify({ email: 'rebind@evil.test', password: 'Attacker!Pass123', name: 'x' });
+    const ct = { 'content-type': 'application/json' };
+    assert.equal(await rawRequest(port, '/auth/sign-up/email', { ...ct, host: `rebind.evil.test:${port}` }, signup), 421,
+      'a rebound hostname must not reach the auth API');
+    assert.equal(await rawRequest(port, '/auth/sign-up/email', { ...ct, host: `127.0.0.1:${port}`, origin: 'https://evil.test' }, signup), 403,
+      'a foreign Origin must not drive the auth API (CSRF check is disabled in Better Auth)');
+    const ws = await rawRequest(port, '/ws', { host: `rebind.evil.test:${port}`, connection: 'Upgrade', upgrade: 'websocket',
+      'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==' }).catch(() => 0);
+    assert.notEqual(ws, 101, 'a rebound hostname must not open a WebSocket');
+    // Legitimate loopback and app origins keep working.
+    assert.equal(await rawRequest(port, '/auth/sign-up/email', { ...ct, host: `localhost:${port}`, origin: 'http://localhost:5173' }, signup), 200);
+    assert.equal((await fetch(`${base}/auth/ok`)).status, 200);
   });
 });
