@@ -293,7 +293,7 @@ async function trial(previewPort) {
         setter.call(input, 'The papaya protocol keeps project context in local Neo memory.');
         input.dispatchEvent(new Event('input', { bubbles: true }));
       })()`);
-      await page.eventually('!document.querySelector("[data-testid=memory-save]").disabled', 'memory add enabled');
+      await page.eventually('!(document.querySelector("[data-testid=memory-save]")?.disabled || document.querySelector("[data-testid=memory-save]")?.getAttribute("aria-disabled") === "true")', 'memory add enabled');
       await page.evaluate('document.querySelector("[data-testid=memory-save]").click()');
       await page.eventually('document.querySelector("[data-testid=memory-list]")?.textContent?.includes("papaya protocol")', 'UI stored memory');
       const entries = await rpc.x['memory-local'].list({ workspace: 'default' });

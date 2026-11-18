@@ -278,7 +278,7 @@ async function trial(previewPort) {
         setter.call(input, 'neo_ui');
         input.dispatchEvent(new Event('input', { bubbles: true }));
       })()`);
-      await page.eventually('!document.querySelector(".agents-create button[type=submit]").disabled', 'create action enabled');
+      await page.eventually('!(document.querySelector(".agents-create button[type=submit]")?.disabled || document.querySelector(".agents-create button[type=submit]")?.getAttribute("aria-disabled") === "true")', 'create action enabled');
       await page.evaluate('document.querySelector(".agents-create button[type=submit]").click()');
       await page.eventually('!!document.querySelector("[data-testid=bot-neo_ui]")', 'new bot in list');
       await page.eventually('document.querySelector(".agents-conversation-title h2")?.textContent === "neo_ui"', 'new bot opened');

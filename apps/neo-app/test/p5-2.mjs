@@ -238,7 +238,7 @@ async function main() {
       title: document.querySelector('[data-testid=coding-title]')?.value,
       provider: document.querySelector('[data-testid=coding-provider]')?.value,
       model: document.querySelector('[data-testid=coding-model]')?.value,
-      disabled: document.querySelector('.coding-create button[type=submit]')?.disabled
+      disabled: (document.querySelector('.coding-create button[type=submit]')?.disabled || document.querySelector('.coding-create button[type=submit]')?.getAttribute("aria-disabled") === "true")
     })`));
     await viewer.evaluate('document.querySelector(".coding-create button[type=submit]").click()');
     try {
@@ -248,7 +248,7 @@ async function main() {
         status: document.querySelector('[data-testid=coding-status]')?.textContent,
         alert: document.querySelector('[role=alert]')?.textContent,
         content: document.querySelector('.coding-conversation')?.innerText?.slice(0, 900),
-        disabled: document.querySelector('.coding-create button[type=submit]')?.disabled
+        disabled: (document.querySelector('.coding-create button[type=submit]')?.disabled || document.querySelector('.coding-create button[type=submit]')?.getAttribute("aria-disabled") === "true")
       })`));
       console.log('P5-2_REMOTE_THREADS', (await rpc.x['engine-t3'].threads.list()).threads.length);
       throw error;

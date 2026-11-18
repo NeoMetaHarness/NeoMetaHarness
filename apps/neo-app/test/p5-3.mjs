@@ -302,7 +302,7 @@ async function trial(previewPort) {
         setter.call(input, ${JSON.stringify(prompt)});
         input.dispatchEvent(new Event('input', { bubbles: true }));
       })()`);
-      await page.eventually('!document.querySelector(".inbox-composer button[type=submit]")?.disabled', 'Ask Neo submit ready');
+      await page.eventually('!(document.querySelector(".inbox-composer button[type=submit]")?.disabled || document.querySelector(".inbox-composer button[type=submit]")?.getAttribute("aria-disabled") === "true")', 'Ask Neo submit ready');
       await page.evaluate('document.querySelector(".inbox-composer button[type=submit]").click()');
       await page.eventually(`!![...document.querySelectorAll('.inbox-item')].find(row => row.querySelector('.inbox-request')?.textContent === ${JSON.stringify(prompt)})`, 'Inbox ticket created');
     }

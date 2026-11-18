@@ -307,7 +307,7 @@ async function trial(previewPort) {
         setter.call(input, 'Learn a reusable workflow for checking inputs and outputs');
         input.dispatchEvent(new Event('input', { bubbles: true }));
       })()`);
-      await page.eventually('!document.querySelector("[data-testid=learn-submit]").disabled', 'learn action enabled');
+      await page.eventually('!(document.querySelector("[data-testid=learn-submit]")?.disabled || document.querySelector("[data-testid=learn-submit]")?.getAttribute("aria-disabled") === "true")', 'learn action enabled');
       await page.evaluate('document.querySelector("[data-testid=learn-submit]").click()');
       await page.eventually('document.querySelector("[data-testid=learn-status]")?.textContent === "Completed"', 'learned run terminal state');
       await page.eventually('!!document.querySelector("[data-testid=skill-neo-learned-workflow]")', 'learned skill visible in library');

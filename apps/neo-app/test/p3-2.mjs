@@ -240,7 +240,7 @@ async function main() {
           if (['run.completed', 'run.failed', 'run.cancelled'].includes(event.type)) break;
         }
       })(), new Promise((_, reject) => {
-        runTimeout = setTimeout(() => reject(new Error('Hermes run timed out')), 120000);
+        runTimeout = setTimeout(() => reject(new Error('Hermes run timed out; events=' + JSON.stringify(events.map((event) => event.type)))), 120000);
       })]);
     } finally { clearTimeout(runTimeout); socket.close(); }
     assert.ok(events.some((event) => event.type === 'run.completed'), JSON.stringify(events.slice(-10)));
@@ -266,22 +266,18 @@ async function main() {
     await viewer.evaluate('document.querySelector("[data-testid=computer-lease]").click()');
     await eventually(async () => (await rpc.computers.list())[0]?.holder === 'human', 'human takeover');
     assert.equal((await agentAction()).status, 403, 'human lease blocks agent clicks');
-    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=computer-lease]")?.textContent?.includes("Hand back") && !document.querySelector("[data-testid=computer-lease]").disabled'), 'handback control ready');
-    await eventually(async () => {
-      await viewer.evaluate('document.querySelector("[data-testid=computer-lease]")?.click()');
-      return (await rpc.computers.list())[0]?.holder === 'agent';
-    }, 'hand back');
+    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=computer-lease]")?.textContent?.includes("Hand back") && !(document.querySelector("[data-testid=computer-lease]")?.disabled || document.querySelector("[data-testid=computer-lease]")?.getAttribute("aria-disabled") === "true")'), 'handback control ready');
+    await viewer.evaluate('document.querySelector("[data-testid=computer-lease]").click()');
+    await eventually(async () => (await rpc.computers.list())[0]?.holder === 'agent', 'hand back');
     assert.equal((await agentAction()).status, 200, 'handback restores input');
-    await eventually(() => viewer.evaluate('!document.querySelector("[data-testid=stop-all-agents]")?.disabled'), 'stop control ready');
+    await eventually(() => viewer.evaluate('!(document.querySelector("[data-testid=stop-all-agents]")?.disabled || document.querySelector("[data-testid=stop-all-agents]")?.getAttribute("aria-disabled") === "true")'), 'stop control ready');
     await viewer.evaluate('document.querySelector("[data-testid=stop-all-agents]").click()');
     await eventually(async () => (await rpc.computers.state()).engaged, 'global kill switch');
     assert.equal((await agentAction()).status, 403, 'kill switch blocks input');
     assert.ok(events.some((event) => event.type === 'run.completed'));
-    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=stop-all-agents]")?.textContent?.includes("Resume agents") && !!document.querySelector("[data-testid=computer-release]") && !document.querySelector("[data-testid=computer-release]").disabled'), 'release control ready');
-    await eventually(async () => {
-      await viewer.evaluate('document.querySelector("[data-testid=computer-release]")?.click()');
-      return !(await rpc.computers.list()).some((computer) => computer.id === 'shared-chrome');
-    }, 'release');
+    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=stop-all-agents]")?.textContent?.includes("Resume agents") && !!document.querySelector("[data-testid=computer-release]") && !(document.querySelector("[data-testid=computer-release]")?.disabled || document.querySelector("[data-testid=computer-release]")?.getAttribute("aria-disabled") === "true")'), 'release control ready');
+    await viewer.evaluate('document.querySelector("[data-testid=computer-release]").click()');
+    await eventually(async () => !(await rpc.computers.list()).some((computer) => computer.id === 'shared-chrome'), 'release');
     await eventually(() => !isAlive(pid), 'Chrome PID exits', 15000);
     assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).status, 200);
     await unregister();
