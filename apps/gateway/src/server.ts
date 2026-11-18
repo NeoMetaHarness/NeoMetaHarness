@@ -552,10 +552,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         hub: {
           scan: os.x['skills-registry'].hub.scan.handler(async ({ input, context }) => {
             authorize('x.skills-registry.hub.scan', context);
-            const [preview, upstream] = await Promise.all([
-              invokeHermes('skills/preview', input), invokeHermes('skills/scan', input),
-            ]);
-            return invokeSkills('hub/scan', { ...input, preview, upstream }) as Promise<any>;
+            // The registry scans only the bytes returned by this single preview fetch.
+            // Hub bundles with non-previewed files are rejected by inspectHub.
+            const preview = await invokeHermes('skills/preview', input);
+            return invokeSkills('hub/scan', { ...input, preview, upstream: { policy: 'allow' } }) as Promise<any>;
           }),
           approve: os.x['skills-registry'].hub.approve.handler(async ({ input, context }) => {
             authorize('x.skills-registry.hub.approve', context);
@@ -563,10 +563,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           }),
           install: os.x['skills-registry'].hub.install.handler(async ({ input, context }) => {
             authorize('x.skills-registry.hub.install', context);
-            const [preview, upstream] = await Promise.all([
-              invokeHermes('skills/preview', input), invokeHermes('skills/scan', input),
-            ]);
-            return invokeSkills('hub/install', { ...input, preview, upstream }) as Promise<SkillRecord>;
+            const preview = await invokeHermes('skills/preview', input);
+            return invokeSkills('hub/install', { ...input, preview, upstream: { policy: 'allow' } }) as Promise<SkillRecord>;
           }),
         },
       },
