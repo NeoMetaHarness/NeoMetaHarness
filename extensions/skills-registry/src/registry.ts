@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { appendFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, unlink, rmdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { parse } from 'yaml';
 import { inspectHub, type HubPreview, type HubReport, type UpstreamScan } from './hub.js';
 import type { SkillProjection } from '@neometaharness/kernel';
 
@@ -34,16 +33,6 @@ export type SkillRecord = {
   evaluation?: Evaluation; provenance?: string;
 };
 
-function declaredAutonomy(content: string): Autonomy {
-  const frontmatter = /^---\s*\n([\s\S]*?)\n---\s*\n/.exec(content);
-  const parsed = parse(frontmatter?.[1] ?? '') as { autonomy?: unknown } | null;
-  const autonomy = parsed?.autonomy ?? 'suggest';
-  if (autonomy !== 'suggest' && autonomy !== 'auto-low' && autonomy !== 'auto') {
-    throw new Error('Autonomy must be suggest, auto-low, or auto');
-  }
-  return autonomy;
-}
-
 function safeIdentity(name: string): string {
   if (!validIdentity.test(name)) throw new Error(`Invalid skill identity ${name}`);
   return name;
@@ -66,6 +55,7 @@ export class SkillRegistry implements SkillProjection {
   private readonly assignmentsFile: string;
   private readonly evaluationsFile: string;
   private readonly checksFile: string;
+  private readonly autonomyFile: string;
   private readonly auditFile: string;
   private readonly ceilingsFile: string;
   private readonly hubReportsFile: string;
@@ -73,6 +63,7 @@ export class SkillRegistry implements SkillProjection {
   private hubReports: Record<string, HubReport> = {};
   private evaluations: Record<string, Evaluation> = {};
   private checkSuites: Record<string, SkillCheck[]> = {};
+  private skillAutonomies: Record<string, Autonomy> = {};
   private assignments: Assignment[] = [];
   private readonly homes = new Map<string, string>();
   private readonly seen = new Map<string, Map<string, string>>();
@@ -85,6 +76,7 @@ export class SkillRegistry implements SkillProjection {
     this.assignmentsFile = join(dataDir, 'assignments.json');
     this.evaluationsFile = join(dataDir, 'evaluations.json');
     this.checksFile = join(dataDir, 'trusted-checks.json');
+    this.autonomyFile = join(dataDir, 'skill-autonomy.json');
     this.auditFile = join(dataDir, 'audit.jsonl');
     this.ceilingsFile = join(dataDir, 'ceilings.json');
     this.hubReportsFile = join(dataDir, 'hub-reports.json');
@@ -102,6 +94,9 @@ export class SkillRegistry implements SkillProjection {
     }
     if (existsSync(this.checksFile)) {
       this.checkSuites = JSON.parse(await readFile(this.checksFile, 'utf8')) as Record<string, SkillCheck[]>;
+    }
+    if (existsSync(this.autonomyFile)) {
+      this.skillAutonomies = JSON.parse(await readFile(this.autonomyFile, 'utf8')) as Record<string, Autonomy>;
     }
     if (existsSync(this.ceilingsFile)) {
       this.ceilings = JSON.parse(await readFile(this.ceilingsFile, 'utf8')) as Record<string, Autonomy>;
@@ -173,7 +168,8 @@ export class SkillRegistry implements SkillProjection {
   private withEvaluation(metadata: SkillRecord): SkillRecord {
     const evaluation = this.evaluations[`${metadata.name}@${metadata.version}`]
       ?? { status: 'unevaluated' as const, version: metadata.version };
-    return { ...metadata, checks: this.checkSuites[`${metadata.name}@${metadata.version}`] ?? [], evaluation };
+    return { ...metadata, autonomy: this.skillAutonomies[metadata.name] ?? 'suggest',
+      checks: this.checkSuites[`${metadata.name}@${metadata.version}`] ?? [], evaluation };
   }
 
   private async saveEvaluations(): Promise<void> {
@@ -228,7 +224,7 @@ export class SkillRegistry implements SkillProjection {
         name, version: (previous?.metadata.version ?? 0) + 1,
         sourceProfile: input.sourceProfile, sourcePath,
         trust, updatedAt: Date.now(), checks: [],
-        autonomy: declaredAutonomy(content),
+        autonomy: this.skillAutonomies[name] ?? 'suggest',
         ...(origin.reportId ? { provenance: origin.reportId } : {}),
       };
       await mkdir(folder, { recursive: true });
@@ -285,6 +281,19 @@ export class SkillRegistry implements SkillProjection {
       await this.saveEvaluations();
       await appendFile(this.auditFile, JSON.stringify({ action: 'eval.checks.set', actor, name,
         version: metadata.version, at: Date.now() }) + '\n');
+      await this.refreshAll(name);
+      return this.record(name);
+    });
+  }
+
+  async setAutonomy(name: string, autonomy: Autonomy, actor: string): Promise<SkillRecord> {
+    return this.serialize(async () => {
+      if (!Object.hasOwn(autonomyRank, autonomy)) throw new Error('Invalid autonomy');
+      await this.record(name);
+      this.skillAutonomies[name] = autonomy;
+      await writeFile(this.autonomyFile, JSON.stringify(this.skillAutonomies, null, 2) + '\n');
+      await appendFile(this.auditFile, JSON.stringify({ action: 'skill.autonomy.set', actor, name,
+        autonomy, at: Date.now() }) + '\n');
       await this.refreshAll(name);
       return this.record(name);
     });

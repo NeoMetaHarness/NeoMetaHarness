@@ -305,6 +305,9 @@ export const skillsRegistryContract = {
       prompt: z.string().trim().min(1).max(4000), expected: z.array(z.string().min(1).max(500)).min(1).max(10),
     })).min(1).max(20) })).output(registrySkillSchema),
   },
+  autonomy: {
+    set: oc.input(z.object({ name: skillId, autonomy: skillAutonomy })).output(registrySkillSchema),
+  },
   evaluate: oc.input(z.object({ name: skillId })).output(skillEval),
   override: oc.input(z.object({ name: skillId, reason: z.string().trim().min(1).max(1000) })).output(skillEval),
   ceiling: {

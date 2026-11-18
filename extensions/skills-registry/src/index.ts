@@ -35,6 +35,10 @@ export default defineExtension({
       const { name, checks, actor } = body as { name: string; checks: Parameters<typeof registry.setChecks>[1]; actor: string };
       return registry.setChecks(name, checks, actor);
     });
+    ctx.route('autonomy/set', ({ body }) => {
+      const { name, autonomy, actor } = body as { name: string; autonomy: Parameters<typeof registry.setAutonomy>[1]; actor: string };
+      return registry.setAutonomy(name, autonomy, actor);
+    });
     ctx.route('evaluate', ({ body }) => registry.evaluate((body as { name: string }).name, async () => {
       const modelHub = ctx.inject<{ resolve(role: 'eval'): Promise<{ baseUrl: string; model: string; apiKey?: string }> }>('modelHub');
       if (!modelHub) throw new Error('Eval model hub is unavailable');

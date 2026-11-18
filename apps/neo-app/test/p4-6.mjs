@@ -177,6 +177,7 @@ async function run() {
       name: 'high', sourceProfile: 'skillbot', sourcePath: 'test/high',
       content: skill('high', 'auto', 'CHECK_PASS', 'PASS_OK'),
     });
+    await registry.autonomy.set({ name: high.name, autonomy: 'auto' });
     await registry.checks.set({ name: high.name, checks: [{ prompt: 'CHECK_PASS', expected: ['PASS_OK'] }] });
     assert.equal((await registry.evaluate({ name: high.name })).status, 'passed');
     await registry.assign({ name: high.name, ...target, assigned: true });

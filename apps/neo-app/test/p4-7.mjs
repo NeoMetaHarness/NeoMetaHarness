@@ -154,6 +154,22 @@ async function run() {
       && String(message.content).includes('Follow a deterministic protocol.'))),
     'SEC-17: eval model must receive the actual SKILL.md');
     console.log('SEC-17 PASS');
+    const ceilingTarget = { engine: 'hermes', targetId: 'skillbot' };
+    const skillPath = (name) => join(temp, 'hermes-home', 'profiles', 'skillbot', 'skills', name, 'SKILL.md');
+    const underClaim = await registry.import({ name: 'under-claim', sourceProfile: 'skillbot',
+      content: skill('under-claim', 'suggest', 'CHECK_PASS', 'PASS_OK') });
+    await registry.autonomy.set({ name: underClaim.name, autonomy: 'auto' });
+    await registry.checks.set({ name: underClaim.name, checks: [{ prompt: 'CHECK_PASS', expected: ['PASS_OK'] }] });
+    await registry.evaluate({ name: underClaim.name });
+    await registry.assign({ name: underClaim.name, ...ceilingTarget, assigned: true });
+    assert.ok(!existsSync(skillPath('under-claim')), 'SEC-18: lower claimed autonomy must not evade admin ceiling');
+    const overClaim = await registry.import({ name: 'over-claim', sourceProfile: 'skillbot',
+      content: skill('over-claim', 'auto', 'CHECK_PASS', 'PASS_OK') });
+    await registry.checks.set({ name: overClaim.name, checks: [{ prompt: 'CHECK_PASS', expected: ['PASS_OK'] }] });
+    await registry.evaluate({ name: overClaim.name });
+    await registry.assign({ name: overClaim.name, ...ceilingTarget, assigned: true });
+    assert.ok(existsSync(skillPath('over-claim')), 'SEC-18: declared autonomy must not raise admin-set suggest');
+    console.log('SEC-18 PASS');
     console.log('P4-7_EXIT PASS');
   } finally {
     if (gateway) await gateway.close();
