@@ -37,7 +37,8 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
 
   useEffect(() => {
     let mounted = true;
-    void Promise.all([api.onboarding.get(), api.x.models.providers.list(), api.x.models.roles.get()])
+    void api.extensions.enable({ id: 'models' }).then(() =>
+      Promise.all([api.onboarding.get(), api.x.models.providers.list(), api.x.models.roles.get()]))
       .then(([status, available, roles]) => {
         if (!mounted) return;
         setOwner(status.ownerName);
@@ -77,6 +78,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
     setBusy(true);
     setError('');
     try {
+      await api.extensions.enable({ id: 'engine-hermes' });
       const created = await api.x['engine-hermes'].profiles.create({ name: botName.trim() });
       setCreatedBot(created.name);
       setStage('channel');

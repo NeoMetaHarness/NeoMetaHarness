@@ -110,6 +110,9 @@ async function trial(number) {
   try {
     status = await eventually(async () => JSON.parse(await readFile(statusFile, 'utf8')), 'Tauri gateway readiness', 250);
     assert.equal(status.appPid, desktop.pid);
+    assert.equal(status.trayReady, true, 'system tray built successfully');
+    assert.deepEqual(status.deepLinks, ['neo://inbox/', 'neo://coding/']);
+    assert.equal(status.shortcut, 'Ctrl+Shift+Space');
     const base = `http://127.0.0.1:${status.port}`;
     const token = (await eventually(async () => {
       const text = await readFile(join(directory, 'state', 'desktop.token'), 'utf8');
@@ -120,6 +123,8 @@ async function trial(number) {
     // Rows = extensions the gateway discovers (every extensions/*/neo.extension.json), not a fixed number.
     const expectedRows = readdirSync(join(repoDir, 'extensions')).filter((name) => existsSync(join(repoDir, 'extensions', name, 'neo.extension.json'))).length;
     view = await openWebview(cdpPort);
+    await view.eventually('!!document.querySelector("[data-testid=onboarding-wizard]")', 'first-run wizard');
+    await view.evaluate('document.querySelector("[data-testid=onboarding-skip]").click()');
     await view.eventually(`document.querySelectorAll("[data-testid^=extension-]").length === ${expectedRows}`, `${expectedRows} extension rows`);
     await view.eventually('document.querySelector(".connection")?.textContent === "Live"', 'live event stream');
     assert.equal(await view.evaluate('"__TAURI_INTERNALS__" in window'), true, 'Tauri shell must be detected');
@@ -144,11 +149,16 @@ async function trial(number) {
     await view.eventually('document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]")?.checked === true', 'TS reenabled');
     assert.equal((await fetch(`${base}/x/sample-ts/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
 
+    await view.evaluate(`window.dispatchEvent(new CustomEvent('neo:deep-link', { detail: 'neo://inbox/p1-5-target' }))`);
+    await view.eventually('location.pathname === "/inbox" && new URLSearchParams(location.search).get("openInbox") === "p1-5-target"', 'Inbox deep link');
+    await view.evaluate(`window.dispatchEvent(new CustomEvent('neo:deep-link', { detail: 'neo://coding/p1-5-thread' }))`);
+    await view.eventually('location.pathname === "/coding" && new URLSearchParams(location.search).get("openThread") === "p1-5-thread"', 'Coding deep link');
+
     closeWindow(desktop.pid);
     await eventually(() => !alive(desktop.pid), 'desktop exit', 450);
     await eventually(() => processTree.every((entry) => !alive(entry.ProcessId)), 'gateway and Python exit', 450);
     await assert.rejects(fetch(`${base}/x/sample-ts/hello`), 'gateway port should be closed');
-    console.log(`P1-5_WEBVIEW PASS trial=${number} rows=${expectedRows} live=true off=404 on=200 python=200 sw=0 process_tree=${processTree.length} clean_exit=true`);
+    console.log(`P1-5_WEBVIEW PASS trial=${number} rows=${expectedRows} tray=true shortcut=true deep_links=2 live=true off=404 on=200 python=200 sw=0 process_tree=${processTree.length} clean_exit=true`);
   } finally {
     view?.close();
     if (alive(desktop.pid)) spawnSync('taskkill.exe', ['/PID', String(desktop.pid), '/T', '/F'], { windowsHide: true });

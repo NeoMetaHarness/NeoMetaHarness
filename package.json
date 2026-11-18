@@ -21,7 +21,8 @@
     "test:p1": "pnpm --dir apps/gateway test:p1",
     "test:p1-2": "pnpm --dir apps/neo-app test:p1-2",
     "test:p1-5": "pnpm --dir apps/neo-app test:p1-5",
-    "test:p4-7": "pnpm --dir apps/neo-app test:p4-7"
+    "test:p4-7": "pnpm --dir apps/neo-app test:p4-7",
+    "test:p1-8": "pnpm --dir apps/neo-app test:p1-8"
   },
   "devDependencies": {
     "ajv": "8.17.1",
