@@ -358,7 +358,7 @@ class SuperagentService {
   }
   async checkUpstream(): Promise<{ checked: number; drift: number }> {
     if (this.closed) throw new Error('Superagent is stopped');
-    const entries = await checkUpstreams();
+    const { checked, drift: entries } = await checkUpstreams();
     for (const entry of entries) {
       const upstream = { name: entry.name, pinned: entry.pinned, latest: entry.latest,
         changelog: entry.changelog };
@@ -377,7 +377,7 @@ class SuperagentService {
       this.upstreamItems.set(entry.name, item.id);
       this.update(item, {});
     }
-    return { checked: entries.length, drift: entries.length };
+    return { checked, drift: entries.length };
   }
   listDecisions(input: { ticketId?: string; limit?: number }) { return this.decisions.list(input); }
 
