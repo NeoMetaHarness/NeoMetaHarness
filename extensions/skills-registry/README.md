@@ -1,0 +1,5 @@
+# Neo Skill Registry
+
+Skills declare `checks` in YAML frontmatter as an array of `{ prompt, expected }` where `expected` is a substring or array of substrings. An administrator evaluates each version using the configured `eval` model role. Results persist by skill name and version. Assignment and engine projection require a passing evaluation or an audit-logged administrator override. A rollback creates a fresh version that requires evaluation again.
+
+Skills may declare `autonomy: suggest`, `auto-low`, or `auto` (default `suggest`). Each Hermes profile or DSH session has a stored ceiling (default `suggest`). The `SkillsBridge.hermesReady` and `SkillsBridge.dshReady` projections only copy evaluated skills at or below that ceiling. `suggest` represents human review, `auto-low` represents use without side-effecting tools, and `auto` is unrestricted within other runtime policies. Fine-grained tool enforcement would require Hermes' skill-selection/tool-call authorization seam and DSH's skill-injection/tool-call authorization seam so the runtime can apply the skill's level during an actual invocation, beyond this projection boundary.

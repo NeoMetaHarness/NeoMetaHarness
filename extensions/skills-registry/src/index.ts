@@ -40,5 +40,13 @@ export default defineExtension({
       const { name, actor, reason } = body as { name: string; actor: string; reason: string };
       return registry.override(name, actor, reason);
     });
+    ctx.route('ceiling', ({ body }) => {
+      const { engine, targetId } = body as { engine: 'hermes' | 'dsh'; targetId: string };
+      return registry.ceiling(engine, targetId);
+    });
+    ctx.route('ceiling/set', ({ body }) => {
+      const { engine, targetId, ceiling } = body as { engine: 'hermes' | 'dsh'; targetId: string; ceiling: 'suggest' | 'auto-low' | 'auto' };
+      return registry.setCeiling(engine, targetId, ceiling);
+    });
   },
 });

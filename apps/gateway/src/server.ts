@@ -441,6 +441,16 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           authorize('x.skills-registry.override', context);
           return invokeSkills('override', { ...input, actor: context.user!.id }) as Promise<{ status: 'overridden'; version: number }>;
         }),
+        ceiling: {
+          get: os.x['skills-registry'].ceiling.get.handler(async ({ input, context }) => {
+            authorize('x.skills-registry.ceiling.get', context);
+            return invokeSkills('ceiling', input) as Promise<{ ceiling: 'suggest' | 'auto-low' | 'auto' }>;
+          }),
+          set: os.x['skills-registry'].ceiling.set.handler(async ({ input, context }) => {
+            authorize('x.skills-registry.ceiling.set', context);
+            return invokeSkills('ceiling/set', input) as Promise<{ ceiling: 'suggest' | 'auto-low' | 'auto' }>;
+          }),
+        },
       },
       'memory-honcho': {
         status: os.x['memory-honcho'].status.handler(async ({ input, context }) => {

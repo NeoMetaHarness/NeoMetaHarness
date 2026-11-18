@@ -15,6 +15,8 @@ const validIdentity = /^[a-z][a-z0-9_-]{0,79}\/[a-z][a-z0-9_-]{0,79}$/;
 type Trust = 'untrusted' | 'observed' | 'confirmed';
 type Engine = 'hermes' | 'dsh';
 type Assignment = { name: string; engine: Engine; targetId: string };
+export type Autonomy = 'suggest' | 'auto-low' | 'auto';
+const autonomyRank: Record<Autonomy, number> = { suggest: 0, 'auto-low': 1, auto: 2 };
 export type SkillCheck = { prompt: string; expected: string[] };
 export type Evaluation = {
   status: 'unevaluated' | 'passed' | 'failed' | 'overridden';
@@ -27,7 +29,7 @@ export type Evaluation = {
 };
 export type SkillRecord = {
   name: string; version: number; trust: Trust; sourceProfile: string;
-  sourcePath: string; updatedAt: number; checks?: SkillCheck[];
+  sourcePath: string; updatedAt: number; checks?: SkillCheck[]; autonomy?: Autonomy;
   evaluation?: Evaluation;
 };
 
@@ -48,6 +50,16 @@ function declaredChecks(content: string): SkillCheck[] {
     }
     return { prompt: item.prompt, expected: expected as string[] };
   });
+}
+
+function declaredAutonomy(content: string): Autonomy {
+  const frontmatter = /^---\s*\n([\s\S]*?)\n---\s*\n/.exec(content);
+  const parsed = parse(frontmatter?.[1] ?? '') as { autonomy?: unknown } | null;
+  const autonomy = parsed?.autonomy ?? 'suggest';
+  if (autonomy !== 'suggest' && autonomy !== 'auto-low' && autonomy !== 'auto') {
+    throw new Error('Autonomy must be suggest, auto-low, or auto');
+  }
+  return autonomy;
 }
 
 function safeIdentity(name: string): string {
@@ -72,6 +84,8 @@ export class SkillRegistry implements SkillProjection {
   private readonly assignmentsFile: string;
   private readonly evaluationsFile: string;
   private readonly auditFile: string;
+  private readonly ceilingsFile: string;
+  private ceilings: Record<string, Autonomy> = {};
   private evaluations: Record<string, Evaluation> = {};
   private assignments: Assignment[] = [];
   private readonly homes = new Map<string, string>();
@@ -85,6 +99,7 @@ export class SkillRegistry implements SkillProjection {
     this.assignmentsFile = join(dataDir, 'assignments.json');
     this.evaluationsFile = join(dataDir, 'evaluations.json');
     this.auditFile = join(dataDir, 'audit.jsonl');
+    this.ceilingsFile = join(dataDir, 'ceilings.json');
   }
 
   private async git(...args: string[]): Promise<string> {
@@ -96,6 +111,9 @@ export class SkillRegistry implements SkillProjection {
     await mkdir(this.repo, { recursive: true });
     if (existsSync(this.evaluationsFile)) {
       this.evaluations = JSON.parse(await readFile(this.evaluationsFile, 'utf8')) as Record<string, Evaluation>;
+    }
+    if (existsSync(this.ceilingsFile)) {
+      this.ceilings = JSON.parse(await readFile(this.ceilingsFile, 'utf8')) as Record<string, Autonomy>;
     }
     if (!existsSync(join(this.repo, '.git'))) await this.git('init');
     await this.migrateLegacy();
@@ -206,6 +224,7 @@ export class SkillRegistry implements SkillProjection {
         name, version: (previous?.metadata.version ?? 0) + 1,
         sourceProfile: input.sourceProfile, sourcePath: input.sourcePath,
         trust: input.trust ?? 'observed', updatedAt: Date.now(), checks: declaredChecks(content),
+        autonomy: declaredAutonomy(content),
       };
       await mkdir(folder, { recursive: true });
       await writeFile(join(folder, 'SKILL.md'), content, 'utf8');
@@ -398,6 +417,23 @@ export class SkillRegistry implements SkillProjection {
 
   listAssignments(): Assignment[] { return [...this.assignments]; }
 
+  ceiling(engine: Engine, targetId: string): { ceiling: Autonomy } {
+    if (engine !== 'dsh' && engine !== 'hermes') throw new Error('Unknown engine');
+    if (!/^[a-zA-Z0-9_-]{1,100}$/.test(targetId)) throw new Error('Invalid target');
+    return { ceiling: this.ceilings[this.key(engine, targetId)] ?? 'suggest' };
+  }
+
+  async setCeiling(engine: Engine, targetId: string, ceiling: Autonomy): Promise<{ ceiling: Autonomy }> {
+    return this.serialize(async () => {
+      if (!(ceiling in autonomyRank)) throw new Error('Invalid autonomy ceiling');
+      this.ceiling(engine, targetId);
+      this.ceilings[this.key(engine, targetId)] = ceiling;
+      await writeFile(this.ceilingsFile, JSON.stringify(this.ceilings, null, 2) + '\n');
+      await this.refresh(engine, targetId);
+      return { ceiling };
+    });
+  }
+
   private async refreshAll(name: string): Promise<void> {
     for (const row of this.assignments.filter((item) => item.name === name)) await this.refresh(row.engine, row.targetId);
   }
@@ -406,9 +442,13 @@ export class SkillRegistry implements SkillProjection {
     const home = this.homes.get(this.key(engine, targetId));
     if (!home || this.disposed) return;
     const root = join(home, 'skills');
+    const ceiling = this.ceiling(engine, targetId).ceiling;
     const eligible: Assignment[] = [];
     for (const row of this.assignments.filter((item) => item.engine === engine && item.targetId === targetId)) {
-      try { if (this.approved(await this.record(row.name))) eligible.push(row); }
+      try {
+        const metadata = await this.record(row.name);
+        if (this.approved(metadata) && autonomyRank[metadata.autonomy ?? 'suggest'] <= autonomyRank[ceiling]) eligible.push(row);
+      }
       catch (error) { if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error; }
     }
     const existing = existsSync(root) ? (await readdir(root, { withFileTypes: true }))

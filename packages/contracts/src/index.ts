@@ -242,6 +242,7 @@ const skillName = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);
 const skillId = z.string().regex(/^[a-z][a-z0-9_-]{0,79}\/[a-z][a-z0-9_-]{0,79}$/);
 const skillInput = z.union([skillName, skillId]);
 const skillTrust = z.enum(['untrusted', 'observed', 'confirmed']);
+const skillAutonomy = z.enum(['suggest', 'auto-low', 'auto']);
 const skillEval = z.object({
   status: z.enum(['unevaluated', 'passed', 'failed', 'overridden']), version: z.number().int().positive(),
   checkedAt: z.number().optional(), error: z.string().optional(),
@@ -252,6 +253,7 @@ export const registrySkillSchema = z.object({
   name: skillId, version: z.number().int().positive(), trust: skillTrust,
   sourceProfile: z.string(), sourcePath: z.string(), updatedAt: z.number().int(),
   checks: z.array(z.object({ prompt: z.string(), expected: z.array(z.string()) })).optional(),
+  autonomy: skillAutonomy.optional(),
   evaluation: skillEval.optional(),
 });
 export type RegistrySkill = z.infer<typeof registrySkillSchema>;
@@ -274,6 +276,11 @@ export const skillsRegistryContract = {
   assignments: oc.output(z.array(skillTarget)),
   evaluate: oc.input(z.object({ name: skillId })).output(skillEval),
   override: oc.input(z.object({ name: skillId, reason: z.string().trim().min(1).max(1000) })).output(skillEval),
+  ceiling: {
+    get: oc.input(skillTarget.omit({ name: true })).output(z.object({ ceiling: skillAutonomy })),
+    set: oc.input(skillTarget.omit({ name: true }).extend({ ceiling: skillAutonomy }))
+      .output(z.object({ ceiling: skillAutonomy })),
+  },
 };
 
 const modelProviderId = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/);

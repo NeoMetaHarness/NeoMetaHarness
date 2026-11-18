@@ -8,6 +8,7 @@ import { gatewayUrl, gatewayToken } from '../config';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Skill = { name: string; version: number; sourceProfile: string; sourcePath: string; trust: string; updatedAt: number;
+  autonomy?: 'suggest' | 'auto-low' | 'auto';
   evaluation?: { status: 'unevaluated' | 'passed' | 'failed' | 'overridden'; error?: string; overrideBy?: string } };
 type Version = { version: number; hash: string; metadata: Skill };
 type Assignment = { name: string; engine: 'hermes' | 'dsh'; targetId: string };
@@ -33,6 +34,7 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
+  const [ceiling, setCeiling] = useState<'suggest' | 'auto-low' | 'auto'>('suggest');
 
   async function refresh() {
     const [items, targets] = await Promise.all([api.list(), api.assignments()]);
@@ -58,6 +60,11 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
   const current = skills.find((item) => item.name === selected);
   const evalStatus = current?.evaluation?.status ?? 'unevaluated';
   const evalAllowed = evalStatus === 'passed' || evalStatus === 'overridden';
+  useEffect(() => {
+    if (!targetId.trim()) return;
+    void api.ceiling.get({ engine: targetEngine, targetId }).then((result) => setCeiling(result.ceiling))
+      .catch((reason) => setError(String(reason)));
+  }, [targetEngine, targetId]);
 
   return <section className="skills-panel skills-registry" data-testid="registry-panel">
     <div className="skills-panel-title"><h2>Neo Skill Registry</h2>
@@ -87,6 +94,7 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
         <h3>{selected}</h3>
         <p>{versions.length} versions</p>
         <p data-testid="registry-eval-status">Evaluation for v{current?.version} — {evalStatus}</p>
+        <p data-testid="registry-autonomy">Autonomy — {current?.autonomy ?? 'suggest'}</p>
         {current?.evaluation?.error && <p role="status">{current.evaluation.error}</p>}
         <div className="skills-actions">
           <Button label="Run skill evaluation" data-testid="registry-evaluate" isDisabled={busy}
@@ -129,6 +137,15 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
         <label>Bot or session ID <input data-testid="registry-target" value={targetId} list="registry-profiles"
           onChange={(event) => setTargetId(event.target.value)} /></label>
         <datalist id="registry-profiles">{profiles.map((name) => <option key={name} value={name} />)}</datalist>
+        <label>Target autonomy ceiling <select data-testid="registry-ceiling" value={ceiling}
+          onChange={(event) => setCeiling(event.target.value as typeof ceiling)}>
+          <option value="suggest">Suggest</option><option value="auto-low">Auto low</option><option value="auto">Auto</option>
+        </select></label>
+        <Button label="Save autonomy ceiling" data-testid="registry-ceiling-save" isDisabled={busy || !targetId.trim()}
+          onClick={() => void action(async () => {
+            await api.ceiling.set({ engine: targetEngine, targetId, ceiling });
+            setNotice(`Autonomy ceiling set to ${ceiling}`);
+          })}>Save ceiling</Button>
         <Button label={assignment ? 'Unassign skill' : 'Assign skill'} data-testid="registry-assign"
           isDisabled={busy || !targetId.trim() || (!assignment && !evalAllowed)} onClick={() => void action(async () => {
             await api.assign({ name: selected, engine: targetEngine, targetId, assigned: !assignment });
