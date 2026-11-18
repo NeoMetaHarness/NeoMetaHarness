@@ -145,8 +145,8 @@ async function trial(number) {
     assert.equal((await fetch(`${base}/x/sample-ts/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
 
     closeWindow(desktop.pid);
-    await eventually(() => !alive(desktop.pid), 'desktop exit');
-    await eventually(() => processTree.every((entry) => !alive(entry.ProcessId)), 'gateway and Python exit');
+    await eventually(() => !alive(desktop.pid), 'desktop exit', 450);
+    await eventually(() => processTree.every((entry) => !alive(entry.ProcessId)), 'gateway and Python exit', 450);
     await assert.rejects(fetch(`${base}/x/sample-ts/hello`), 'gateway port should be closed');
     console.log(`P1-5_WEBVIEW PASS trial=${number} rows=${expectedRows} live=true off=404 on=200 python=200 sw=0 process_tree=${processTree.length} clean_exit=true`);
   } finally {
