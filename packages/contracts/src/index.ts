@@ -173,8 +173,36 @@ export const hermesContract = {
   },
 };
 
+export const memoryEntrySchema = z.object({
+  id: z.string(), workspace: z.string(), subject: z.enum(['user', 'bot']),
+  subject_id: z.string(), text: z.string(), source: z.string(), provenance: z.string(),
+  trust: z.enum(['untrusted', 'observed', 'confirmed']),
+  created_at: z.number().int(), updated_at: z.number().int(),
+});
+const memoryWorkspace = z.string().min(1).max(100);
+const memoryText = z.string().trim().min(1).max(16000);
+export const memoryContract = {
+  list: oc.input(z.object({ workspace: memoryWorkspace.default('default'), subjectId: z.string().max(100).optional(), query: z.string().max(500).default('') }))
+    .output(z.array(memoryEntrySchema)),
+  add: oc.input(z.object({
+    workspace: memoryWorkspace.default('default'), subject: z.enum(['bot', 'user']),
+    subjectId: z.string().min(1).max(100).default('global'), text: memoryText,
+    source: z.string().min(1).max(200).default('manual'),
+    provenance: z.string().max(1000).default('Neo Memory UI'),
+    trust: z.enum(['untrusted', 'observed', 'confirmed']).default('confirmed'),
+  })).output(memoryEntrySchema),
+  update: oc.input(z.object({ id: z.string().uuid(), text: memoryText.optional(),
+    trust: z.enum(['untrusted', 'observed', 'confirmed']).optional(),
+    provenance: z.string().max(1000).optional(), source: z.string().max(200).optional(),
+  })).output(memoryEntrySchema.nullable()),
+  delete: oc.input(z.object({ id: z.string().uuid() })).output(z.object({ deleted: z.boolean() })),
+  export: oc.input(z.object({ workspace: memoryWorkspace.default('default') })).output(z.object({
+    'SOUL.md': z.string(), 'USER.md': z.string(), 'MEMORY.md': z.string(),
+  })),
+};
+
 const baseNeoContract = {
-  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract },
+  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
