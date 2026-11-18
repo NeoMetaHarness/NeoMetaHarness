@@ -229,7 +229,7 @@ export class SkillRegistry implements SkillProjection {
         && previous.metadata.trust === (input.trust ?? 'observed')
         && previous.metadata.sourcePath === input.sourcePath
         && previous.metadata.provenance === input.provenance
-        && previous.metadata.autonomy === input.autonomy) return previous.metadata;
+        && previous.metadata.autonomy === (input.autonomy ?? declaredAutonomy(content))) return previous.metadata;
       const next: SkillRecord = {
         name, version: (previous?.metadata.version ?? 0) + 1,
         sourceProfile: input.sourceProfile, sourcePath: input.sourcePath,
