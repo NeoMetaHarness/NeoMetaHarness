@@ -258,5 +258,32 @@ export const agentsContract = {
   },
 };
 
-// Agent API is added after all group declarations so its schemas are initialized.
-export const neoContract = { ...baseNeoContract, agents: agentsContract };
+export const inboxReportSchema = z.object({
+  status: z.enum(['ready', 'question', 'blocked', 'failed']),
+  summary: z.string(),
+  question: z.string().optional(),
+  options: z.array(z.string()).default([]),
+  changes: z.array(z.string()).default([]),
+  tests: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([]),
+});
+export const inboxItemSchema = z.object({
+  id: z.string(), text: z.string(), botId: z.string(),
+  mode: z.enum(['observe', 'act']),
+  status: z.enum(['suggestion', 'running', 'ready', 'question', 'blocked', 'failed']),
+  ticketId: z.string().optional(), report: inboxReportSchema.optional(),
+  createdAt: z.number(), updatedAt: z.number(),
+});
+export const inboxEventSchema = z.object({ seq: z.number().int(), item: inboxItemSchema });
+export type InboxItem = z.infer<typeof inboxItemSchema>;
+export type InboxEvent = z.infer<typeof inboxEventSchema>;
+export const inboxContract = {
+  ask: oc.input(z.object({ text: z.string().min(1), botId: z.string().min(1),
+    mode: z.enum(['observe', 'act']).default('observe') })).output(inboxItemSchema),
+  list: oc.output(z.array(inboxItemSchema)),
+  accept: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
+  events: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))
+    .output(eventIterator(inboxEventSchema)),
+};
+
+export const neoContract = { ...baseNeoContract, agents: agentsContract, inbox: inboxContract };

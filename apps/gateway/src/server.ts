@@ -5,7 +5,7 @@ import { WebSocketServer } from 'ws';
 import { RPCHandler as WSRPCHandler } from '@orpc/server/ws';
 import { RPCHandler as HttpRPCHandler } from '@orpc/server/node';
 import { implement, ORPCError } from '@orpc/server';
-import { computerActionSchema, neoContract, type T3Event, type HermesEvent, type DshEvent, type VaultOperation } from '@neometaharness/contracts';
+import { computerActionSchema, neoContract, type T3Event, type HermesEvent, type DshEvent, type VaultOperation, type InboxItem, type InboxEvent } from '@neometaharness/contracts';
 import { VaultService, KeyFileProvider, type KeyProvider, type VaultScope } from '@neometaharness/vault';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
 import { NeoKernel } from '@neometaharness/kernel';
@@ -41,6 +41,7 @@ export async function startGateway(options: GatewayOptions) {
     computers,
     vault,
     extensionDataDir: join(dirname(resolve(options.databaseFile)), 'extensions'),
+    gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
   });
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope) => {
     if (await options.authorizeVault?.(operation, scope) !== true) {
@@ -71,12 +72,28 @@ export async function startGateway(options: GatewayOptions) {
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'DSH extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const invokeInbox = async (route: string, body: unknown) => {
+    const path = `/x/engine-superagent/${route}`;
+    if (!kernel.hasRoute(path)) {
+      throw new ORPCError('SERVICE_UNAVAILABLE', { message: 'Superagent extension is disabled' });
+    }
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   const withHealth = async (id: string) => {
     const health = await kernel.health(id).catch(() => ({ ok: false }));
     return { ...kernel.status(id), ...(health ? { health } : {}) };
   };
   const router = {
     agents: agentApi.router,
+    inbox: {
+      ask: os.inbox.ask.handler(async ({ input }) => invokeInbox('ask', input) as Promise<InboxItem>),
+      list: os.inbox.list.handler(async () => invokeInbox('list', {}) as Promise<InboxItem[]>),
+      accept: os.inbox.accept.handler(async ({ input }) => invokeInbox('accept', input) as Promise<InboxItem>),
+      events: os.inbox.events.handler(async function* ({ input, signal }) {
+        const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;
+        yield* stream;
+      }),
+    },
     x: { 'engine-dsh': {
       create: os.x['engine-dsh'].create.handler(async ({ input }) => invokeDsh('create', input) as Promise<{ sessionId: string; pid: number }>),
       prompt: os.x['engine-dsh'].prompt.handler(async ({ input }) => invokeDsh('prompt', input) as Promise<{ messageId: string }>),
