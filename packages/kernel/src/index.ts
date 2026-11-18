@@ -232,6 +232,11 @@ export class NeoKernel {
 
   hasRoute(path: string): boolean { return this.routes.has(path); }
 
+  routesFor(id: string): string[] {
+    const prefix = `/x/${id}/`;
+    return [...this.routes.keys()].filter((route) => route.startsWith(prefix));
+  }
+
   private async start(id: string): Promise<RunningExtension> {
     const { manifest, directory } = this.discovered.get(id)!;
     if (manifest.runtime.type === 'cordis') {

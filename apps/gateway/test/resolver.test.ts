@@ -49,6 +49,7 @@ test('runtime missing dependency degrades, and disabling a provider unwinds depe
   const enabled = new Map<string, boolean>([['provider', true], ['dependent', true], ['missing-user', true]]);
   const db: DatabaseProvider = {
     migrate: async () => {},
+    close: async () => {},
     getEnabled: async (id) => enabled.get(id) ?? false,
     setEnabled: async (id, value) => { enabled.set(id, value); },
     close: async () => {},
@@ -75,6 +76,46 @@ test('runtime missing dependency degrades, and disabling a provider unwinds depe
     assert.equal(kernel.status('dependent').status, 'degraded');
     await kernel.enable('provider');
     assert.equal(kernel.status('dependent').status, 'running');
+  } finally {
+    await kernel.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('routesFor(id) enumerates routes registered by an extension', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'nmh-routes-'));
+  const db = {
+    getEnabled: async () => true,
+    setEnabled: async () => {},
+    migrate: async () => {},
+    close: async () => {},
+  } as unknown as DatabaseProvider;
+  const kernel = new NeoKernel(db);
+  try {
+    const extDir = join(root, 'custom-ext');
+    await mkdir(extDir);
+    await writeFile(join(extDir, 'neo.extension.json'), JSON.stringify({
+      id: 'custom-ext',
+      version: '1.0.0',
+      displayName: 'custom-ext',
+      runtime: { type: 'cordis', entry: './index.js' },
+    }));
+    await writeFile(join(extDir, 'index.js'), `
+      export default {
+        activate(ctx) {
+          ctx.route('ping', () => 'pong');
+          ctx.route('data/status', () => ({ ok: true }));
+        }
+      };
+    `);
+    await kernel.discover(root);
+    assert.deepEqual(kernel.routesFor('custom-ext').sort(), [
+      '/x/custom-ext/data/status',
+      '/x/custom-ext/ping',
+    ]);
+    assert.deepEqual(kernel.routesFor('nonexistent'), []);
+    await kernel.disable('custom-ext');
+    assert.deepEqual(kernel.routesFor('custom-ext'), []);
   } finally {
     await kernel.close();
     await rm(root, { recursive: true, force: true });
