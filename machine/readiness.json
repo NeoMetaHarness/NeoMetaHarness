@@ -248,8 +248,10 @@
     },
     "P4-2": {
       "title": "memory-local L1: store + oRPC + single `neo` Hermes memory provider + Memory page",
-      "status": "in_progress",
-      "owner": "sol-b"
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "PM rerun 2x on main: P4-2_BROWSER PASS ui_add=true memory_context=true writeback=true disabled_404=true hermes_healthy=true sample_healthy=true; single `neo` Hermes memory provider over unmodified v0.23.2 seams (plugins/memory/__init__.py:148,217; agent/memory_provider.py:144,157; agent/memory_manager.py:361; agent/turn_context.py:1082; agent/turn_finalizer.py:624); per-profile vault token, timing-safe compare; full regression 17/17",
+      "follow_up": "workspace hard-coded 'default' in internal memory bridge; Honcho L2 + dedupe; DSH context plugin; real-model memory quality unverified"
     }
   },
   "p3_tasks": {
