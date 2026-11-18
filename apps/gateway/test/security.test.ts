@@ -252,3 +252,41 @@ test('SEC-10: process extensions receive only an allowlisted environment, never 
     await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
+
+test('SEC-11: the superagent bridge key expires, is swept after a crash, and never falls back to the master token', async () => {
+  const { BridgeKey, BRIDGE_KEY_NAME, BRIDGE_KEY_TTL_SECONDS, BRIDGE_KEY_ROTATE_MS, bridgeEnv } =
+    await import('../../../extensions/engine-superagent/src/bridge-key.js');
+  await withGateway('desktop', async (gateway, base) => {
+    const auth = gateway.auth as any;
+    const owner = await auth.kysely.selectFrom('member').select(['userId']).where('role', '=', 'owner').executeTakeFirst();
+    const probe = (key: string) => fetch(`${base}/extensions/list`, json({ json: {} }, { 'x-api-key': key }));
+    // A key left behind by a crashed run.
+    const stale = await auth.api.createApiKey({ body: { userId: owner.userId, name: BRIDGE_KEY_NAME,
+      metadata: { role: 'member', workspaceId: (await auth.kysely.selectFrom('organization').select('id').executeTakeFirst()).id } } });
+    assert.equal((await probe(stale.key)).status, 200, 'precondition: the stale key works');
+    const bridge = new BridgeKey(auth);
+    assert.ok(await bridge.sweep() >= 1);
+    assert.equal((await probe(stale.key)).status, 401, 'crash leftovers are swept at activation');
+    const minted = await bridge.mint();
+    assert.ok(minted, 'a key is minted for the workspace owner');
+    assert.equal((await probe(minted!.token)).status, 200);
+    const row = await auth.kysely.selectFrom('apiKey').select(['expiresAt']).where('id', '=', minted!.id).executeTakeFirst();
+    const ttl = new Date(row.expiresAt).getTime() - Date.now();
+    assert.ok(ttl > 0 && ttl <= BRIDGE_KEY_TTL_SECONDS * 1000 + 60_000, 'the bridge key has a bounded expiry');
+    assert.ok(BRIDGE_KEY_ROTATE_MS < BRIDGE_KEY_TTL_SECONDS * 1000 / 2, 'rotation runs well inside the key lifetime');
+    await bridge.revoke(minted!.id);
+    assert.equal((await probe(minted!.token)).status, 401, 'revoked keys stop working');
+  });
+  const saved = process.env.NMH_GATEWAY_TOKEN;
+  process.env.NMH_GATEWAY_TOKEN = 'operator-master-token';
+  try {
+    const env = bridgeEnv('/home/dsh');
+    assert.deepEqual(env, { DSH_HOME: '/home/dsh' }, 'without a minted key the bridge gets no credential at all');
+    assert.ok(!Object.values(bridgeEnv('/home/dsh', '/x/bridge.token')).includes('operator-master-token'));
+  } finally {
+    if (saved === undefined) delete process.env.NMH_GATEWAY_TOKEN; else process.env.NMH_GATEWAY_TOKEN = saved;
+  }
+  const noOwner = new BridgeKey({ api: { createApiKey: async () => { throw new Error('must not mint'); } },
+    kysely: { selectFrom: () => ({ select: () => ({ where: () => ({ orderBy: () => ({ executeTakeFirst: async () => undefined }) }) }) }) } });
+  assert.equal(await noOwner.mint(), undefined, 'no owner yet means no key, and no fallback');
+});

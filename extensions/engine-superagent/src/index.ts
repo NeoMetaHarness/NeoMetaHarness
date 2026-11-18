@@ -11,6 +11,7 @@ import { NeoCronSource, type ScheduledAsk } from './cron-source.js';
 import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './channel-source.js';
 import { blockedReason } from './ask-policy.js';
 import { DecisionLog } from './decision-log.js';
+import { BridgeKey, BRIDGE_KEY_ROTATE_MS, writeTokenFile, type BridgeKeyHandle } from './bridge-key.js';
 
 type Report = NonNullable<InboxItem['report']>;
 type Postmortem = NonNullable<Report['postmortem']>;
@@ -66,12 +67,13 @@ class SuperagentService {
   private workerReady?: Promise<void>;
   private workerHome = '';
   private gatewayUrl!: () => string;
+  /** Path of the bridge API key file handed to the worker (SEC-11). */
   private token?: string;
 
-  async start(home: string, gatewayUrl: () => string, token?: string, channel?: ChannelSource): Promise<void> {
+  async start(home: string, gatewayUrl: () => string, tokenFile?: string, channel?: ChannelSource): Promise<void> {
     this.workerHome = home;
     this.gatewayUrl = gatewayUrl;
-    this.token = token;
+    this.token = tokenFile;
     const upstream = await loadPinnedSuperagent();
     const repo = new upstream.MemoryRepositories();
     const kinds = ['neo/app', 'neo/cron', 'neo/channel'];
@@ -386,33 +388,30 @@ export default defineExtension({
     const auth = ctx.inject<any>('auth');
     if (!gatewayUrl || !dataDir) throw new Error('Superagent needs Gateway endpoint and isolated storage');
 
-    let apiKeyToken = process.env.NMH_GATEWAY_TOKEN;
-    let apiKeyId: string | undefined;
-    if (auth?.api?.createApiKey) {
+    // SEC-11: a 7-day member key for a real workspace owner, rotated daily
+    // through an owner-only file the MCP bridge re-reads per call. Crash
+    // leftovers are swept first. There is no fallback to NMH_GATEWAY_TOKEN:
+    // without a key the bridge fails closed.
+    const bridgeKey = new BridgeKey(auth);
+    const tokenFile = join(dataDir, 'engine-superagent', 'bridge.token');
+    let current: BridgeKeyHandle | undefined;
+    const rotate = async () => {
       try {
-        // Bind the bridge key to an actual workspace owner: API key roles are
-        // capped by the key owner's membership, so an arbitrary first user or
-        // workspace would yield a key with no authority.
-        const owner = await auth.kysely?.selectFrom('member').select(['userId', 'organizationId'])
-          .where('role', '=', 'owner').orderBy('createdAt').executeTakeFirst?.();
-        if (owner?.userId) {
-          const keyRes = await auth.api.createApiKey({
-            body: {
-              userId: owner.userId,
-              name: 'superagent-bridge',
-              rateLimitEnabled: false,
-              metadata: { role: 'member', workspaceId: owner.organizationId },
-            },
-          });
-          if (keyRes?.key) {
-            apiKeyToken = keyRes.key;
-            apiKeyId = keyRes.id;
-          }
-        }
+        const next = await bridgeKey.mint();
+        if (!next) return;
+        await writeTokenFile(tokenFile, next.token);
+        const previous = current;
+        current = next;
+        if (previous) await bridgeKey.revoke(previous.id);
       } catch (err) {
-        console.error('Superagent failed to mint API key:', err);
+        console.error('Superagent failed to mint its bridge API key:', err);
       }
-    }
+    };
+    await bridgeKey.sweep().catch(() => 0);
+    await writeTokenFile(tokenFile, undefined);
+    await rotate();
+    const rotation = setInterval(() => { void rotate(); }, BRIDGE_KEY_ROTATE_MS);
+    rotation.unref();
 
     const models = process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_TEST_ADAPTER
       ? (await import(process.env.NMH_SUPERAGENT_TEST_ADAPTER) as { createModelFactory: ModelFactory }).createModelFactory
@@ -422,16 +421,11 @@ export default defineExtension({
       () => ctx.inject<SkillImporter>('skillRegistry'));
     const channel = ctx.inject<ChannelSource>('channelSource')
       ?? (process.env.NODE_ENV === 'test' ? new FakeChannelSource() : undefined);
-    await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, apiKeyToken, channel);
+    await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
     ctx.effect(() => async () => {
-      if (apiKeyId) {
-        if (auth?.api?.deleteApiKey) {
-          await auth.api.deleteApiKey({ body: { keyId: apiKeyId } }).catch(() => {});
-        }
-        if (auth?.kysely) {
-          await auth.kysely.deleteFrom('apiKey').where('id', '=', apiKeyId).execute().catch(() => {});
-        }
-      }
+      clearInterval(rotation);
+      if (current) await bridgeKey.revoke(current.id).catch(() => {});
+      await writeTokenFile(tokenFile, undefined).catch(() => {});
       await service.close();
     });
     ctx.route('ask', ({ body }) => service.ask(body));

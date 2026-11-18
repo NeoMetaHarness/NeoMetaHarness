@@ -9,10 +9,12 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import type {} from '@deepseek-ai/dsh-tool-testkit';
 import type { ModelFactory } from './model.js';
+import { bridgeEnv } from './bridge-key.js';
 
 /** Pinned DSH SDK server.ts:564-591 omits preset composition. This isolated host preserves preset-scoped MCP until SDK supports it. */
 export interface WorkerHost {
-  start(home: string, gatewayUrl: string, token?: string): Promise<void>;
+  /** tokenFile holds the bridge API key; the MCP child re-reads it on every call. */
+  start(home: string, gatewayUrl: string, tokenFile?: string): Promise<void>;
   delegate(botId: string, text: string): Promise<{ summary: string; tests: string[]; risks: string[] }>;
   close(): Promise<void>;
 }
@@ -24,8 +26,7 @@ export class PresetWorkerHost implements WorkerHost {
   private active = new Set<{ dispose(): Promise<void> }>();
   private next = 0;
 
-  async start(home: string, gatewayUrl: string, token?: string): Promise<void> {
-    const effectiveToken = token ?? process.env.NMH_GATEWAY_TOKEN;
+  async start(home: string, gatewayUrl: string, tokenFile?: string): Promise<void> {
     await mkdir(home, { recursive: true });
     this.context.baseUrl = import.meta.url;
     await this.context.plugin(Loader);
@@ -43,7 +44,7 @@ export class PresetWorkerHost implements WorkerHost {
           config: {
             transport: 'stdio', serverName: 'neo', command: process.execPath,
             args: [serverFile, gatewayUrl], cwd: home,
-            env: { DSH_HOME: home, ...(effectiveToken ? { NMH_GATEWAY_TOKEN: effectiveToken } : {}) }, toolCallTimeoutMs: 90000,
+            env: bridgeEnv(home, tokenFile), toolCallTimeoutMs: 90000,
             failOnStartupError: true, reconnect: { enabled: false },
           },
         }] });

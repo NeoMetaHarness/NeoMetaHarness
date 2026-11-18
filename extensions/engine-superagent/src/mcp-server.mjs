@@ -5,12 +5,14 @@ import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import { createORPCClient } from '@orpc/client';
 import { z } from 'zod';
 import { WebSocket } from 'ws';
+import { readFileSync } from 'node:fs';
 
 const gateway = process.argv[2];
 if (!gateway?.startsWith('http://127.0.0.1:')) throw new Error('Expected loopback Gateway URL');
-const token = process.env.NMH_GATEWAY_TOKEN;
-const headers = token ? { authorization: `Bearer ${token}` } : {};
-const client = createORPCClient(new RPCLink({ url: gateway, headers }));
+// The bridge key lives in a file the extension rotates; read it per call (SEC-11).
+const tokenFile = process.env.NMH_GATEWAY_TOKEN_FILE;
+const currentToken = () => { try { return tokenFile ? readFileSync(tokenFile, 'utf8').trim() || undefined : undefined; } catch { return undefined; } };
+const client = createORPCClient(new RPCLink({ url: gateway, headers: () => { const token = currentToken(); return token ? { authorization: `Bearer ${token}` } : {}; } }));
 const server = new McpServer({ name: 'neo-agents', version: '0.1.0' }, { capabilities: { tools: {} } });
 server.registerTool('agents.send_to_bot', {
   description: 'Delegate a ticket to a Neo Hermes bot and wait for its final status.',
@@ -33,6 +35,7 @@ server.registerTool('agents.send_to_bot', {
     if (status !== 'completed') throw new Error(`Hermes bot turn ${status}`);
     // AgentService persists the complete stream and closes it on terminal status.
     // Replaying from sequence zero avoids losing final deltas to a subscribe race.
+    const token = currentToken();
     const protocols = token ? [`bearer.${token}`] : undefined;
     const socket = new WebSocket(gateway.replace(/^http/, 'ws') + '/ws', protocols);
     let summary = '';
