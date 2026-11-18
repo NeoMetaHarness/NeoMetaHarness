@@ -131,20 +131,37 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     (notice) => kernel.events.publishComputer(notice),
   );
 
-  const memoryScope = (profile: string) => ({
-    kind: 'engine' as const, workspaceId: 'default', subjectId: `engine-hermes/${profile}`,
+  // Bind each engine consumer to its own vault scope and workspace. The profile
+  // argument is taken from the engine runtime, never trusted from the HTTP caller.
+  type MemoryConsumer = { engine: 'hermes' | 'dsh'; profile: string; workspace: string };
+  const memoryConsumers = new Map<string, MemoryConsumer>();
+  const memoryKey = (engine: 'hermes' | 'dsh', profile: string) => `${engine}:${profile}`;
+  const memoryScope = ({ engine, profile, workspace }: MemoryConsumer) => ({
+    kind: 'engine' as const, workspaceId: workspace, subjectId: `engine-${engine}/${profile}`,
   });
+  const issueMemoryBinding = async (consumer: MemoryConsumer) => {
+    if (!gatewayPort || !kernel.hasRoute('/x/memory-local/list')) return undefined;
+    const scope = memoryScope(consumer);
+    let token = await vault.get(scope, 'NEO_MEMORY_TOKEN');
+    if (!token) {
+      token = randomBytes(32).toString('hex');
+      await vault.put(scope, 'NEO_MEMORY_TOKEN', token);
+    }
+    memoryConsumers.set(memoryKey(consumer.engine, consumer.profile), consumer);
+    return { endpoint: `http://127.0.0.1:${gatewayPort}/internal/memory`, token, profile: consumer.profile };
+  };
   const memoryBridge = {
-    async binding(profile: string) {
-      if (!gatewayPort || !kernel.hasRoute('/x/memory-local/list')) return undefined;
-      const scope = memoryScope(profile);
-      let token = await vault.get(scope, 'NEO_MEMORY_TOKEN');
-      if (!token) {
-        token = randomBytes(32).toString('hex');
-        await vault.put(scope, 'NEO_MEMORY_TOKEN', token);
-      }
-      return { endpoint: `http://127.0.0.1:${gatewayPort}/internal/memory`, token, profile };
+    async binding(profile: string, workspaceId?: string) {
+      // Existing desktop Hermes profiles predate workspace ownership; future
+      // workspace-aware callers can supply their owning workspace explicitly.
+      return issueMemoryBinding({ engine: 'hermes', profile, workspace: workspaceId ?? 'default' });
     },
+  };
+  const dshMemoryBridge = {
+    binding(sessionId: string, workspaceId: string) {
+      return issueMemoryBinding({ engine: 'dsh', profile: sessionId, workspace: workspaceId });
+    },
+    forget(sessionId: string) { memoryConsumers.delete(memoryKey('dsh', sessionId)); },
   };
   const skillsBridge = new SkillsBridge();
   const kernel = new NeoKernel(db, {
@@ -153,6 +170,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     auth,
     memoryRecords: (db as any).memories,
     memoryBridge,
+    dshMemoryBridge,
     skillsBridge,
     extensionDataDir: join(dirname(resolve(options.databaseFile)), 'extensions'),
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
@@ -567,31 +585,39 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>; }
           catch { res.writeHead(400).end(); return; }
         }
+        const engine = writing ? payload.engine ?? 'hermes' : url.searchParams.get('engine') ?? 'hermes';
         const name = writing ? payload.profile : profile;
-        if (typeof name !== 'string' || !/^(default|[a-z][a-z0-9_-]{0,47})$/.test(name)) {
-          res.writeHead(400).end(); return;
-        }
+        const validProfile = engine === 'dsh'
+          ? typeof name === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(name)
+          : engine === 'hermes' && typeof name === 'string' && /^(default|[a-z][a-z0-9_-]{0,47})$/.test(name);
+        if (!validProfile || typeof name !== 'string') { res.writeHead(400).end(); return; }
+        const consumer = memoryConsumers.get(memoryKey(engine as 'hermes' | 'dsh', name));
+        if (!consumer) { res.writeHead(401).end(); return; }
         const provided = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.authorization ?? '')?.[1];
-        const expected = await vault.get(memoryScope(name), 'NEO_MEMORY_TOKEN');
+        const expected = await vault.get(memoryScope(consumer), 'NEO_MEMORY_TOKEN');
         if (!provided || !expected || !timingSafeEqual(Buffer.from(provided, 'hex'), Buffer.from(expected, 'hex'))) {
           res.writeHead(401).end(); return;
         }
         if (!writing) {
           const query = (url.searchParams.get('q') ?? '').slice(0, 500);
-          const results = await invokeMemory('list', { workspace: 'default', subjectId: name, query, limit: 15 }) as Array<{ text: string; source: string; trust: string }>;
-          const entries = results.length ? results : await invokeMemory('list', { workspace: 'default', subjectId: name, limit: 15 }) as Array<{ text: string; source: string; trust: string }>;
-          const context = entries.map((entry) => `- ${entry.text} [${entry.source}; ${entry.trust}]`).join('\n');
+          const scoped = await invokeMemory('list', { workspace: consumer.workspace, query }) as Array<{
+            text: string; source: string; trust: string; subject: 'user' | 'bot'; subject_id: string;
+          }>;
+          const entries = scoped.filter((entry) => entry.subject_id === 'global' || entry.subject_id === name);
+          const context = entries.slice(0, 15).map((entry) => `- ${entry.text} [${entry.source}; ${entry.trust}]`).join('\n');
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ context }));
         } else {
           const assistant = payload.assistant;
           const user = payload.user;
           const session = payload.session_id;
           if (payload.type !== 'turn' || typeof assistant !== 'string' || !assistant.trim() || assistant.length > 16000
-            || typeof user !== 'string' || user.length > 16000 || typeof session !== 'string' || session.length > 200) {
+            || typeof user !== 'string' || user.length > 16000 || typeof session !== 'string' || session.length > 200
+            || (engine === 'dsh' && session !== name)) {
             res.writeHead(400).end(); return;
           }
-          const entry = await invokeMemory('add', { workspace: 'default', subject: 'bot', subjectId: name,
-            text: assistant.trim(), source: 'hermes.turn', provenance: `profile=${name}; session=${session}`,
+          const entry = await invokeMemory('add', { workspace: consumer.workspace, subject: 'bot', subjectId: name,
+            text: assistant.trim(), source: `${engine}.turn`,
+            provenance: engine === 'dsh' ? `dsh:${session}` : `profile=${name}; session=${session}`,
             trust: 'observed' }) as { id: string };
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ id: entry.id }));
         }
