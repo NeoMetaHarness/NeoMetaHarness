@@ -301,6 +301,9 @@ async function main() {
   }
 }
 
+// Always build the current tree; never preview or measure a stale dist.
+const build = spawnSync(process.execPath, [join(app, 'node_modules/vite/bin/vite.js'), 'build'], { cwd: app, stdio: 'inherit', windowsHide: true });
+assert.equal(build.status, 0, 'Vite build failed');
 await verifyStartupSize();
 await main();
 console.log('P3-2_EXIT PASS');
