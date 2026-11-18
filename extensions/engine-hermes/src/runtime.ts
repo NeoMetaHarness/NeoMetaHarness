@@ -134,11 +134,15 @@ export class HermesRuntime {
   private readonly starting = new Map<string, Promise<HostedProcess>>();
   private readonly closingProfiles = new Set<string>();
   private readonly streams = new Set<AbortController>();
+  private readonly projectionVersions = new Map<string, string | undefined>();
   private python = '';
   private upstream = '';
   private stopped = false;
 
-  constructor(credentials: CredentialSource = new ProfileFileCredentials(resolve(process.env.NMH_HERMES_HOME ?? join(cacheDir, 'home')))) {
+  constructor(
+    credentials: CredentialSource = new ProfileFileCredentials(resolve(process.env.NMH_HERMES_HOME ?? join(cacheDir, 'home'))),
+    private readonly onProfileReady?: (profile: string, home: string) => Promise<string | undefined>,
+  ) {
     this.credentials = credentials;
   }
 
@@ -172,6 +176,7 @@ export class HermesRuntime {
     this.python = await pythonPath(this.upstream);
     await mkdir(this.home, { recursive: true });
     await this.ensureModelConfig(this.home);
+    await this.onProfileReady?.('default', this.home);
     const key = await this.ensureCredential('default');
     try {
       this.dashboard = await this.launch('dashboard', 'default', key);
@@ -217,14 +222,19 @@ export class HermesRuntime {
   private async server(profile: string): Promise<HostedProcess> {
     const name = profileName(profile);
     if (this.closingProfiles.has(name)) throw new Error(`Hermes profile ${name} is closing`);
+    const home = this.profileHome(name);
+    if (!existsSync(home)) throw new Error(`Unknown Hermes profile: ${name}`);
+    await this.ensureModelConfig(home);
+    const version = await this.onProfileReady?.(name, home);
+    if (this.projectionVersions.has(name) && this.projectionVersions.get(name) !== version) {
+      await this.stopProfile(name);
+    }
+    this.projectionVersions.set(name, version);
     const active = this.api.get(name);
     if (active && active.child.exitCode === null) return active;
     let pending = this.starting.get(name);
     if (!pending) {
       pending = (async () => {
-        const home = this.profileHome(name);
-        if (!existsSync(home)) throw new Error(`Unknown Hermes profile: ${name}`);
-        await this.ensureModelConfig(home);
         const key = await this.ensureCredential(name);
         const instance = await this.launch('api', name, key);
         this.api.set(name, instance);
@@ -261,6 +271,7 @@ export class HermesRuntime {
     const created = await response.json() as { ok: boolean; name: string; path: string };
     await this.ensureCredential(canonical);
     await this.ensureModelConfig(this.profileHome(canonical));
+    await this.onProfileReady?.(canonical, this.profileHome(canonical));
     return created;
   }
   async deleteProfile(name: string): Promise<{ ok: boolean }> {

@@ -6,3 +6,6 @@
     - id: neo-seam-provider
       name: './neo-providers.mjs'
       inject: [computerUse, browserUse, llm]
+    - id: neo-computer-tool
+      name: './neo-computer-tool.mjs'
+      inject: [tools]

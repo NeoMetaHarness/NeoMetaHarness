@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import type { DshEvent } from '@neometaharness/contracts';
 import { DshProjector, type VaultService } from '@neometaharness/vault';
+import type { ComputerRegistry } from '@neometaharness/computers';
 
 const extensionRoot = fileURLToPath(new URL('../', import.meta.url));
 const cli = join(extensionRoot, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
@@ -33,7 +34,7 @@ async function stopTree(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 class Session {
-  readonly id = randomUUID();
+  readonly id: string;
   readonly pid: number;
   private nextRequest = 0;
   private sequence = 0;
@@ -47,7 +48,8 @@ class Session {
   private lastMessageId = '';
   private stopPromise?: Promise<void>;
 
-  constructor(readonly stateDir: string, private readonly cwd: string, env: Record<string, string>, patch: string) {
+  constructor(id: string, readonly stateDir: string, private readonly cwd: string, env: Record<string, string>, patch: string) {
+    this.id = id;
     this.child = spawn(process.execPath, [cli, '--profile', 'sdk', '--patch', patch], {
       cwd: extensionRoot,
       env,
@@ -199,9 +201,10 @@ export class DshAgentRuntime {
   private readonly sessions = new Map<string, Session>();
   private closing = false;
 
-  constructor(private readonly vault: VaultService, private readonly dataDir: string) {}
+  constructor(private readonly vault: VaultService, private readonly dataDir: string,
+    private readonly computers?: ComputerRegistry) {}
 
-  async create(input: { workspaceId: string; cwd: string }): Promise<{ sessionId: string; pid: number }> {
+  async create(input: { workspaceId: string; cwd: string; computerId?: string }): Promise<{ sessionId: string; pid: number }> {
     if (this.closing) throw new Error('DSH runtime is stopped');
     if (!isAbsolute(input.cwd)) throw new Error('DSH workspace cwd must be absolute');
     const scope = { kind: 'engine' as const, workspaceId: input.workspaceId, subjectId: 'engine-dsh' };
@@ -211,6 +214,8 @@ export class DshAgentRuntime {
       if (secret !== undefined) secrets.set(name, secret);
     }
     const env = await new DshProjector(credentialKeys).project(secrets);
+    const sessionId = randomUUID();
+    if (input.computerId && !this.computers) throw new Error('Computer registry unavailable');
     await mkdir(this.dataDir, { recursive: true });
     const stateDir = join(this.dataDir, randomUUID());
     await mkdir(stateDir);
@@ -219,12 +224,20 @@ export class DshAgentRuntime {
     for (const name of ['@deepseek-ai/dsh-computer-use', '@deepseek-ai/dsh-browser-use']) {
       patch = patch.replace(`name: '${name}'`, `name: '${import.meta.resolve(name)}'`);
     }
-    patch = patch.replace("name: './neo-providers.mjs'",
-      `name: '${new URL('../neo-providers.mjs', import.meta.url).href}'`);
+    for (const name of ['neo-providers.mjs', 'neo-computer-tool.mjs']) {
+      patch = patch.replace(`name: './${name}'`, `name: '${new URL(`../${name}`, import.meta.url).href}'`);
+    }
     const patchFile = join(stateDir, 'cordis.patch.yml');
     await writeFile(patchFile, patch);
-    const session = new Session(stateDir, resolve(input.cwd), {
+    const computerBinding = input.computerId
+      ? this.computers?.assign('dsh', sessionId, input.computerId)
+      : undefined;
+    const session = new Session(sessionId, stateDir, resolve(input.cwd), {
       ...env,
+      ...(computerBinding ? {
+        NEO_COMPUTER_ENDPOINT: computerBinding.endpoint,
+        NEO_COMPUTER_TOKEN: computerBinding.token,
+      } : {}),
       DSH_HOME: join(stateDir, 'home'),
       DSH_AGENTS_HOME: join(stateDir, 'agents'),
       DSH_TELEMETRY_DISABLED: '1',
@@ -237,6 +250,7 @@ export class DshAgentRuntime {
       return { sessionId: session.id, pid: session.pid };
     } catch (error) {
       await session.stop(true);
+      this.computers?.unassign('dsh', sessionId);
       throw error;
     }
   }
@@ -255,6 +269,7 @@ export class DshAgentRuntime {
     const session = this.session(input.sessionId);
     await session.stop(true);
     this.sessions.delete(input.sessionId);
+    this.computers?.unassign('dsh', input.sessionId);
     return { cancelled: true };
   }
 
@@ -262,12 +277,14 @@ export class DshAgentRuntime {
     const session = this.session(input.sessionId);
     await session.stop();
     this.sessions.delete(input.sessionId);
+    this.computers?.unassign('dsh', input.sessionId);
     return { stopped: true };
   }
 
   async stop(): Promise<void> {
     this.closing = true;
     await Promise.all([...this.sessions.values()].map((session) => session.stop(true)));
+    for (const id of this.sessions.keys()) this.computers?.unassign('dsh', id);
     this.sessions.clear();
   }
 }

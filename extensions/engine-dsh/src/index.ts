@@ -1,5 +1,6 @@
 import { defineExtension } from '@neometaharness/kernel';
 import type { VaultService } from '@neometaharness/vault';
+import type { ComputerRegistry } from '@neometaharness/computers';
 import { join } from 'node:path';
 import { DshAgentRuntime } from './runtime.js';
 
@@ -7,9 +8,10 @@ export default defineExtension({
   activate(ctx) {
     const vault = ctx.inject<VaultService>('vault');
     const dataDir = ctx.inject<string>('extensionDataDir');
+    const computers = ctx.inject<ComputerRegistry>('computers');
     if (!vault || !dataDir) throw new Error('DSH requires Gateway vault and extension storage');
-    const runtime = new DshAgentRuntime(vault, join(dataDir, 'engine-dsh'));
-    ctx.provide('agentRuntime', runtime);
+    const runtime = new DshAgentRuntime(vault, join(dataDir, 'engine-dsh'), computers);
+    ctx.provide('dshAgentRuntime', runtime);
     ctx.effect(() => () => runtime.stop());
     ctx.health(() => ({ ok: true }));
     ctx.route('create', ({ body }) => runtime.create(body as Parameters<typeof runtime.create>[0]));

@@ -1,9 +1,14 @@
 import { defineExtension } from '@neometaharness/kernel';
+import type { ComputerRegistry } from '@neometaharness/computers';
+import { projectHermesComputer } from '@neometaharness/computers/hermes';
 import { HermesRuntime } from './runtime.js';
 
 export default defineExtension({
   async activate(ctx) {
-    const service = new HermesRuntime();
+    const computers = ctx.inject<ComputerRegistry>('computers');
+    const service = new HermesRuntime(undefined, computers
+      ? (profile, home) => projectHermesComputer(computers, profile, home)
+      : undefined);
     await service.start();
     ctx.provide('agentRuntime', service);
     ctx.effect(() => () => service.disconnect());

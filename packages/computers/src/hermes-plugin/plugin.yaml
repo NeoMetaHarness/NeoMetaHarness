@@ -1,0 +1,5 @@
+name: neo_vnc
+version: 1.0.0
+description: Neo Gateway computer provider
+config_keys:
+  - computer_use.neo_vnc
