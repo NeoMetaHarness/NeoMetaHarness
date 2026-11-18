@@ -44,8 +44,28 @@ import {
   requireOwner,
   type GatewayAuthContext,
 } from './rbac.js';
+import {
+  authorize,
+  getPolicy,
+  ROUTE_POLICY,
+  CONTRACT_POLICY,
+  HTTP_ROUTE_POLICY,
+  type PolicyLevel,
+} from './policy.js';
 
-export { requireViewer, requireMember, requireAdminOrOwner, requireOwner, type GatewayAuthContext };
+export {
+  requireViewer,
+  requireMember,
+  requireAdminOrOwner,
+  requireOwner,
+  authorize,
+  getPolicy,
+  ROUTE_POLICY,
+  CONTRACT_POLICY,
+  HTTP_ROUTE_POLICY,
+  type GatewayAuthContext,
+  type PolicyLevel,
+};
 
 export interface GatewayOptions {
   databaseFile: string;
@@ -67,6 +87,7 @@ export interface GatewayInstance {
   desktopToken?: string;
   auth: NeoAuth;
   db: SqliteDatabaseProvider;
+  router?: any;
   close(): Promise<void>;
 }
 
@@ -177,13 +198,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   });
 
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
-    if (operation === 'list') {
-      requireViewer(context);
-    } else if (operation === 'put' || operation === 'rotate') {
-      requireMember(context);
-    } else if (operation === 'delete') {
-      requireAdminOrOwner(context);
-    }
+    authorize(`vault.${operation}`, context);
     if (context?.workspaceId && scope.workspaceId !== context.workspaceId && context.role !== 'owner') {
       throw new ORPCError('FORBIDDEN', { message: 'Cross-workspace vault access forbidden' });
     }
@@ -244,19 +259,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     agents: agentApi.router,
     inbox: {
       ask: os.inbox.ask.handler(async ({ input, context }) => {
-        requireMember(context);
+        authorize('inbox.ask', context);
         return invokeInbox('ask', input) as Promise<InboxItem>;
       }),
       list: os.inbox.list.handler(async ({ context }) => {
-        requireViewer(context);
+        authorize('inbox.list', context);
         return invokeInbox('list', {}) as Promise<InboxItem[]>;
       }),
       accept: os.inbox.accept.handler(async ({ input, context }) => {
-        requireMember(context);
+        authorize('inbox.accept', context);
         return invokeInbox('accept', input) as Promise<InboxItem>;
       }),
       events: os.inbox.events.handler(async function* ({ input, signal, context }) {
-        requireViewer(context);
+        authorize('inbox.events', context);
         const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;
         yield* stream;
       }),
@@ -264,124 +279,124 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     x: {
       'skills-registry': {
         list: os.x['skills-registry'].list.handler(async ({ context }) => {
-          requireViewer(context);
+          authorize('x.skills-registry.list', context);
           return invokeSkills('list', {}) as Promise<SkillRecord[]>;
         }),
         get: os.x['skills-registry'].get.handler(async ({ input, context }) => {
-          requireViewer(context);
+          authorize('x.skills-registry.get', context);
           return invokeSkills('get', input) as Promise<{ metadata: SkillRecord; content: string }>;
         }),
         import: os.x['skills-registry'].import.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.skills-registry.import', context);
           return invokeSkills('import', input) as Promise<SkillRecord>;
         }),
         sync: os.x['skills-registry'].sync.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.skills-registry.sync', context);
           return invokeSkills('sync', input) as Promise<SkillRecord[]>;
         }),
         versions: os.x['skills-registry'].versions.handler(async ({ input, context }) => {
-          requireViewer(context);
+          authorize('x.skills-registry.versions', context);
           return invokeSkills('versions', input) as Promise<{ version: number; hash: string; metadata: SkillRecord }[]>;
         }),
         diff: os.x['skills-registry'].diff.handler(async ({ input, context }) => {
-          requireViewer(context);
+          authorize('x.skills-registry.diff', context);
           return invokeSkills('diff', input) as Promise<{ diff: string }>;
         }),
         rollback: os.x['skills-registry'].rollback.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.skills-registry.rollback', context);
           return invokeSkills('rollback', input) as Promise<SkillRecord>;
         }),
         assign: os.x['skills-registry'].assign.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.skills-registry.assign', context);
           return invokeSkills('assign', input) as Promise<{ assigned: boolean }>;
         }),
         assignments: os.x['skills-registry'].assignments.handler(async ({ context }) => {
-          requireViewer(context);
+          authorize('x.skills-registry.assignments', context);
           return invokeSkills('assignments', {}) as Promise<{ name: string; engine: 'hermes' | 'dsh'; targetId: string }[]>;
         }),
       },
       'memory-local': {
         list: os.x['memory-local'].list.handler(async ({ input, context }) => {
-          requireViewer(context);
+          authorize('x.memory-local.list', context);
           return invokeMemory('list', input) as ReturnType<typeof db.memories.list>;
         }),
         add: os.x['memory-local'].add.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.memory-local.add', context);
           return invokeMemory('add', input) as ReturnType<typeof db.memories.add>;
         }),
         update: os.x['memory-local'].update.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.memory-local.update', context);
           return (await invokeMemory('update', input) as Awaited<ReturnType<typeof db.memories.update>>) ?? null;
         }),
         delete: os.x['memory-local'].delete.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.memory-local.delete', context);
           return invokeMemory('delete', input) as Promise<{ deleted: boolean }>;
         }),
         export: os.x['memory-local'].export.handler(async ({ input, context }) => {
-          requireViewer(context);
+          authorize('x.memory-local.export', context);
           return invokeMemory('export', input) as ReturnType<typeof db.memories.export>;
         }),
       },
       'engine-dsh': {
         create: os.x['engine-dsh'].create.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-dsh.create', context);
           return invokeDsh('create', input) as Promise<{ sessionId: string; pid: number }>;
         }),
         prompt: os.x['engine-dsh'].prompt.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-dsh.prompt', context);
           return invokeDsh('prompt', input) as Promise<{ messageId: string }>;
         }),
         events: os.x['engine-dsh'].events.handler(async function* ({ input, signal, context }) {
-          requireViewer(context);
+          authorize('x.engine-dsh.events', context);
           const stream = await invokeDsh('events', { ...input, signal }) as AsyncIterable<DshEvent>;
           yield* coalesceText(stream);
         }),
         wait: os.x['engine-dsh'].wait.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-dsh.wait', context);
           return invokeDsh('wait', input) as Promise<{ status: 'settled' }>;
         }),
         cancel: os.x['engine-dsh'].cancel.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-dsh.cancel', context);
           return invokeDsh('cancel', input) as Promise<{ cancelled: boolean }>;
         }),
         shutdown: os.x['engine-dsh'].shutdown.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-dsh.shutdown', context);
           return invokeDsh('shutdown', input) as Promise<{ stopped: boolean }>;
         }),
       },
       'engine-t3': {
         create: os.x['engine-t3'].create.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-t3.create', context);
           return invokeT3('create', input) as Promise<{ sequence: number }>;
         }),
         send: os.x['engine-t3'].send.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-t3.send', context);
           return invokeT3('send', input) as Promise<{ sequence: number }>;
         }),
         events: os.x['engine-t3'].events.handler(async function* ({ input, signal, context }) {
-          requireViewer(context);
+          authorize('x.engine-t3.events', context);
           const stream = await invokeT3('events', { ...input, signal }) as AsyncIterable<T3Event>;
           yield* coalesceText(stream);
         }),
         approval: os.x['engine-t3'].approval.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-t3.approval', context);
           return invokeT3('approval', input) as Promise<{ sequence: number }>;
         }),
         settle: os.x['engine-t3'].settle.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-t3.settle', context);
           return invokeT3('settle', input) as Promise<{ sequence: number }>;
         }),
         stop: os.x['engine-t3'].stop.handler(async ({ input, context }) => {
-          requireMember(context);
+          authorize('x.engine-t3.stop', context);
           return invokeT3('stop', input) as Promise<{ outcome: 'killed' | 'released' | 'releasing' | 'shared'; sharedWithThreadIds: string[] }>;
         }),
         diff: os.x['engine-t3'].diff.handler(async ({ input, context }) => {
-          requireViewer(context);
+          authorize('x.engine-t3.diff', context);
           return invokeT3('diff', input) as Promise<{ threadId: string; fromTurnCount: number; toTurnCount: number; diff: string }>;
         }),
         threads: {
           list: os.x['engine-t3'].threads.list.handler(async ({ context }) => {
-            requireViewer(context);
+            authorize('x.engine-t3.threads.list', context);
             return invokeT3('threads/list', {}) as Promise<any>;
           }),
         },
@@ -389,78 +404,78 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       'engine-hermes': {
         skills: {
           list: os.x['engine-hermes'].skills.list.handler(async ({ input, context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.skills.list', context);
             return invokeHermes('skills/list', input) as Promise<{ name: string; provenance?: string; usage?: number }[]>;
           }),
           hub: os.x['engine-hermes'].skills.hub.handler(async ({ input, context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.skills.hub', context);
             return invokeHermes('skills/hub', input) as Promise<{ skills: { name: string }[] }>;
           }),
           curator: os.x['engine-hermes'].skills.curator.handler(async ({ input, context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.skills.curator', context);
             return invokeHermes('skills/curator', input) as Promise<{ enabled: boolean; paused: boolean }>;
           }),
           pause: os.x['engine-hermes'].skills.pause.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.skills.pause', context);
             return invokeHermes('skills/pause', input) as Promise<{ ok: boolean; paused: boolean }>;
           }),
           run: os.x['engine-hermes'].skills.run.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.skills.run', context);
             return invokeHermes('skills/run', input) as Promise<{ ok: boolean; pid: number; name: string }>;
           }),
           graph: os.x['engine-hermes'].skills.graph.handler(async ({ input, context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.skills.graph', context);
             return invokeHermes('skills/graph', input) as Promise<{ nodes: { id: string; label: string; kind: string }[]; edges: { source: string; target: string }[] }>;
           }),
           learn: os.x['engine-hermes'].skills.learn.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.skills.learn', context);
             return invokeHermes('skills/learn', input) as Promise<{ run_id: string }>;
           }),
         },
         profiles: {
           list: os.x['engine-hermes'].profiles.list.handler(async ({ context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.profiles.list', context);
             return invokeHermes('profiles/list', {}) as Promise<{ profiles: { name: string; path: string }[] }>;
           }),
           create: os.x['engine-hermes'].profiles.create.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.profiles.create', context);
             return invokeHermes('profiles/create', input) as Promise<{ ok: boolean; name: string; path: string }>;
           }),
           delete: os.x['engine-hermes'].profiles.delete.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.profiles.delete', context);
             return invokeHermes('profiles/delete', input);
           }),
         },
         runs: {
           start: os.x['engine-hermes'].runs.start.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.runs.start', context);
             return invokeHermes('runs/start', input) as Promise<{ run_id: string }>;
           }),
           events: os.x['engine-hermes'].runs.events.handler(async function* ({ input, signal, context }) {
-            requireViewer(context);
+            authorize('x.engine-hermes.runs.events', context);
             const stream = await invokeHermes('runs/events', { ...input, signal }) as AsyncIterable<HermesEvent>;
             yield* coalesceText(stream);
           }),
           approve: os.x['engine-hermes'].runs.approve.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.runs.approve', context);
             return invokeHermes('runs/approve', input) as Promise<{ ok: boolean }>;
           }),
           stop: os.x['engine-hermes'].runs.stop.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.runs.stop', context);
             return invokeHermes('runs/stop', input) as Promise<{ status: string }>;
           }),
         },
         cron: {
           list: os.x['engine-hermes'].cron.list.handler(async ({ context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.cron.list', context);
             return invokeHermes('cron/list', {}) as Promise<Record<string, unknown>[]>;
           }),
           create: os.x['engine-hermes'].cron.create.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.cron.create', context);
             return invokeHermes('cron/create', input) as Promise<{ id: string }>;
           }),
           delete: os.x['engine-hermes'].cron.delete.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.cron.delete', context);
             return invokeHermes('cron/delete', input);
           }),
         },
@@ -468,17 +483,17 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     },
     extensions: {
       list: os.extensions.list.handler(async ({ context }) => {
-        requireViewer(context);
+        authorize('extensions.list', context);
         return Promise.all(kernel.list().map((extension) => withHealth(extension.id)));
       }),
       enable: os.extensions.enable.handler(async ({ input, context }) => {
-        requireAdminOrOwner(context);
+        authorize('extensions.enable', context);
         await kernel.enable(input.id);
         if (input.id === 'engine-hermes') await agentApi.sync();
         return withHealth(input.id);
       }),
       disable: os.extensions.disable.handler(async ({ input, context }) => {
-        requireAdminOrOwner(context);
+        authorize('extensions.disable', context);
         if (input.id === 'engine-hermes') await agentApi.stop();
         await kernel.disable(input.id);
         return withHealth(input.id);
@@ -486,60 +501,60 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     },
     vault: {
       list: os.vault.list.handler(async ({ input, context }) => {
-        await authorizeVault('list', input.scope, context);
+        await authorizeVault('list', input?.scope, context);
         return vault.list(input.scope);
       }),
       put: os.vault.put.handler(async ({ input, context }) => {
-        await authorizeVault('put', input.scope, context);
+        await authorizeVault('put', input?.scope, context);
         return vault.put(input.scope, input.name, input.value);
       }),
       rotate: os.vault.rotate.handler(async ({ input, context }) => {
-        await authorizeVault('rotate', input.scope, context);
+        await authorizeVault('rotate', input?.scope, context);
         return vault.rotate(input.scope, input.name, input.value);
       }),
       delete: os.vault.delete.handler(async ({ input, context }) => {
-        await authorizeVault('delete', input.scope, context);
+        await authorizeVault('delete', input?.scope, context);
         return { deleted: await vault.delete(input.scope, input.name) };
       }),
     },
     computers: {
       list: os.computers.list.handler(async ({ context }) => {
-        requireViewer(context);
+        authorize('computers.list', context);
         return computers.list();
       }),
       attach: os.computers.attach.handler(async ({ input, context }) => {
-        requireAdminOrOwner(context);
+        authorize('computers.attach', context);
         return computers.attach(input.providerId, input.target);
       }),
       release: os.computers.release.handler(async ({ input, context }) => {
-        requireAdminOrOwner(context);
+        authorize('computers.release', context);
         return { released: await computers.release(input.id) };
       }),
       lease: os.computers.lease.handler(async ({ input, context }) => {
-        requireAdminOrOwner(context);
+        authorize('computers.lease', context);
         return computers.lease(input.id, input.holder);
       }),
       assign: os.computers.assign.handler(async ({ input, context }) => {
-        requireAdminOrOwner(context);
+        authorize('computers.assign', context);
         computers.assign(input.engine, input.targetId, input.computerId);
         return input;
       }),
       kill: os.computers.kill.handler(async ({ input, context }) => {
-        requireAdminOrOwner(context);
+        authorize('computers.kill', context);
         return computers.kill(input.engaged);
       }),
       state: os.computers.state.handler(async ({ context }) => {
-        requireViewer(context);
+        authorize('computers.state', context);
         return computers.state();
       }),
       capture: os.computers.capture.handler(async ({ input, context }) => {
-        requireAdminOrOwner(context);
+        authorize('computers.capture', context);
         return computers.capture(input.id);
       }),
     },
     events: {
       subscribe: os.events.subscribe.handler(async function* ({ input, signal, context }) {
-        requireViewer(context);
+        authorize('events.subscribe', context);
         yield* kernel.events.subscribe(input.since, signal);
       }),
     },
@@ -700,7 +715,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }));
           return;
         }
-        requireViewer(context as GatewayAuthContext);
+        authorize(path, context as GatewayAuthContext);
         if (req.method !== 'GET') {
           res.writeHead(405).end();
           return;
@@ -723,7 +738,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       const matched = await httpRPC.handle(req, res, { context: context as GatewayAuthContext });
       if (!matched.matched) res.writeHead(404).end();
     } catch (error) {
-      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      if (!res.headersSent) {
+        const err = error as any;
+        const status = err?.status ?? (err?.code === 'FORBIDDEN' ? 403 : err?.code === 'UNAUTHORIZED' ? 401 : 500);
+        res.writeHead(status, { 'content-type': 'application/json' });
+      }
       if (!res.writableEnded) res.end(JSON.stringify({ error: (error as Error).message }));
     }
   });
@@ -821,6 +840,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     desktopToken,
     auth,
     db,
+    router,
     async close() {
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((done) => wss.close(() => done()));

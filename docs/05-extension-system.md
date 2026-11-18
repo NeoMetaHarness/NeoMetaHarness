@@ -101,3 +101,26 @@ discover → install → verify → (review permissions) → enable → running 
 - Official extensions live in the product monorepo under `extensions/`.
 - The registry index lives in **NeoMetaHarness-Extensions** (`machine/extensions-registry.json`). Sources: registry, git URL, npm, PyPI, or a local path.
 - `neo ext list | install | enable | disable | upgrade | remove | new` (scaffold from a template: TS-cordis, TS-process, Python-process, UI-only, content).
+
+## 9. Adding a route
+
+Every route exposed by Neo—whether an oRPC contract procedure in @neometaharness/contracts or a plain HTTP extension route—**must** be registered in the centralized policy table (pps/gateway/src/policy.ts) with an explicit role level (iewer, member, dmin, owner, or internal).
+
+1. **Contract routes:** When adding a new leaf procedure to 
+eoContract (e.g., x.new-engine.action or gents.features.do), add a corresponding entry in CONTRACT_POLICY:
+   `	s
+   'x.new-engine.action': 'member',
+   `
+   The contract-coverage test (pps/gateway/test/policy.test.ts) walks 
+eoContract and asserts a strict 1:1 bi-directional mapping. Omitting a policy entry or adding a dangling entry fails pnpm --dir apps/gateway test.
+
+2. **Route authorization in handlers:** All procedure handlers must invoke uthorize(path, context) as their first action before validation or engine delegation:
+   `	s
+   action: os.x['new-engine'].action.handler(async ({ input, context }) => {
+     authorize('x.new-engine.action', context);
+     return invokeEngine('action', input);
+   }),
+   `
+   This guarantees that unauthenticated callers (401) and unauthorized callers (403) are rejected even if the underlying extension is disabled or degraded (never returning 404 or 503 to unauthorized users).
+
+3. **Plain HTTP extension routes:** Extension endpoints registered on the kernel (kernel.hasRoute(path)) and internal endpoints must be documented in HTTP_ROUTE_POLICY and ROUTE_POLICY (defaulting to 'viewer' for extension GET routes or 'internal' for token-protected endpoints).
