@@ -301,8 +301,10 @@
     },
     "P4-6": {
       "title": "Skills safety: eval gate, autonomy ceilings, Hub install with static scan",
-      "status": "in_progress",
-      "owner": "sol-b"
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "PM rerun 2x + regression 31/31 on main: P4-6_EXIT PASS (passing skill assigned; failing blocked then admin override audited; skill above ceiling not projected; malicious Hub fixture blocked with report; benign installs). Hub scan is read-only regex over preview (no execution), path-escape checks, install requires admin approval when blocked and re-scan if contents changed; policy: assign/evaluate/override/ceiling.set/hub.approve admin",
+      "follow_up": "live Hermes Skills Hub unverified; multi-file Hub skills need upstream file-content access; ceilings enforced at projection only; heuristic scan"
     }
   },
   "p3_tasks": {
@@ -353,6 +355,11 @@
       "title": "Coding depth: history on reopen, per-turn diff, checkpoints, provider choice",
       "status": "in_progress",
       "owner": "sol-b"
+    },
+    "P5-5": {
+      "title": "Coding exit: DSH as T3 provider, switch provider mid-thread, worktree/terminal/PR prep",
+      "status": "in_progress",
+      "owner": "sol61"
     }
   },
   "p7_tasks": {
@@ -360,6 +367,11 @@
       "title": "Extension toggle-safety suite (routes, health, processes, projections)",
       "status": "in_progress",
       "owner": "antigravity"
+    },
+    "P7-2": {
+      "title": "Security review: threat model, findings, fixes with tests",
+      "status": "in_progress",
+      "owner": "opus"
     }
   },
   "p6_tasks": {
