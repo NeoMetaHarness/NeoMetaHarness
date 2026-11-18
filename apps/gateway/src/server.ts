@@ -937,6 +937,12 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }
 
       if (path.startsWith('/auth/')) {
+        // Desktop mode has exactly one bootstrapped owner; any loopback caller
+        // (another OS user, a rebinding web page) must not self-register.
+        if (mode === 'desktop' && path.startsWith('/auth/sign-up')) {
+          res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Sign-up is disabled in desktop mode' }));
+          return;
+        }
         await authNodeHandler(req, res);
         return;
       }

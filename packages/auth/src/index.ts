@@ -81,6 +81,17 @@ export function createNeoAuth(options: CreateNeoAuthOptions = {}): any {
           ...defaultRoles,
           viewer: viewerRole,
         },
+        // Workspace ownership confers gateway-wide authority (extensions,
+        // engines, computers), so only the instance bootstrap (no workspace
+        // exists yet) or an existing owner/admin may create a workspace.
+        // Without this any self-registered account could make itself owner.
+        allowUserToCreateOrganization: async (user: { id: string }) => {
+          const anyWorkspace = await kysely!.selectFrom('organization').select('id').executeTakeFirst();
+          if (!anyWorkspace) return true;
+          const privileged = await kysely!.selectFrom('member').select('id')
+            .where('userId', '=', user.id).where('role', 'in', ['owner', 'admin']).executeTakeFirst();
+          return Boolean(privileged);
+        },
       }) as any,
       bearer() as any,
       apiKey({
