@@ -10,6 +10,7 @@ import {
 } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './coding.css';
+import CodingWorkflow from './CodingWorkflow';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Catalog = Awaited<ReturnType<Client['x']['engine-t3']['threads']['list']>>;
@@ -457,6 +458,7 @@ export default function Coding() {
                 {running && <Button label="Stop" data-testid="coding-stop" onClick={() => void stop()}>Stop</Button>}
               </div>
             </div>
+            <CodingWorkflow key={threadId} threadId={threadId} />
             {diff !== null && <pre className="coding-diff" data-testid="coding-diff-result">{diff}</pre>}
             <ChatLayout composer={<ChatComposer value={draft} onChange={setDraft} onSubmit={(value) => void send(value)}
               onStop={() => void stop()} isStopShown={running} placeholder="Ask the coding agent" isDisabled={busy || !subscribed} />}
