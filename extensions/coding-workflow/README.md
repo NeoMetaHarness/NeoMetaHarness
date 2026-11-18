@@ -31,6 +31,9 @@ Models hub. It does not fall back to a scripted model. Provider switching,
 worktree creation, terminal commands and local commits require a member;
 terminal observation requires a viewer. The ACP bridge accepts text prompts;
 rich attachments and a native Claude Code subscription are not verified here.
+This slice requires Gateway and T3 on the same host: the ACP command uses local
+IPC, and local PR preparation accesses the thread worktree through Git. Remote
+T3 environments need an additional transport before they can use this workflow.
 
 PR preparation is local: stage explicit selected paths in the thread worktree,
 commit them, and write a Markdown description to extension storage. It never
