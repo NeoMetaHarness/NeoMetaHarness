@@ -4,12 +4,18 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
 import { Button } from '@neometaharness/ui';
-import { gatewayUrl } from '../config';
+import { gatewayToken, gatewayUrl } from '../config';
 import './channels.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Platform = Awaited<ReturnType<Client['x']['channels']['list']>>['platforms'][number];
-const rpc = createORPCClient<Client>(new RPCLink({ url: gatewayUrl() }));
+const rpc = createORPCClient<Client>(new RPCLink({
+  url: gatewayUrl(),
+  headers: () => {
+    const token = gatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  },
+}));
 
 function isDisabled(reason: unknown): boolean {
   const error = reason as { status?: number; code?: string } | null;

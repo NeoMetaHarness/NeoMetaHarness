@@ -222,11 +222,13 @@ async function main() {
     process.env.NMH_HERMES_MODEL_URL = 'http://127.0.0.1:' + modelPort + '/v1';
     process.env.NMH_CHANNELS_TELEGRAM_API_BASE = 'http://127.0.0.1:' + tgPort + '/';
 
-    gateway = await startGateway({ databaseFile: join(temp, 'neo.sqlite'), extensionsDir: join(repo, 'extensions') });
+    gateway = await startGateway({ databaseFile: join(temp, 'neo.sqlite'), extensionsDir: join(repo, 'extensions'), mode: 'desktop' });
     const base = 'http://127.0.0.1:' + gateway.port;
-    const rpc = createORPCClient(new RPCLink({ url: base }));
+    assert.ok(gateway.desktopToken, 'desktop authentication token');
+    const rpc = createORPCClient(new RPCLink({ url: base, headers: { authorization: 'Bearer ' + gateway.desktopToken } }));
     assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
-    assert.equal((await rpc.extensions.enable({ id: 'engine-hermes' })).status, 'running');
+    const hermes = await rpc.extensions.enable({ id: 'engine-hermes' });
+    assert.equal(hermes.status, 'running', hermes.reason);
     await rpc.x['engine-hermes'].profiles.create({ name: 'channel_ui' });
     const enabled = await rpc.extensions.enable({ id: 'channels' });
     assert.equal(enabled.status, 'running', enabled.reason);
@@ -238,7 +240,7 @@ async function main() {
     await eventually(async () => (await fetch('http://127.0.0.1:' + port + '/settings')).ok, 'Vite preview');
     await chrome.attach('viewer');
     viewer = await CDP.open(chrome.browser('viewer'));
-    await viewer.navigate('http://127.0.0.1:' + port + '/settings?gateway=' + encodeURIComponent(base));
+    await viewer.navigate('http://127.0.0.1:' + port + '/settings?gateway=' + encodeURIComponent(base) + '&token=' + encodeURIComponent(gateway.desktopToken));
     await eventually(() => viewer.evaluate('!!document.querySelector("[data-testid=settings-channels-open]")'), 'Settings Channels entry');
     await viewer.evaluate('document.querySelector("[data-testid=settings-channels-open]").click()');
     await eventually(() => viewer.evaluate('location.pathname === "/settings/channels"'), 'Settings Channels navigation');
@@ -262,7 +264,7 @@ async function main() {
     await eventually(() => viewer.evaluate('document.body.innerText.includes("Telegram disconnected")'), 'disconnect feedback');
     await rpc.extensions.disable({ id: 'channels' });
     await eventually(() => viewer.evaluate('document.querySelector("[data-testid=channels-status]")?.textContent?.includes("disabled")'), 'disabled state shown on page', 15000);
-    assert.equal((await fetch(base + '/x/sample-ts/hello')).status, 200);
+    assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: 'Bearer ' + gateway.desktopToken } })).status, 200);
     assert.equal((await rpc.extensions.list()).find((item) => item.id === 'sample-ts')?.status, 'running');
     console.log('P2-5_GATEWAY_UI PASS lazy=channels bot=selected telegram=live-roundtrip token=write-only disconnect=cleared disabled=visible sample=healthy');
   } finally {

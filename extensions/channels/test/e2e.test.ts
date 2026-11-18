@@ -151,25 +151,31 @@ async function gateway(home: string, modelUrl: string, telegramUrl: string) {
     cwd: join(repo, 'apps/gateway'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...process.env, NMH_HERMES_HOME: home, NMH_HERMES_MODEL_URL: modelUrl,
       NMH_CHANNELS_TELEGRAM_API_BASE: telegramUrl,
-      NMH_DB_PATH: join(home, 'neo.sqlite'), NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0' },
+      NMH_DB_PATH: join(home, 'neo.sqlite'), NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0',
+      NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let stderr = '';
   child.stderr!.on('data', (data: Buffer) => {
     // Do not echo channel credentials even on a startup failure.
     stderr = (stderr + data.toString()).slice(-4000).replaceAll(token, '<redacted>').replaceAll(rotated, '<redacted>');
   });
+  let desktopToken = '';
   const port = await Promise.race([new Promise<number>((done, reject) => {
     const reader = createInterface({ input: child.stdout! });
     reader.on('line', (line) => {
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) desktopToken = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
       if (line.startsWith('GATEWAY_READY ')) {
+        const ready = JSON.parse(line.slice(14)) as { port: number; token?: string };
+        desktopToken ||= ready.token ?? '';
         reader.close();
-        done((JSON.parse(line.slice(14)) as { port: number }).port);
+        done(ready.port);
       }
     });
     child.once('error', reject);
     child.once('exit', (code) => reject(new Error('Gateway exited ' + code + ' ' + stderr)));
   }), pause(30000).then(() => { throw new Error('Gateway startup timeout ' + stderr); })]);
-  return { child, port, get error() { return stderr; } };
+  assert.ok(desktopToken, 'gateway desktop token');
+  return { child, port, desktopToken, get error() { return stderr; } };
 }
 
 async function closeGateway(child?: ChildProcess) {
@@ -195,7 +201,8 @@ async function main() {
     app = await gateway(home, 'http://127.0.0.1:' + modelPort + '/v1',
       'http://127.0.0.1:' + telegramPort + '/');
     const base = 'http://127.0.0.1:' + app.port;
-    const rpc = createORPCClient<Client>(new RPCLink({ url: base }));
+    const headers = { authorization: `Bearer ${app.desktopToken}` };
+    const rpc = createORPCClient<Client>(new RPCLink({ url: base, headers }));
     assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
     assert.equal((await rpc.extensions.enable({ id: 'engine-hermes' })).status, 'running');
     await rpc.x['engine-hermes'].profiles.create({ name: 'telegramtest' });
@@ -252,7 +259,7 @@ async function main() {
       return [...running].every((pid) => !live.has(pid));
     }, 'Telegram gateway tree stopped');
     assert.equal((await fetch(base + '/x/channels/status')).status, 404);
-    assert.equal((await fetch(base + '/x/sample-ts/hello')).status, 200);
+    assert.equal((await fetch(base + '/x/sample-ts/hello', { headers })).status, 200);
     assert.equal((await rpc.extensions.list()).find((entry) => entry.id === 'engine-hermes')?.status, 'running');
     console.log('CHANNELS_GATEWAY_E2E PASS platforms=dynamic projected=encrypted rotate=updated telegram=roundtrip disconnect=clean disabled=404 sample=healthy');
   } catch (error) {

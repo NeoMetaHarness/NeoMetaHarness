@@ -273,11 +273,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           return invokeChannels('list', input) as Promise<any>;
         }),
         connect: os.x.channels.connect.handler(async ({ input, context }) => {
-          requireMember(context);
+          requireAdminOrOwner(context);
           return invokeChannels('connect', input) as Promise<{ connected: boolean }>;
         }),
         disconnect: os.x.channels.disconnect.handler(async ({ input, context }) => {
-          requireMember(context);
+          requireAdminOrOwner(context);
           return invokeChannels('disconnect', input) as Promise<{ disconnected: boolean }>;
         }),
         status: os.x.channels.status.handler(async ({ input, context }) => {
@@ -709,7 +709,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }
 
       if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/channels/')) {
-        if (!kernel.hasRoute(path) && context.role && context.role !== 'viewer') {
+        if (!kernel.hasRoute(path) && context.role && context.role !== 'viewer' && !path.startsWith('/x/channels/')) {
           res.writeHead(404).end();
           return;
         }
