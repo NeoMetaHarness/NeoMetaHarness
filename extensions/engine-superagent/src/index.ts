@@ -174,9 +174,11 @@ class SuperagentService {
   private async postmortem(item: InboxItem, report: Report): Promise<Postmortem> {
     const started = Date.now();
     let outcome = 'failed';
+    let modelId: string | undefined;
     let summary: Postmortem = { worked: report.summary, failed: report.risks.join('; ') || 'None reported', reusable: false };
     try {
       const { adapter, provider, model } = await this.models('eval', item);
+      modelId = model;
       const request = createUserMessage({ content: [{ type: 'text', text: JSON.stringify({
         kind: 'postmortem', ticketId: item.ticketId ?? item.id,
         text: item.text, source: item.source, status: report.status,
@@ -206,7 +208,7 @@ class SuperagentService {
     } finally {
       if (!this.closed) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: [], chosenAction: 'postmortem',
-        modelRole: 'eval', latencyMs: Date.now() - started, outcome });
+        modelRole: 'eval', model_id: modelId, latencyMs: Date.now() - started, outcome });
     }
     return summary;
   }
@@ -251,8 +253,10 @@ class SuperagentService {
   private async evaluate(item: InboxItem, candidate: Candidate): Promise<void> {
     const started = Date.now();
     let outcome = 'failed';
+    let modelId: string | undefined;
     try {
       const { adapter, provider, model } = await this.models('eval', item);
+      modelId = model;
       const request = createUserMessage({ content: [{ type: 'text', text: JSON.stringify({
         evalId: candidate.evalId, triggerIds: candidate.triggers.map((trigger) => trigger.id),
         botId: item.botId, text: item.text, mode: item.mode,
@@ -266,7 +270,7 @@ class SuperagentService {
     } finally {
       await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: candidate.triggers.map((trigger) => trigger.id),
-        chosenAction: 'eval', modelRole: 'eval', latencyMs: Date.now() - started, outcome });
+        chosenAction: 'eval', modelRole: 'eval', model_id: modelId, latencyMs: Date.now() - started, outcome });
     }
   }
 

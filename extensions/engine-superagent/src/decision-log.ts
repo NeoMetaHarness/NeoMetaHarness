@@ -29,13 +29,13 @@ export class DecisionLog {
     this.path = join(dir, 'decisions.jsonl');
   }
 
-  record(input: Omit<DecisionTrace, 'trace_id' | 'at' | 'model_id' | 'success' | 'actual_latency_ms' | 'choice' | 'ranking'>): Promise<void> {
-    const modelId = input.modelRole;
+  record(input: Omit<DecisionTrace, 'trace_id' | 'at' | 'model_id' | 'success' | 'actual_latency_ms' | 'choice' | 'ranking'> & { model_id?: string }): Promise<void> {
+    const modelId = input.model_id ?? `policy:${input.chosenAction}`;
     const trace: DecisionTrace = {
       ...input, trace_id: randomUUID(), at: Date.now(), model_id: modelId,
       success: input.outcome === 'accepted' || input.outcome === 'ready',
       actual_latency_ms: input.latencyMs,
-      choice: { model_id: modelId }, ranking: input.candidates.map((model_id) => ({ model_id })),
+      choice: { model_id: modelId }, ranking: input.model_id ? [{ model_id: modelId }] : [],
     };
     const line = JSON.stringify(trace) + '\n';
     const task = this.pending.then(async () => {

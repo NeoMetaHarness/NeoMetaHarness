@@ -309,6 +309,15 @@ async function trial(previewPort) {
       }
       assert.equal(trace.source, 'neo/cron');
     }
+    for (const action of ['eval', 'postmortem']) {
+      const trace = traces.find((entry) => entry.chosenAction === action);
+      assert.equal(trace.model_id, 'scripted');
+      assert.equal(trace.choice.model_id, 'scripted');
+      assert.deepEqual(trace.ranking, [{ model_id: 'scripted' }]);
+    }
+    for (const action of ['accept', 'delegate']) {
+      assert.equal(traces.find((entry) => entry.chosenAction === action).model_id, `policy:${action}`);
+    }
     const logFile = join(temporary, 'extensions', 'engine-superagent', 'traces', 'decisions.jsonl');
     const lines = (await readFile(logFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     assert.ok(lines.length >= traces.length);
