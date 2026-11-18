@@ -324,6 +324,22 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  extensions/computer-local-sandbox:
+    dependencies:
+      '@neometaharness/computers':
+        specifier: workspace:*
+        version: link:../../packages/computers
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+    devDependencies:
+      '@types/node':
+        specifier: 22.18.13
+        version: 22.18.13
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   extensions/engine-dsh:
     dependencies:
       '@deepseek-ai/dsh':
