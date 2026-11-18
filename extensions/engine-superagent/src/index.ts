@@ -1,19 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { Context } from '@deepseek-ai/cordis';
-import Loader from '@deepseek-ai/cordis-plugin-loader';
-import AgentPresets from '@deepseek-ai/dsh-agent-preset-registry';
-import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit';
-import { LlmAdapter, ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm';
-import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm';
-import { SessionId } from '@deepseek-ai/dsh-session';
-import type {} from '@deepseek-ai/dsh-tool-testkit';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { z } from 'zod';
 import { defineExtension } from '@neometaharness/kernel';
 import type { InboxEvent, InboxItem } from '@neometaharness/contracts';
 import { loadPinnedSuperagent } from './pinned.js';
+import { vaultModelFactory, type ModelFactory } from './model.js';
+import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
+import type { VaultService } from '@neometaharness/vault';
 
 type Report = NonNullable<InboxItem['report']>;
 type Candidate = { evalId: string; triggers: { id: string }[] };
@@ -41,176 +35,8 @@ export class NeoSourceAdapter {
   }
 }
 
-/** Deterministic DSH LLM adapter for the upstream Engine's Eval candidate. */
-class ScriptedEvalModel extends LlmAdapter {
-  constructor(private readonly endpoint?: string) { super(); }
-
-  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
-    return Promise.resolve({ provider, id: model, name: model, context: { contextWindow: 100000 } });
-  }
-
-  override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    const prompt = options.messages[0]?.content;
-    let decision = 'accept';
-    if (this.endpoint) {
-      const response = await fetch(this.endpoint + '/evaluate', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt }), signal: options.signal,
-      });
-      if (!response.ok) throw new Error(`Scripted DSH Eval HTTP ${response.status}`);
-      const result = await response.json() as { decision: string };
-      decision = result.decision;
-    }
-    yield { type: 'block-start', index: 0, blockType: 'text' };
-    yield { type: 'block-end', index: 0, block: { type: 'text', text: JSON.stringify({ decision }) } };
-    yield { type: 'finish', reason: { kind: 'stop' } };
-  }
-
-  async evaluate(item: InboxItem, candidate: Candidate): Promise<void> {
-    const request = createUserMessage({ content: [{ type: 'text', text: JSON.stringify({
-      evalId: candidate.evalId, triggerIds: candidate.triggers.map((trigger) => trigger.id),
-      botId: item.botId, text: item.text, mode: item.mode,
-    }) }], source: { kind: 'user' } });
-    let result = '';
-    for await (const chunk of this.stream({ provider: 'neo-eval', model: 'scripted', messages: [request] })) {
-      if (chunk.type === 'block-end' && chunk.block.type === 'text') result += chunk.block.text;
-    }
-    if ((JSON.parse(result) as { decision: string }).decision !== 'accept') {
-      throw new Error('Scripted Eval declined the proposed ticket');
-    }
-  }
-}
-
-/** Per-worker DSH preset. The Neo MCP tool never appears on the default or root agent. */
-class ScriptedWorkerModel extends LlmAdapter {
-  private calls = 0;
-
-  constructor(private tool: string, private readonly args: { botId: string; text: string },
-    private readonly endpoint?: string) { super(); }
-
-  selectTool(name: string): void { this.tool = name; }
-
-  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
-    return Promise.resolve({ provider, id: model, name: model, context: { contextWindow: 100000 } });
-  }
-
-  override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    const stage = ++this.calls;
-    if (stage === 1 && !options.tools?.some((entry) => entry.name === this.tool)) {
-      throw new Error('DSH model request was missing the worker MCP tool');
-    }
-    if (this.endpoint) {
-      const response = await fetch(this.endpoint + '/generate', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stage, tool: this.tool, args: this.args, tools: options.tools?.map((t) => t.name) }),
-        signal: options.signal,
-      });
-      if (!response.ok) throw new Error(`Scripted DSH model HTTP ${response.status}`);
-      const answer = await response.json() as { action: 'delegate' | 'finish' };
-      if (answer.action !== (stage === 1 ? 'delegate' : 'finish')) {
-        throw new Error(`Unexpected scripted DSH model decision ${answer.action}`);
-      }
-    }
-    if (stage === 1) {
-      yield { type: 'block-start', index: 0, blockType: 'tool-call' };
-      yield { type: 'block-end', index: 0, block: {
-        type: 'tool-call', id: ToolCallId(randomUUID()), name: this.tool, arguments: JSON.stringify(this.args),
-      } };
-      yield { type: 'finish', reason: { kind: 'tool-calls' } };
-      return;
-    }
-    yield { type: 'block-start', index: 0, blockType: 'text' };
-    yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Worker delegation finished.' } };
-    yield { type: 'finish', reason: { kind: 'stop' } };
-  }
-}
-
-class DshWorker {
-  private readonly context = new Context();
-  private registration?: { dispose(): Promise<void> };
-  private active = new Set<{ dispose(): Promise<void> }>();
-  private next = 0;
-
-  async start(home: string, gatewayUrl: string, token?: string): Promise<void> {
-    const effectiveToken = token ?? process.env.NMH_GATEWAY_TOKEN;
-    await mkdir(home, { recursive: true });
-    this.context.baseUrl = import.meta.url;
-    await this.context.plugin(Loader);
-    await mountAgentLoopTestDependencies(this.context);
-    await mountAgentLoopTestHarness(this.context);
-    await this.context.plugin(AgentPresets, { default: 'standard' });
-    const serverFile = fileURLToPath(new URL('./mcp-server.mjs', import.meta.url));
-    const mcpModule = import.meta.resolve('@deepseek-ai/dsh-mcp-client');
-    this.registration = await this.context.plugin({
-      inject: ['agentPresets'],
-      async *apply(owner) {
-        yield await owner.agentPresets.register({ id: 'standard', plugins: [] });
-        yield await owner.agentPresets.register({ id: 'neo-superagent-worker', plugins: [{
-          id: 'neo-superagent-mcp', name: mcpModule,
-          config: {
-            transport: 'stdio', serverName: 'neo', command: process.execPath,
-            args: [serverFile, gatewayUrl], cwd: home,
-            env: { DSH_HOME: home, ...(effectiveToken ? { NMH_GATEWAY_TOKEN: effectiveToken } : {}) }, toolCallTimeoutMs: 90000,
-            failOnStartupError: true, reconnect: { enabled: false },
-          },
-        }] });
-      },
-    });
-  }
-
-  async delegate(botId: string, text: string): Promise<{ summary: string; tests: string[]; risks: string[] }> {
-    const provider = `neo-worker-${randomUUID()}`;
-    const adapter = new ScriptedWorkerModel('', { botId, text }, process.env.NMH_SUPERAGENT_MODEL_URL);
-    // Every worker has its own model adapter, allowing concurrent assignments.
-    const unregister = this.context.llm.registerAdapter([provider], adapter);
-    let worker: Awaited<ReturnType<typeof this.context.agents.create>> | undefined;
-    try {
-      worker = await this.context.agents.create({
-        sessionId: SessionId(`neo-superagent-${++this.next}-${randomUUID()}`),
-        agentOptions: { provider, model: 'scripted' },
-        setup: async (owner) => { await this.context.agentPresets.mount(owner, 'neo-superagent-worker'); },
-      });
-      this.active.add(worker);
-      // DSH normalizes MCP tool names containing dots and adds a stable suffix.
-      const available = this.context.tools.schemas(worker.agent).map((entry) => entry.name);
-      const matching = available.filter((name) => /^mcp__neo__agents_send_to_bot_[a-f0-9]+$/.test(name));
-      if (matching.length !== 1) {
-        throw new Error(`DSH worker MCP delegation tool unavailable or ambiguous (available: ${available.join(', ')})`);
-      }
-      // Adapter choice is tied to this worker; the DSH agent loop selects and
-      // executes the MCP tool from a real model turn.
-      adapter.selectTool(matching[0]!);
-      worker.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: JSON.stringify({ botId, text }) }], source: { kind: 'user' },
-      }));
-      await worker.agent.whenIdle();
-      const result = worker.agent.session.snapshotEvents().find((event) => event.type === 'tool/result');
-      if (!result) throw new Error('DSH worker did not execute the Hermes MCP tool');
-      const output = result.data.message.content.find((part) => part.type === 'text');
-      const message = output?.type === 'text' ? output.text : '';
-      if (result.data.message.isError) throw new Error(message || 'Hermes MCP tool failed');
-      const parsed = JSON.parse(message) as { summary: string; tests?: string[]; risks?: string[] };
-      return { summary: parsed.summary, tests: parsed.tests ?? [], risks: parsed.risks ?? [] };
-    } finally {
-      try {
-        if (worker) {
-          this.active.delete(worker);
-          await worker.dispose();
-        }
-      } finally {
-        unregister();
-      }
-    }
-  }
-
-  async close(): Promise<void> {
-    await Promise.allSettled([...this.active].map((worker) => worker.dispose()));
-    await this.registration?.dispose();
-    await this.context.fiber.dispose();
-  }
-}
-
 class SuperagentService {
+  constructor(private readonly models: ModelFactory, private readonly worker: WorkerHost = new PresetWorkerHost(models)) {}
   private readonly items = new Map<string, InboxItem>();
   private readonly candidates = new Map<string, Candidate>();
   private readonly events: InboxEvent[] = [];
@@ -220,8 +46,6 @@ class SuperagentService {
   private engine: any;
   private source!: NeoSourceAdapter;
   private unregisterSource?: () => void;
-  private readonly worker = new DshWorker();
-  private readonly evaluator = new ScriptedEvalModel(process.env.NMH_SUPERAGENT_MODEL_URL);
   private readonly inflight = new Set<Promise<void>>();
   private workerReady?: Promise<void>;
   private workerHome = '';
@@ -318,13 +142,27 @@ class SuperagentService {
     const triggerId = `neo/app:${item.id}`;
     const candidate = this.candidates.get(triggerId);
     if (!candidate) throw new Error('Trigger was not evaluated by the pinned superagent');
-    await this.evaluator.evaluate(item, candidate);
+    await this.evaluate(item, candidate);
     this.engine.candidateDelivered(candidate.evalId);
-    // The scripted Eval accepts explicit Ask Neo requests. Observe mode retains
-    // the candidate until a person accepts, while act mode proceeds immediately.
+    // Observe mode retains the accepted proposal for human approval.
     if (item.mode === 'observe') return this.update(item, { status: 'suggestion' });
     this.acceptCandidate(item, candidate);
     return this.items.get(item.id)!;
+  }
+
+  private async evaluate(item: InboxItem, candidate: Candidate): Promise<void> {
+    const { adapter, provider, model } = await this.models('eval', item);
+    const request = createUserMessage({ content: [{ type: 'text', text: JSON.stringify({
+      evalId: candidate.evalId, triggerIds: candidate.triggers.map((trigger) => trigger.id),
+      botId: item.botId, text: item.text, mode: item.mode,
+    }) }], source: { kind: 'user' } });
+    let result = '';
+    for await (const chunk of adapter.stream({ provider, model, messages: [request] })) {
+      if (chunk.type === 'block-end' && chunk.block.type === 'text') result += chunk.block.text;
+    }
+    if ((JSON.parse(result) as { decision: string }).decision !== 'accept') {
+      throw new Error('Superagent Eval declined the proposed ticket');
+    }
   }
 
   private acceptCandidate(item: InboxItem, candidate: Candidate): void {
@@ -432,7 +270,11 @@ export default defineExtension({
       }
     }
 
-    const service = new SuperagentService();
+    const vault = ctx.inject<VaultService>('vault');
+    const models = process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_TEST_ADAPTER
+      ? (await import(process.env.NMH_SUPERAGENT_TEST_ADAPTER) as { createModelFactory: ModelFactory }).createModelFactory
+      : vaultModelFactory(vault);
+    const service = new SuperagentService(models);
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, apiKeyToken);
     ctx.effect(() => async () => {
       if (apiKeyId) {

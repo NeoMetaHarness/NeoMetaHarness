@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "tsx test/e2e.test.ts",
+    "test": "tsx test/model.test.ts && tsx test/e2e.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@neometaharness/kernel": "workspace:*",
+    "@neometaharness/vault": "workspace:*",
     "@deepseek-ai/cordis": "4.1.0",
     "@deepseek-ai/cordis-plugin-loader": "1.1.0",
     "@deepseek-ai/dsh-agent-loop-testkit": "0.2.2-rc.1",

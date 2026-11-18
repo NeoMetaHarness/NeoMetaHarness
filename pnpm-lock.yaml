@@ -414,6 +414,9 @@ importers:
       '@neometaharness/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@neometaharness/vault':
+        specifier: workspace:*
+        version: link:../../packages/vault
       '@orpc/client':
         specifier: 1.16.2
         version: 1.16.2(@opentelemetry/api@1.10.0)

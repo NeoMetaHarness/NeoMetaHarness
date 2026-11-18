@@ -133,7 +133,8 @@ async function gateway(home: string, modelPort: number, dshModelPort: number): P
 }> {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: join(root, 'apps/gateway'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-    env: { ...process.env, NMH_UPSTREAM_CACHE: upstreamCache(), NMH_HERMES_HOME: join(home, 'hermes'),
+    env: { ...process.env, NODE_ENV: 'test',
+      NMH_SUPERAGENT_TEST_ADAPTER: new URL('./scripted-models.ts', import.meta.url).href, NMH_UPSTREAM_CACHE: upstreamCache(), NMH_HERMES_HOME: join(home, 'hermes'),
       NMH_HERMES_MODEL_URL: `http://127.0.0.1:${modelPort}/v1`,
       NMH_SUPERAGENT_MODEL_URL: `http://127.0.0.1:${dshModelPort}`,
       NMH_DB_PATH: join(home, 'db.sqlite'), NMH_EXTENSIONS_DIR: join(root, 'extensions'), NMH_PORT: '0',
