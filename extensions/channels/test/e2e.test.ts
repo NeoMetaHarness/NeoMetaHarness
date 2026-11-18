@@ -258,7 +258,7 @@ async function main() {
       const live = new Set(processRows().map((entry) => entry.pid));
       return [...running].every((pid) => !live.has(pid));
     }, 'Telegram gateway tree stopped');
-    assert.equal((await fetch(base + '/x/channels/status')).status, 404);
+    await assert.rejects(() => rpc.x.channels.status({ profile: 'telegramtest' }), { code: 'NOT_FOUND' });
     assert.equal((await fetch(base + '/x/sample-ts/hello', { headers })).status, 200);
     assert.equal((await rpc.extensions.list()).find((entry) => entry.id === 'engine-hermes')?.status, 'running');
     console.log('CHANNELS_GATEWAY_E2E PASS platforms=dynamic projected=encrypted rotate=updated telegram=roundtrip disconnect=clean disabled=404 sample=healthy');
