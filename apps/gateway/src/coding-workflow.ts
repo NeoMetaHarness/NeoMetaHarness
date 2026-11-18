@@ -3,6 +3,7 @@ import { neoContract } from '@neometaharness/contracts';
 import type { NeoKernel } from '@neometaharness/kernel';
 import type { GatewayAuthContext } from './rbac.js';
 import { authorize } from './policy.js';
+import { coalesceTerminal } from './coding-output.js';
 
 export function codingWorkflowRouter(kernel: NeoKernel) {
   const os = implement(neoContract).$context<GatewayAuthContext>().x['coding-workflow'];
@@ -37,7 +38,7 @@ export function codingWorkflowRouter(kernel: NeoKernel) {
       }),
       output: os.terminal.output.handler(async function* ({ input, context, signal }) {
         authorize('x.coding-workflow.terminal.output', context);
-        try { yield* await invoke('terminal/output', { ...input, signal }) as AsyncIterable<unknown>; }
+        try { yield* coalesceTerminal(await invoke('terminal/output', { ...input, signal }) as AsyncIterable<unknown>); }
         catch (error) {
           const message = error && typeof error === 'object' && 'message' in error
             ? String(error.message) : 'Terminal output unavailable';
