@@ -12,11 +12,17 @@ const Memory = lazy(() => import('./pages/Memory'));
 const Computers = lazy(() => import('./pages/Computers'));
 const Coding = lazy(() => import('./pages/Coding'));
 const Models = lazy(() => import('./pages/Models'));
+const Channels = lazy(() => import('./pages/Channels'));
+const Routines = lazy(() => import('./pages/Routines'));
+const Tasks = lazy(() => import('./pages/Tasks'));
+const Settings = lazy(() => import('./pages/Settings'));
 const Placeholder = lazy(() => import('./pages/Placeholder'));
 const pages = [
   { label: 'Inbox', path: '/inbox', icon: 'inbox' },
   { label: 'Agents', path: '/agents', icon: 'person' },
   { label: 'Coding', path: '/coding', icon: 'code' },
+  { label: 'Routines', path: '/routines', icon: 'calendar' },
+  { label: 'Tasks', path: '/tasks', icon: 'list' },
   { label: 'Computers', path: '/computers', icon: 'desktop' },
   { label: 'Skills', path: '/skills', icon: 'star' },
   { label: 'Memory', path: '/memory', icon: 'book' },
@@ -26,7 +32,7 @@ const pages = [
 
 function activePath() {
   const candidate = window.location.pathname;
-  return candidate === '/settings/models' || pages.some(({ path }) => path === candidate) ? candidate : '/extensions';
+  return candidate.startsWith('/settings/') || pages.some(({ path }) => path === candidate) ? candidate : '/extensions';
 }
 
 function NeoApp() {
@@ -65,11 +71,7 @@ function NeoApp() {
     }>
       <div className="neo-page">
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
-          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/settings/models' ? <Models /> : path === '/settings' ? <section><h1>Settings</h1><a href={'/settings/models' + window.location.search} onClick={(event) => {
-            if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-            event.preventDefault();
-            navigate('/settings/models');
-          }}>Models — providers, roles and bot overrides</a></section> : <Placeholder name={current.label} />}
+          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings' ? <Settings onOpen={navigate} /> : <Placeholder name={current.label} />}
         </Suspense>
       </div>
     </AppShell>

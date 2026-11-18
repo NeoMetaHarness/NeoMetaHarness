@@ -54,12 +54,50 @@ export default defineExtension({
       const { profile, runId } = body as { profile: string; runId: string };
       return service.stopRun(profile, runId);
     });
-    ctx.route('cron/list', () => service.listCron());
+    ctx.route('cron/list', ({ body }) => service.listCron((body as { profile?: string } | undefined)?.profile));
     ctx.route('cron/create', ({ body }) => {
-      const { prompt, schedule } = body as { prompt: string; schedule: string };
-      return service.createCron(prompt, schedule);
+      const { prompt, schedule, profile, name } = body as { prompt: string; schedule: string; profile?: string; name?: string };
+      return service.createCron(prompt, schedule, profile, name);
     });
-    ctx.route('cron/delete', ({ body }) => service.deleteCron((body as { id: string }).id));
+    ctx.route('cron/update', ({ body }) => {
+      const { id, profile, prompt, schedule, name } = body as { id: string; profile?: string; prompt?: string; schedule?: string; name?: string };
+      return service.updateCron(id, { prompt, schedule, name }, profile);
+    });
+    ctx.route('cron/pause', ({ body }) => {
+      const { id, profile, paused } = body as { id: string; profile?: string; paused: boolean };
+      return service.pauseCron(id, paused, profile);
+    });
+    ctx.route('cron/trigger', ({ body }) => {
+      const { id, profile } = body as { id: string; profile?: string };
+      return service.triggerCron(id, profile);
+    });
+    ctx.route('cron/history', ({ body }) => {
+      const { id, profile } = body as { id: string; profile?: string };
+      return service.cronHistory(id, profile);
+    });
+    ctx.route('cron/delete', ({ body }) => {
+      const { id, profile } = body as { id: string; profile?: string };
+      return service.deleteCron(id, profile);
+    });
+    ctx.route('kanban/boards', () => service.kanbanBoards());
+    ctx.route('kanban/create-board', ({ body }) => {
+      const { slug, name } = body as { slug: string; name?: string };
+      return service.createKanbanBoard(slug, name);
+    });
+    ctx.route('kanban/board', ({ body }) => service.kanbanBoard((body as { workspace: string }).workspace));
+    ctx.route('kanban/create', ({ body }) => {
+      const { workspace, title, body: detail, assignee } = body as { workspace: string; title: string; body?: string; assignee: string };
+      return service.createKanbanTask(workspace, title, assignee, detail);
+    });
+    ctx.route('kanban/assign', ({ body }) => {
+      const { workspace, id, assignee } = body as { workspace: string; id: string; assignee: string };
+      return service.assignKanbanTask(workspace, id, assignee);
+    });
+    ctx.route('kanban/task', ({ body }) => {
+      const { workspace, id } = body as { workspace: string; id: string };
+      return service.kanbanTask(workspace, id);
+    });
+    ctx.route('kanban/dispatch', ({ body }) => service.dispatchKanban((body as { workspace: string }).workspace));
     ctx.route('skills/list', ({ body }) => service.listSkills((body as { profile: string }).profile));
     ctx.route('skills/hub', ({ body }) => service.officialSkills((body as { profile: string }).profile));
     ctx.route('skills/curator', ({ body }) => service.curatorStatus((body as { profile: string }).profile));

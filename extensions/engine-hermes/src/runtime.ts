@@ -42,7 +42,8 @@ async function pythonPath(upstream: string): Promise<string> {
   const python = process.platform === 'win32' ? join(venv, 'Scripts/python.exe') : join(venv, 'bin/python');
   const marker = join(venv, '.neo-hermes-upstream');
   const installed = await readFile(marker, 'utf8').catch(() => '');
-  if (existsSync(python) && installed.trim() === upstream) return python;
+  const dependencySet = `${upstream}|web,sms,telegram`;
+  if (existsSync(python) && installed.trim() === dependencySet) return python;
 
   await mkdir(cacheDir, { recursive: true });
   const uvEnv = { ...await hermesBaseEnvironment(), UV_CACHE_DIR: join(cacheDir, 'uv-cache') };
@@ -53,11 +54,11 @@ async function pythonPath(upstream: string): Promise<string> {
   // Hermes places the dashboard in [web] and the run API's aiohttp in [sms].
   // Use Hermes's frozen lock so both surfaces have pinned, reproducible deps.
   await exec('uv', ['export', '--project', upstream, '--frozen', '--no-dev',
-    '--no-emit-project', '--extra', 'web', '--extra', 'sms',
+    '--no-emit-project', '--extra', 'web', '--extra', 'sms', '--extra', 'telegram',
     '--format', 'requirements-txt', '--output-file', requirements, '--quiet'],
   { env: uvEnv, maxBuffer: 4_000_000 });
   await exec('uv', ['pip', 'sync', '--python', python, requirements], { env: uvEnv, maxBuffer: 2_000_000 });
-  await writeFile(marker, `${upstream}\n`, 'utf8');
+  await writeFile(marker, `${dependencySet}\n`, 'utf8');
   return python;
 }
 
@@ -147,7 +148,8 @@ async function freePort(): Promise<number> {
 async function killTree(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null) return;
   if (process.platform === 'win32') {
-    await exec('taskkill.exe', ['/PID', String(child.pid), '/T', '/F']).catch(() => {});
+    await exec(join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'taskkill.exe'),
+      ['/PID', String(child.pid), '/T', '/F']).catch(() => {});
   } else {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill(); }
   }
@@ -235,6 +237,7 @@ export class HermesRuntime {
       stdio: [surface === 'api' ? 'pipe' : 'ignore', 'ignore', 'pipe'],
       env: {
         ...runtimeEnv, HERMES_HOME: home, API_SERVER_KEY: key,
+        ...(surface === 'dashboard' ? { HERMES_DESKTOP: '1' } : {}),
         HERMES_DASHBOARD_SESSION_TOKEN: this.dashboardToken,
         HERMES_DISABLE_LAZY_INSTALLS: '1', HERMES_EXEC_ASK: '1', API_SERVER_ENABLED: 'true',
         PYTHONDONTWRITEBYTECODE: '1',
@@ -302,6 +305,29 @@ export class HermesRuntime {
   async listProfiles(): Promise<{ profiles: { name: string; path: string }[] }> {
     return this.request('dashboard', '/api/profiles').then(async (r) => await r.json() as { profiles: { name: string; path: string }[] });
   }
+
+  /** Channel adapters use the same pinned Hermes install and Neo-owned profile. */
+  channelRuntime(profile: string): { home: string; python: string; upstream: string } {
+    const home = this.profileHome(profile);
+    if (this.stopped || !this.python || !existsSync(home)) throw new Error('Hermes profile unavailable');
+    return { home, python: this.python, upstream: this.upstream };
+  }
+
+  /** Pinned Hermes dashboard messaging API, with no credential mutation. */
+  async channelPlatforms(profile: string): Promise<{ platforms: Record<string, unknown>[] }> {
+    const name = profileName(profile);
+    const response = await this.request('dashboard', `/api/messaging/platforms?profile=${encodeURIComponent(name)}`);
+    return response.json() as Promise<{ platforms: Record<string, unknown>[] }>;
+  }
+
+  /** Hermes owns platform configuration, while Neo Vault owns every secret. */
+  async channelEnabled(profile: string, platform: string, enabled: boolean): Promise<void> {
+    const name = profileName(profile);
+    if (!/^[a-z][a-z0-9_-]*$/.test(platform)) throw new Error('Invalid messaging platform');
+    await this.request('dashboard', `/api/messaging/platforms/${platform}`, {
+      method: 'PUT', body: { profile: name, enabled },
+    });
+  }
   async createProfile(name: string): Promise<{ ok: boolean; name: string; path: string }> {
     const canonical = profileName(name);
     if (canonical === 'default') throw new Error('Default profile already exists');
@@ -326,12 +352,78 @@ export class HermesRuntime {
       this.closingProfiles.delete(canonical);
     }
   }
-  async listCron(): Promise<Record<string, unknown>[]> { return this.request('dashboard', '/api/cron/jobs').then(async (r) => await r.json() as Record<string, unknown>[]); }
-  async createCron(prompt: string, schedule: string): Promise<{ id: string }> {
-    return this.request('dashboard', '/api/cron/jobs', { method: 'POST', body: { prompt, schedule } }).then(async (r) => await r.json() as { id: string });
+  // Hermes v0.23.2: hermes_cli/web_routers/cron.py:776-849 and web_models.py:328-358.
+  private cronPath(id?: string, profile?: string): string {
+    const path = `/api/cron/jobs${id ? `/${encodeURIComponent(id)}` : ''}`;
+    return profile ? `${path}?profile=${encodeURIComponent(profileName(profile))}` : path;
   }
-  async deleteCron(id: string): Promise<{ ok: boolean }> {
-    return this.request('dashboard', `/api/cron/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(async (r) => await r.json() as { ok: boolean });
+  async listCron(profile?: string): Promise<Record<string, unknown>[]> {
+    return this.request('dashboard', profile ? this.cronPath(undefined, profile) : '/api/cron/jobs')
+      .then(async (r) => await r.json() as Record<string, unknown>[]);
+  }
+  async createCron(prompt: string, schedule: string, profile?: string, name?: string): Promise<{ id: string }> {
+    return this.request('dashboard', this.cronPath(undefined, profile), { method: 'POST', body: { prompt, schedule, name } })
+      .then(async (r) => await r.json() as { id: string });
+  }
+  async updateCron(id: string, changes: { prompt?: string; schedule?: string; name?: string }, profile?: string) {
+    return this.request('dashboard', this.cronPath(id, profile), { method: 'PUT', body: { updates: changes } })
+      .then(async (r) => await r.json());
+  }
+  async pauseCron(id: string, paused: boolean, profile?: string) {
+    const path = this.cronPath(id, profile);
+    const [url, query] = path.split('?');
+    return this.request('dashboard', `${url}/${paused ? 'pause' : 'resume'}${query ? `?${query}` : ''}`, { method: 'POST' })
+      .then(async (r) => await r.json());
+  }
+  async triggerCron(id: string, profile?: string) {
+    const [url, query] = this.cronPath(id, profile).split('?');
+    return this.request('dashboard', `${url}/trigger${query ? `?${query}` : ''}`, { method: 'POST' })
+      .then(async (r) => await r.json());
+  }
+  async cronHistory(id: string, profile?: string) {
+    // Hermes creates the profile's SessionDB on API server startup; the dashboard
+    // history endpoint requires that store even for jobs with no previous runs.
+    await this.server(profile ?? 'default');
+    const [url, query] = this.cronPath(id, profile).split('?');
+    return this.request('dashboard', `${url}/runs${query ? `?${query}&limit=20` : '?limit=20'}`)
+      .then(async (r) => await r.json());
+  }
+  async deleteCron(id: string, profile?: string): Promise<{ ok: boolean }> {
+    return this.request('dashboard', this.cronPath(id, profile), { method: 'DELETE' })
+      .then(async (r) => await r.json() as { ok: boolean });
+  }
+
+  // Hermes v0.23.2: plugins/kanban/dashboard/plugin_api.py:357-455,690-713,1267-1275,1409-1452.
+  private kanbanPath(path: string, workspace?: string): string {
+    return `/api/plugins/kanban/${path}${workspace ? `?board=${encodeURIComponent(workspace)}` : ''}`;
+  }
+  async kanbanBoards() {
+    return this.request('dashboard', this.kanbanPath('boards')).then(async (r) => await r.json());
+  }
+  async createKanbanBoard(slug: string, name?: string) {
+    return this.request('dashboard', this.kanbanPath('boards'), { method: 'POST', body: { slug, name } })
+      .then(async (r) => await r.json());
+  }
+  async kanbanBoard(workspace: string) {
+    return this.request('dashboard', this.kanbanPath('board', workspace)).then(async (r) => await r.json());
+  }
+  async createKanbanTask(workspace: string, title: string, assignee: string, body?: string) {
+    return this.request('dashboard', this.kanbanPath('tasks', workspace), {
+      method: 'POST', body: { title, body, assignee },
+    }).then(async (r) => await r.json());
+  }
+  async assignKanbanTask(workspace: string, id: string, assignee: string) {
+    return this.request('dashboard', this.kanbanPath(`tasks/${encodeURIComponent(id)}`, workspace), {
+      method: 'PATCH', body: { assignee },
+    }).then(async (r) => await r.json());
+  }
+  async kanbanTask(workspace: string, id: string) {
+    return this.request('dashboard', this.kanbanPath(`tasks/${encodeURIComponent(id)}`, workspace))
+      .then(async (r) => await r.json());
+  }
+  async dispatchKanban(workspace: string) {
+    return this.request('dashboard', this.kanbanPath('dispatch', workspace), { method: 'POST' })
+      .then(async (r) => await r.json());
   }
 
   private skillPath(path: string, profile: string): string {

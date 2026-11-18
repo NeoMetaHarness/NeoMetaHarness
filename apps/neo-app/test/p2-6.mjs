@@ -156,8 +156,8 @@ try {
   browser = await chrome(join(temporary, 'chrome'));
   const view = await page(browser, `http://127.0.0.1:${previewPort}/settings?gateway=${encodeURIComponent(base)}&token=${encodeURIComponent(server.token)}`);
   try {
-    await view.eventually('!!document.querySelector("a[href^=\'/settings/models\']")', 'Settings Models link');
-    await view.evaluate('document.querySelector("a[href^=\'/settings/models\']").click()');
+    await view.eventually('!!document.querySelector("[data-testid=settings-models-open]")', 'Settings Models button');
+    await view.evaluate('document.querySelector("[data-testid=settings-models-open]").click()');
     await view.eventually('!!document.querySelector("[data-testid=settings-models]")', 'lazy Models route');
     const save = '[data-testid=models-save-provider]';
     assert.equal(await view.evaluate(`document.querySelector('${save}').getAttribute('aria-disabled')`), 'true');

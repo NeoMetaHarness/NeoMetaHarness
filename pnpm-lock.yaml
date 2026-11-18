@@ -262,6 +262,37 @@ importers:
         specifier: ^7.1.0
         version: 7.3.8(@types/node@22.18.13)(tsx@4.20.6)(yaml@2.9.1)
 
+  extensions/channels:
+    dependencies:
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+      '@neometaharness/vault':
+        specifier: workspace:*
+        version: link:../../packages/vault
+      yaml:
+        specifier: ^2.8.1
+        version: 2.8.1
+    devDependencies:
+      '@neometaharness/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@orpc/client':
+        specifier: 1.16.2
+        version: 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/contract':
+        specifier: 1.16.2
+        version: 1.16.2(@opentelemetry/api@1.10.0)
+      '@types/node':
+        specifier: 22.18.13
+        version: 22.18.13
+      tsx:
+        specifier: 4.20.6
+        version: 4.20.6
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   extensions/computer-fake:
     dependencies:
       '@neometaharness/computers':
