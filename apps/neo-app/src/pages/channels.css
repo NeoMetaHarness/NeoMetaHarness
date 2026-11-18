@@ -1,0 +1,6 @@
+.channels-page { padding-bottom: 36px; }
+.channels-panel { display: grid; max-width: 640px; gap: 12px; padding: 24px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); }
+.channels-panel label { font-weight: 650; }
+.channels-panel select, .channels-panel input { padding: 10px 12px; border: 1px solid currentColor; border-radius: 0; background: transparent; color: inherit; font: inherit; }
+.channels-panel form { display: grid; gap: 12px; }
+.channels-actions { display: flex; flex-wrap: wrap; gap: 12px; }

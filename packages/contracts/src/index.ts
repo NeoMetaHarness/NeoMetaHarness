@@ -167,10 +167,38 @@ export const hermesContract = {
       .output(z.object({ status: z.string() })),
   },
   cron: {
-    list: oc.output(z.array(z.record(z.string(), z.unknown()))),
-    create: oc.input(z.object({ prompt: z.string().min(1), schedule: z.string().min(1) }))
+    list: oc.input(z.object({ profile: z.string().min(1).optional() }).optional())
+      .output(z.array(z.record(z.string(), z.unknown()))),
+    create: oc.input(z.object({ prompt: z.string().min(1), schedule: z.string().min(1),
+      profile: z.string().min(1).optional(), name: z.string().optional() }))
       .output(z.object({ id: z.string() }).passthrough()),
-    delete: oc.input(z.object({ id: z.string().min(1) })).output(z.unknown()),
+    update: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional(),
+      prompt: z.string().min(1).optional(), schedule: z.string().min(1).optional(), name: z.string().optional() }))
+      .output(z.record(z.string(), z.unknown())),
+    pause: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional(), paused: z.boolean() }))
+      .output(z.record(z.string(), z.unknown())),
+    trigger: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional() }))
+      .output(z.record(z.string(), z.unknown())),
+    history: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional() }))
+      .output(z.object({ runs: z.array(z.record(z.string(), z.unknown())), limit: z.number() })),
+    delete: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional() })).output(z.unknown()),
+  },
+  kanban: {
+    boards: oc.output(z.object({ boards: z.array(z.record(z.string(), z.unknown())), current: z.string() })),
+    createBoard: oc.input(z.object({ slug: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/), name: z.string().optional() }))
+      .output(z.record(z.string(), z.unknown())),
+    board: oc.input(z.object({ workspace: z.string().min(1) }))
+      .output(z.object({ columns: z.array(z.object({ name: z.string(), tasks: z.array(z.record(z.string(), z.unknown())) })),
+        assignees: z.array(z.string()), latest_event_id: z.number(), now: z.number() }).passthrough()),
+    create: oc.input(z.object({ workspace: z.string().min(1), title: z.string().min(1),
+      body: z.string().optional(), assignee: z.string().min(1) }))
+      .output(z.object({ task: z.record(z.string(), z.unknown()).nullable() }).passthrough()),
+    assign: oc.input(z.object({ workspace: z.string().min(1), id: z.string().min(1), assignee: z.string().min(1) }))
+      .output(z.object({ task: z.record(z.string(), z.unknown()) })),
+    task: oc.input(z.object({ workspace: z.string().min(1), id: z.string().min(1) }))
+      .output(z.object({ task: z.record(z.string(), z.unknown()), events: z.array(z.unknown()), runs: z.array(z.unknown()) }).passthrough()),
+    dispatch: oc.input(z.object({ workspace: z.string().min(1) }))
+      .output(z.record(z.string(), z.unknown())),
   },
 };
 
@@ -278,8 +306,24 @@ export const modelsContract = {
   },
 };
 
+export const channelsPlatformSchema = z.object({
+  id: z.string(), name: z.string(), description: z.string().optional(),
+  enabled: z.boolean(), configured: z.boolean(), gatewayRunning: z.boolean(),
+  error: z.string().optional(),
+});
+export const channelsContract = {
+  list: oc.input(z.object({ profile: z.string().min(1) }))
+    .output(z.object({ platforms: z.array(channelsPlatformSchema) })),
+  connect: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('telegram'), token: z.string().min(1).max(4096) }))
+    .output(z.object({ connected: z.boolean() })),
+  disconnect: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('telegram') }))
+    .output(z.object({ disconnected: z.boolean() })),
+  status: oc.input(z.object({ profile: z.string().min(1) }))
+    .output(z.object({ platforms: z.array(channelsPlatformSchema) })),
+};
+
 const baseNeoContract = {
-  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract },
+  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),

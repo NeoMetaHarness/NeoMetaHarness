@@ -44,6 +44,17 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.engine-hermes.cron.list': 'viewer',
   'x.engine-hermes.cron.create': 'member',
   'x.engine-hermes.cron.delete': 'member',
+  'x.engine-hermes.cron.update': 'member',
+  'x.engine-hermes.cron.pause': 'member',
+  'x.engine-hermes.cron.trigger': 'member',
+  'x.engine-hermes.cron.history': 'viewer',
+  'x.engine-hermes.kanban.boards': 'viewer',
+  'x.engine-hermes.kanban.createBoard': 'member',
+  'x.engine-hermes.kanban.board': 'viewer',
+  'x.engine-hermes.kanban.create': 'member',
+  'x.engine-hermes.kanban.assign': 'member',
+  'x.engine-hermes.kanban.task': 'viewer',
+  'x.engine-hermes.kanban.dispatch': 'member',
 
   // x.engine-dsh
   'x.engine-dsh.create': 'member',
@@ -74,6 +85,12 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.skills-registry.rollback': 'member',
   'x.skills-registry.assign': 'member',
   'x.skills-registry.assignments': 'viewer',
+
+  // x.channels (channel tokens are workspace config)
+  'x.channels.list': 'viewer',
+  'x.channels.status': 'viewer',
+  'x.channels.connect': 'admin',
+  'x.channels.disconnect': 'admin',
 
   // x.models
   'x.models.providers.list': 'viewer',

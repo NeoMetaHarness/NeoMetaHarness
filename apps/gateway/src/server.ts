@@ -231,6 +231,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Hermes extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const invokeChannels = async (route: string, body: unknown) => {
+    const path = `/x/channels/${route}`;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Channels extension is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   const invokeDsh = async (route: string, body: unknown) => {
     const path = `/x/engine-dsh/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'DSH extension is disabled' });
@@ -372,6 +377,24 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             return invokeModels('override/set', input) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;
           }),
         },
+      },
+      channels: {
+        list: os.x.channels.list.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeChannels('list', input) as Promise<any>;
+        }),
+        connect: os.x.channels.connect.handler(async ({ input, context }) => {
+          requireAdminOrOwner(context);
+          return invokeChannels('connect', input) as Promise<{ connected: boolean }>;
+        }),
+        disconnect: os.x.channels.disconnect.handler(async ({ input, context }) => {
+          requireAdminOrOwner(context);
+          return invokeChannels('disconnect', input) as Promise<{ disconnected: boolean }>;
+        }),
+        status: os.x.channels.status.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeChannels('status', input) as Promise<any>;
+        }),
       },
       'skills-registry': {
         list: os.x['skills-registry'].list.handler(async ({ context }) => {
@@ -574,17 +597,63 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           }),
         },
         cron: {
-          list: os.x['engine-hermes'].cron.list.handler(async ({ context }) => {
+          list: os.x['engine-hermes'].cron.list.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.cron.list', context);
-            return invokeHermes('cron/list', {}) as Promise<Record<string, unknown>[]>;
+            return invokeHermes('cron/list', input ?? {}) as Promise<Record<string, unknown>[]>;
           }),
           create: os.x['engine-hermes'].cron.create.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.cron.create', context);
             return invokeHermes('cron/create', input) as Promise<{ id: string }>;
           }),
+          update: os.x['engine-hermes'].cron.update.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('cron/update', input) as Promise<Record<string, unknown>>;
+          }),
+          pause: os.x['engine-hermes'].cron.pause.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('cron/pause', input) as Promise<Record<string, unknown>>;
+          }),
+          trigger: os.x['engine-hermes'].cron.trigger.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('cron/trigger', input) as Promise<Record<string, unknown>>;
+          }),
+          history: os.x['engine-hermes'].cron.history.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('cron/history', input) as Promise<{ runs: Record<string, unknown>[]; limit: number }>;
+          }),
           delete: os.x['engine-hermes'].cron.delete.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.cron.delete', context);
             return invokeHermes('cron/delete', input);
+          }),
+        },
+        kanban: {
+          boards: os.x['engine-hermes'].kanban.boards.handler(async ({ context }) => {
+            requireViewer(context);
+            return invokeHermes('kanban/boards', {}) as Promise<{ boards: Record<string, unknown>[]; current: string }>;
+          }),
+          createBoard: os.x['engine-hermes'].kanban.createBoard.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('kanban/create-board', input) as Promise<Record<string, unknown>>;
+          }),
+          board: os.x['engine-hermes'].kanban.board.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('kanban/board', input) as Promise<{ columns: { name: string; tasks: Record<string, unknown>[] }[]; assignees: string[]; latest_event_id: number; now: number }>;
+          }),
+          create: os.x['engine-hermes'].kanban.create.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('kanban/create', input) as Promise<{ task: Record<string, unknown> | null }>;
+          }),
+          assign: os.x['engine-hermes'].kanban.assign.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('kanban/assign', input) as Promise<{ task: Record<string, unknown> }>;
+          }),
+          task: os.x['engine-hermes'].kanban.task.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('kanban/task', input) as Promise<{ task: Record<string, unknown>; events: unknown[]; runs: unknown[] }>;
+          }),
+          dispatch: os.x['engine-hermes'].kanban.dispatch.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('kanban/dispatch', input) as Promise<Record<string, unknown>>;
           }),
         },
       },
@@ -826,9 +895,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/')) {
+      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/')) {
         const honchoDisabledRead = path === '/x/memory-honcho/status' || path === '/x/memory-honcho/list';
-        if (!kernel.hasRoute(path) && !honchoDisabledRead && context.role && context.role !== 'viewer') {
+        const extensionPath = path.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+        if (!kernel.hasRoute(extensionPath) && !honchoDisabledRead && !path.startsWith('/x/channels/') && context.role && context.role !== 'viewer') {
           res.writeHead(404).end();
           return;
         }
@@ -971,6 +1041,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     async close() {
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((done) => wss.close(() => done()));
+      http.closeAllConnections();
       await new Promise<void>((done) => http.close(() => done()));
       await agentApi.stop();
       await kernel.close();
