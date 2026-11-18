@@ -267,8 +267,10 @@
   "p5_tasks": {
     "P5-1": {
       "title": "engine-superagent first slice: neo/app Source -> Eval -> Ticket -> worker delegates to a Hermes bot via Neo MCP -> report -> Inbox RPC",
-      "status": "in_progress",
-      "owner": "codex"
+      "status": "done",
+      "owner": "codex",
+      "evidence": "PM rerun 2x on main: SUPERAGENT_E2E PASS observe=ready act=ready midflight=blocked streamed_events=3 hermes_requests=6 dsh_eval_requests=3 dsh_worker_requests=6; pinned dsh-superagent Engine bundled from upstream cache at lock ref; full regression 15/15; PM fixed hard-coded upstream-cache path",
+      "follow_up": "worker runs on dsh-agent-loop-testkit host with scripted Eval/worker models -> move to a real DSH profile via engine-dsh + model routing; MCP bridge calls gateway unauthenticated -> needs scoped token once P1-6 lands"
     },
     "P5-2": {
       "title": "Coding page first slice over engine-t3 (threads, composer, stream, approvals, settle)",
