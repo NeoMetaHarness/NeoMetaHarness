@@ -72,13 +72,24 @@ export class T3ControlPlane {
   private scope?: Scope.Closeable;
   private client?: any;
   private readonly subscriptions = new Set<AbortController>();
+  private readonly workflowTerminals = new Map<string, { threadId: string; terminalId: string }>();
+  private readonly workflowCleanups = new Set<() => Promise<void>>();
+
+  onWorkflowDisconnect(cleanup: () => Promise<void>) {
+    this.workflowCleanups.add(cleanup);
+    return () => { this.workflowCleanups.delete(cleanup); };
+  }
 
   get connected(): boolean { return !!this.client; }
 
   /** Fixed public seams used by coding-workflow; never expose arbitrary RPC to clients. */
   async workflowRequest(method: 'server.updateSettings' | 'vcs.createWorktree' | 'terminal.open' | 'terminal.close' | 'terminal.write', input: unknown): Promise<any> {
     if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
-    return this.runtime.runPromise(this.client[method](input));
+    const result = await this.runtime.runPromise(this.client[method](input));
+    const terminal = input as { threadId: string; terminalId: string };
+    if (method === 'terminal.open') this.workflowTerminals.set(terminal.terminalId, terminal);
+    if (method === 'terminal.close') this.workflowTerminals.delete(terminal.terminalId);
+    return result;
   }
 
   workflowCommand(command: Record<string, unknown>) { return this.dispatch(command); }
@@ -234,6 +245,12 @@ export class T3ControlPlane {
   }
 
   async disconnect(): Promise<void> {
+    for (const cleanup of this.workflowCleanups) await cleanup().catch(() => {});
+    this.workflowCleanups.clear();
+    for (const terminal of this.workflowTerminals.values()) {
+      await this.workflowRequest('terminal.close', terminal).catch(() => {});
+    }
+    this.workflowTerminals.clear();
     for (const controller of this.subscriptions) controller.abort();
     this.subscriptions.clear();
     this.client = undefined;

@@ -19,6 +19,7 @@ type T3 = {
   subscribeThread(id: string): AsyncIterable<any>;
   listThreads(): Promise<{ projects: Array<{ id: string; workspaceRoot: string }> }>;
   terminalOutput(input: { threadId: string; terminalId: string }, signal?: AbortSignal): AsyncIterable<any>;
+  onWorkflowDisconnect(cleanup: () => Promise<void>): () => void;
 };
 
 export default defineExtension({
@@ -38,7 +39,8 @@ export default defineExtension({
           const current = frame.payload.projection.thread;
           const project = (await t3().listThreads()).projects.find(p => p.id === current.projectId);
           if (!project) throw new Error('Project not found');
-          return { ...current, workspaceRoot: project.workspaceRoot };
+          return { ...current, workspaceRoot: project.workspaceRoot,
+            activeRunId: frame.payload.projection.runs.find((r: any) => ['pending', 'running', 'waiting'].includes(r.status))?.id ?? null };
         }
       }
       throw new Error('Thread not found');
@@ -60,7 +62,9 @@ export default defineExtension({
     });
     const terminalIds = new Map<string, string>();
     let registered = false;
+    let unregisterDisconnect: (() => void) | undefined;
     ctx.effect(() => async () => {
+      unregisterDisconnect?.();
       const control = ctx.inject<T3>('codingControlPlane');
       for (const [threadId, terminalId] of terminalIds) {
         await control?.workflowRequest('terminal.close', { threadId, terminalId }).catch(() => {});
@@ -73,6 +77,9 @@ export default defineExtension({
     ctx.health(() => ({ ok: !!ctx.inject('codingControlPlane') }));
     ctx.route('register', async ({ body }) => {
       if (!ctx.inject('dshAgentRuntime')) throw new Error('DSH extension is disabled');
+      const models = ctx.inject<{ active: boolean; resolve(role: string): Promise<unknown> }>('modelHub');
+      if (!models?.active) throw new Error('Configure a coding model in the Models hub first');
+      await models.resolve('coding');
       bridge.setWorkspace((body as { workspaceId: string }).workspaceId);
       await t3().workflowRequest('server.updateSettings', { patch: {}, providerInstanceMutation: {
         operation: 'upsert', instanceId: 'neo-coding', instance: {
@@ -82,6 +89,15 @@ export default defineExtension({
         },
       } });
       registered = true;
+      unregisterDisconnect?.();
+      const control = t3();
+      unregisterDisconnect = control.onWorkflowDisconnect(async () => {
+        await control.workflowRequest('server.updateSettings', {
+          patch: {}, providerInstanceMutation: { operation: 'remove', instanceId: 'neo-coding' },
+        }).catch(() => {});
+        registered = false;
+        await bridge.stopSessions();
+      });
       return { providerId: 'neo-coding', model: 'default' };
     });
     ctx.route('switch', async ({ body }) => {
@@ -120,7 +136,7 @@ export default defineExtension({
     });
     ctx.route('terminal/output', ({ body }) => {
       const input = body as { threadId: string; terminalId: string; signal?: AbortSignal };
-      return t3().terminalOutput(input, input.signal);
+      return t3().terminalOutput({ threadId: input.threadId, terminalId: input.terminalId }, input.signal);
     });
     ctx.route('terminal/run', async ({ body }) => {
       const input = body as { threadId: string; command: string };

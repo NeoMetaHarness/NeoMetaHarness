@@ -6,10 +6,16 @@ import { authorize } from './policy.js';
 
 export function codingWorkflowRouter(kernel: NeoKernel) {
   const os = implement(neoContract).$context<GatewayAuthContext>().x['coding-workflow'];
-  const invoke = (route: string, input: unknown) => {
+  const invoke = async (route: string, input: unknown) => {
     const path = `/x/coding-workflow/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Coding workflow is disabled' });
-    return kernel.invokeRoute(path, 'RPC', input) as Promise<any>;
+    try { return await kernel.invokeRoute(path, 'RPC', input) as any; }
+    catch (error) {
+      if (error instanceof ORPCError) throw error;
+      const message = error && typeof error === 'object' && 'message' in error
+        ? String(error.message) : 'Coding workflow failed';
+      throw new ORPCError(/disabled|disconnected/i.test(message) ? 'SERVICE_UNAVAILABLE' : 'BAD_REQUEST', { message });
+    }
   };
   return {
     register: os.register.handler(async ({ context }) => {
@@ -31,7 +37,12 @@ export function codingWorkflowRouter(kernel: NeoKernel) {
       }),
       output: os.terminal.output.handler(async function* ({ input, context, signal }) {
         authorize('x.coding-workflow.terminal.output', context);
-        yield* await invoke('terminal/output', { ...input, signal }) as AsyncIterable<unknown>;
+        try { yield* await invoke('terminal/output', { ...input, signal }) as AsyncIterable<unknown>; }
+        catch (error) {
+          const message = error && typeof error === 'object' && 'message' in error
+            ? String(error.message) : 'Terminal output unavailable';
+          throw new ORPCError('SERVICE_UNAVAILABLE', { message });
+        }
       }),
     },
     prepare: os.prepare.handler(async ({ input, context }) => {

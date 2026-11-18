@@ -50,17 +50,28 @@ const hubAdapter = {
   async prepareCall(provider, model) {
     return { model: await this.resolveModel(provider, model), stream: (options) => this.stream(options) };
   },
-  async *stream({ signal, messages }) {
+  async *stream({ signal, messages, tools }) {
     const baseUrl = process.env.NEO_MODEL_BASE_URL;
     if (!baseUrl || !process.env.NEO_MODEL_NAME) throw new Error('DSH Model Hub selection unavailable');
     const body = {
       model: process.env.NEO_MODEL_NAME,
       stream: false,
-      messages: messages.map((message) => ({
-        role: ['system', 'assistant', 'tool'].includes(message.role) ? message.role : 'user',
-        content: typeof message.content === 'string' ? message.content
-          : JSON.stringify(message.content ?? message.contentBlocks ?? message),
-      })),
+      // DSH Message/ToolSchema seam: packages/llm/llm/src/message.ts:143,173
+      // and types.ts:517 at pinned 0.2.2-rc.1. Preserve tool call/result identity.
+      messages: messages.map((message) => {
+        const blocks = Array.isArray(message.content) ? message.content : [];
+        const content = typeof message.content === 'string' ? message.content
+          : blocks.filter(block => block.type === 'text').map(block => block.text).join('\n');
+        if (message.role === 'tool') return { role: 'tool', tool_call_id: message.toolCallId, content };
+        const calls = blocks.filter(block => block.type === 'tool-call').map(block => ({
+          id: block.id, type: 'function', function: { name: block.name, arguments: block.arguments },
+        }));
+        return { role: message.role === 'developer' ? 'system' : message.role, content,
+          ...(calls.length ? { tool_calls: calls } : {}) };
+      }),
+      ...(tools?.length ? { tools: tools.map(tool => ({ type: 'function', function: {
+        name: tool.name, description: tool.description, parameters: tool.parameters,
+      } })) } : {}),
     };
     const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
     const response = await fetch(endpoint, {

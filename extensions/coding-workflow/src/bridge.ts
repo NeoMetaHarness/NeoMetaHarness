@@ -59,16 +59,15 @@ export async function createAcpBridge(ctx: ExtensionContext, dataDir: string,
         message = packet.message;
         const { id, method, params = {} } = message;
         const respond = (result: unknown) => { if (id !== undefined) write({ jsonrpc: '2.0', id, result }); };
-        if (method === 'initialize') return respond({ protocolVersion: 1,
-          agentInfo: { name: 'neo-coding', version: '0.1.0' },
-          agentCapabilities: { loadSession: false, promptCapabilities: {} }, authMethods: [] });
+        if (method === 'initialize') return respond({ protocolVersion: 2,
+          info: { name: 'neo-coding', version: '0.1.0' }, capabilities: { session: {} } });
         if (method === 'session/new') {
           await allowCwd(params.cwd);
           const engine = runtime();
           const session = await engine.create({ workspaceId, cwd: params.cwd });
           if (socket.destroyed) { await engine.shutdown(session); return; }
           owned.add(session.sessionId); sessions.set(session.sessionId, engine);
-          return respond({ sessionId: session.sessionId });
+          return respond({ sessionId: session.sessionId, configOptions: [] });
         }
         const sessionId = String(params.sessionId);
         if (!owned.has(sessionId)) throw new Error('Unknown ACP session');
@@ -92,7 +91,10 @@ export async function createAcpBridge(ctx: ExtensionContext, dataDir: string,
             await engine.prompt({ sessionId, text: (params.prompt ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n') });
             await engine.wait({ sessionId });
             await pump;
-            return respond({ stopReason: 'end_turn' });
+            write({ jsonrpc: '2.0', method: 'session/update', params: {
+              sessionId, update: { sessionUpdate: 'state_update', state: 'idle', stopReason: 'end_turn' },
+            } });
+            return respond({});
           } finally { abort.abort(); socket.off('close', onClose); }
         }
         if (id !== undefined) write({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Unsupported ACP method' } });
@@ -103,11 +105,15 @@ export async function createAcpBridge(ctx: ExtensionContext, dataDir: string,
     })(); });
   });
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(endpoint, resolve); });
-  return { endpoint, tokenFile, setWorkspace(id: string) { workspaceId = id; },
-    async close() {
+  const stopSessions = async () => {
+      const current = [...sessions];
       for (const socket of sockets) socket.destroy();
-      await Promise.all([...sessions].map(([sessionId, engine]) => engine.shutdown({ sessionId }).catch(() => {})));
+      await Promise.all(current.map(([sessionId, engine]) => engine.shutdown({ sessionId }).catch(() => {})));
       sessions.clear();
+  };
+  return { endpoint, tokenFile, stopSessions, setWorkspace(id: string) { workspaceId = id; },
+    async close() {
+      await stopSessions();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(tokenFile, { force: true });
     },
