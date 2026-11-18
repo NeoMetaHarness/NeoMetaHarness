@@ -115,13 +115,15 @@ async function launchGateway(home: string, modelPort: number) {
     env: { ...process.env, NMH_HERMES_HOME: join(home, 'hermes'),
       NMH_HERMES_MODEL_URL: `http://127.0.0.1:${modelPort}/v1`,
       NMH_DB_PATH: join(home, 'neo.sqlite'), NMH_EXTENSIONS_DIR: join(repo, 'extensions'),
-      NMH_PORT: '0' },
+      NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let stderr = '';
   child.stderr!.on('data', (data: Buffer) => { stderr = (stderr + data.toString()).slice(-6000); });
+  let token = '';
   const port = await bounded(new Promise<number>((done, reject) => {
     const reader = createInterface({ input: child.stdout! });
     reader.on('line', (line) => {
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice(18).trim();
       if (!line.startsWith('GATEWAY_READY ')) return;
       reader.close();
       done((JSON.parse(line.slice(14)) as { port: number }).port);
@@ -129,7 +131,8 @@ async function launchGateway(home: string, modelPort: number) {
     child.once('exit', (code) => reject(new Error(`Gateway exited ${code}: ${stderr}`)));
     child.once('error', reject);
   }), 30000, 'Gateway startup');
-  return { child, port, get error() { return stderr; } };
+  if (!token) throw new Error('Gateway did not print a desktop token');
+  return { child, port, token, get error() { return stderr; } };
 }
 
 async function closeGateway(child?: ChildProcess): Promise<void> {
@@ -149,8 +152,8 @@ async function main(): Promise<void> {
   let socket: WebSocket | undefined;
   try {
     app = await launchGateway(home, model.port);
-    const client = createORPCClient<Client>(new HttpLink({ url: `http://127.0.0.1:${app.port}` }));
-    socket = new WebSocket(`ws://127.0.0.1:${app.port}/ws`);
+    const client = createORPCClient<Client>(new HttpLink({ url: `http://127.0.0.1:${app.port}`, headers: { authorization: `Bearer ${app.token}` } }));
+    socket = new WebSocket(`ws://127.0.0.1:${app.port}/ws`, ['bearer.' + app.token]);
     const streaming = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
     const extension = await bounded(client.extensions.enable({ id: 'engine-hermes' }), 100000, 'Enable Hermes');
     assert.equal(extension.status, 'running', app.error + '\n' + extension.reason);
