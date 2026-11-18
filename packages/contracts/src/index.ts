@@ -548,10 +548,10 @@ export const inboxContract = {
   github: {
     configure: oc.input(z.object({ repositories: z.array(z.object({
       name: z.string().regex(/^[\w.-]+\/[\w.-]+$/), ref: z.string().default('main'),
-    })).max(30), mode: z.enum(['observe', 'act']).default('observe'),
+    })).max(30), mode: z.enum(['observe', 'act']).default('observe'), botId: z.string().min(1).optional(),
       token: z.string().min(1).optional() })).output(z.object({ ok: z.boolean() })),
     status: oc.output(z.object({ repositories: z.array(z.object({ name: z.string(), ref: z.string() })),
-      mode: z.enum(['observe', 'act']), hasToken: z.boolean(), pausedUntil: z.number().nullable(), stopped: z.boolean() })),
+      mode: z.enum(['observe', 'act']), botId: z.string().optional(), hasToken: z.boolean(), pausedUntil: z.number().nullable(), stopped: z.boolean() })),
     poll: oc.output(z.object({ checked: z.number().int(), created: z.number().int(),
       pausedUntil: z.number().nullable() })),
   },

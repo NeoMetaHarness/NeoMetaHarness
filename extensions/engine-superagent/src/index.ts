@@ -204,7 +204,7 @@ class SuperagentService {
     const github: InboxItem['github'] = { repo: event.repo, url: event.url,
       kind: event.kind, ...(event.kind === 'comment' ? { issue: event.issue } : {}) };
     if (event.kind === 'comment') {
-      const item = await this.ask({ text: event.text, botId: 'neo-system', mode: event.mode,
+      const item = await this.ask({ text: event.text, botId: event.botId ?? 'neo-system', mode: event.mode,
         requesterRole: 'owner' }, 'neo/github', (created) => { created.github = github; });
       if (event.mode === 'observe' && item.status === 'suggestion') {
         await this.finish({ ...item, github }, { status: 'ready',
@@ -222,7 +222,7 @@ class SuperagentService {
   }
 
   githubConfigure(input: GitHubConfig & { token?: string }): Promise<void> {
-    return this.github!.configure({ mode: input.mode, repositories: input.repositories }, input.token);
+    return this.github!.configure({ mode: input.mode, repositories: input.repositories, botId: input.botId }, input.token);
   }
   githubStatus() { return this.github!.status(); }
   githubPoll() { return this.github!.poll(); }
@@ -577,7 +577,9 @@ export default defineExtension({
     const github = new PollingGitHubSource(join(dataDir, 'engine-superagent', 'github.json'),
       vault, (event) => service.ingestGithub(event), fetch,
       process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_GITHUB_API_URL
-        ? process.env.NMH_SUPERAGENT_GITHUB_API_URL : 'https://api.github.com');
+        ? process.env.NMH_SUPERAGENT_GITHUB_API_URL : 'https://api.github.com',
+      process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_GITHUB_POLL_INTERVAL_MS
+        ? Math.max(200, Number(process.env.NMH_SUPERAGENT_GITHUB_POLL_INTERVAL_MS)) : 120_000);
     service.attachGithub(github);
     const channel = ctx.inject<ChannelSource>('channelSource')
       ?? (process.env.NODE_ENV === 'test' ? new FakeChannelSource() : undefined);

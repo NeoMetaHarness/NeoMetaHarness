@@ -4,9 +4,9 @@ import { dirname } from 'node:path';
 import type { VaultService } from '@neometaharness/vault';
 
 export type GitHubRepository = { name: string; ref: string };
-export type GitHubConfig = { repositories: GitHubRepository[]; mode: 'observe' | 'act' };
+export type GitHubConfig = { repositories: GitHubRepository[]; mode: 'observe' | 'act'; botId?: string };
 export type GitHubEvent =
-  | { kind: 'comment'; key: string; repo: string; issue: number; url: string; text: string; mode: 'observe' | 'act' }
+  | { kind: 'comment'; key: string; repo: string; issue: number; url: string; text: string; mode: 'observe' | 'act'; botId?: string }
   | { kind: 'check'; key: string; repo: string; url: string; name: string; conclusion: string };
 
 export interface GitHubSource {
@@ -18,7 +18,7 @@ export interface GitHubSource {
 }
 
 const scope = { kind: 'workspace' as const, workspaceId: 'default' };
-const credential = 'engine-superagent.github.token';
+const credential = 'NMH_SUPERAGENT_GITHUB_TOKEN';
 const validRepo = /^[\w.-]+\/[\w.-]+$/;
 const validRef = /^[\w./-]+$/;
 const pollIntervalMs = 120_000;
@@ -48,7 +48,8 @@ export class PollingGitHubSource implements GitHubSource {
   constructor(private readonly file: string, private readonly vault: VaultService,
     private readonly onEvent: (event: GitHubEvent) => Promise<void>,
     private readonly transport: typeof fetch = fetch,
-    private readonly baseUrl = 'https://api.github.com') {}
+    private readonly baseUrl = 'https://api.github.com',
+    private readonly intervalMs = pollIntervalMs) {}
 
   async start(): Promise<void> {
     try {
@@ -63,13 +64,15 @@ export class PollingGitHubSource implements GitHubSource {
 
   async configure(config: GitHubConfig, token?: string): Promise<void> {
     if (this.stopped) throw new Error('GitHub source has stopped');
+    const botId = config.botId ?? this.config.botId;
+    if (config.mode === 'act' && !botId) throw new Error('A bot must be selected for GitHub act mode');
     for (const repo of config.repositories) {
       if (!validRepo.test(repo.name) || !validRef.test(repo.ref) || repo.ref.includes('..')) {
         throw new Error('Invalid GitHub repository or ref');
       }
     }
     if (token) await this.vault.put(scope, credential, token);
-    this.config = { mode: config.mode, repositories: [...config.repositories] };
+    this.config = { mode: config.mode, repositories: [...config.repositories], ...(botId ? { botId } : {}) };
     this.pausedUntil = null;
     await this.save();
     this.schedule(0);
@@ -92,7 +95,7 @@ export class PollingGitHubSource implements GitHubSource {
     if (this.stopped || !this.config.repositories.length || this.pausedUntil === Number.MAX_SAFE_INTEGER) return;
     this.timer = setTimeout(() => {
       void this.poll().catch(() => {}).finally(() => {
-        if (!this.stopped) this.schedule(Math.max(pollIntervalMs, (this.pausedUntil ?? 0) - Date.now()));
+        if (!this.stopped) this.schedule(Math.max(this.intervalMs, (this.pausedUntil ?? 0) - Date.now()));
       });
     }, delay);
     this.timer.unref?.();
@@ -149,7 +152,8 @@ export class PollingGitHubSource implements GitHubSource {
           const key = `comment:${name}:${comment.id}`;
           if (!request?.[1]?.trim() || !issue || this.seen.has(key)) continue;
           await this.onEvent({ kind: 'comment', key, repo: name, issue: Number(issue[1]),
-            url: comment.html_url ?? '', text: request[1].trim(), mode: this.config.mode });
+            url: comment.html_url ?? '', text: request[1].trim(), mode: this.config.mode,
+            botId: this.config.botId });
           this.seen.add(key);
           created++;
         }
