@@ -136,3 +136,33 @@ test('SEC-04: requests carrying a non-loopback Host (DNS rebinding) or a foreign
     assert.equal((await fetch(`${base}/auth/ok`)).status, 200);
   });
 });
+
+async function joinWorkspace(base: string, ownerToken: string, orgId: string, user: { userId?: string; token?: string }, email: string, role: string) {
+  const inv = await (await fetch(`${base}/auth/organization/invite-member`, json(
+    { organizationId: orgId, email, role }, { authorization: `Bearer ${ownerToken}` }))).json() as { id: string };
+  const accepted = await fetch(`${base}/auth/organization/accept-invitation`, json(
+    { invitationId: inv.id }, { authorization: `Bearer ${user.token}` }));
+  assert.equal(accepted.status, 200, `${email} joins as ${role}`);
+}
+
+test('SEC-05: authorization runs before the extension-availability check for every role (no 404 shortcut)', async () => {
+  // Empty extensions dir: models and engine-hermes are not loaded.
+  await withGateway('server', async (_gateway, base) => {
+    const owner = await signUp(base, 'owner@corp.test');
+    const org = await (await fetch(`${base}/auth/organization/create`,
+      json({ name: 'Corp', slug: 'corp' }, { authorization: `Bearer ${owner.token}` }))).json() as { id: string };
+    const member = await signUp(base, 'member@corp.test');
+    await joinWorkspace(base, owner.token!, org.id, member, 'member@corp.test', 'member');
+    const as = (token: string) => ({ authorization: `Bearer ${token}` });
+    // Admin-only route on a missing extension: a member is refused by policy, not told "not found".
+    assert.equal((await fetch(`${base}/x/models/providers/delete`, json({ json: { id: 'openai' } }, as(member.token!)))).status, 403,
+      'member hits policy before availability on an admin route');
+    // A route the member may call reports the missing extension only after authorization.
+    assert.equal((await fetch(`${base}/x/engine-hermes/profiles/create`, json({ json: { name: 'bot' } }, as(member.token!)))).status, 404,
+      'authorized member learns the extension is unavailable');
+    // Owner on a missing extension: authorized, then 404.
+    assert.equal((await fetch(`${base}/x/models/providers/delete`, json({ json: { id: 'openai' } }, as(owner.token!)))).status, 404);
+    // Unknown procedure under a known prefix is still 404 for an authenticated caller.
+    assert.equal((await fetch(`${base}/x/engine-hermes/no-such-route`, json({ json: {} }, as(member.token!)))).status, 404);
+  });
+});
