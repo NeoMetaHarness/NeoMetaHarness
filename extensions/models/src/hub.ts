@@ -174,8 +174,14 @@ export class ModelHub {
       throw error;
     });
     const config = (parse(original || '{}') ?? {}) as Record<string, unknown>;
-    config.model = { ...(typeof config.model === 'object' && config.model ? config.model : {}),
-      provider: 'custom', default: binding.model, base_url: binding.baseUrl, key_env: 'NEO_MODEL_API_KEY' };
+    const model = { ...(typeof config.model === 'object' && config.model ? config.model : {}) } as Record<string, unknown>;
+    delete model.base_url;
+    delete model.key_env;
+    delete model.api_key;
+    delete model.api_key_env;
+    config.model = { ...model, provider: 'neo_model', default: binding.model };
+    const providers = { ...(typeof config.providers === 'object' && config.providers ? config.providers : {}) };
+    config.providers = { ...providers, neo_model: { base_url: binding.baseUrl, key_env: 'NEO_MODEL_API_KEY' } };
     const updated = stringify(config);
     if (original !== updated) await writeFile(configFile, updated, 'utf8');
     await new HermesProjector(resolve(home), ['NEO_MODEL_API_KEY']).project(new Map([

@@ -64,6 +64,15 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.skills-registry.rollback': 'member',
   'x.skills-registry.assign': 'member',
   'x.skills-registry.assignments': 'viewer',
+
+  // x.models
+  'x.models.providers.list': 'viewer',
+  'x.models.providers.put': 'admin',
+  'x.models.providers.delete': 'admin',
+  'x.models.roles.get': 'viewer',
+  'x.models.roles.set': 'admin',
+  'x.models.override.set': 'admin',
+
   // extensions
   'extensions.list': 'viewer',
   'extensions.enable': 'admin',
