@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import type { DatabaseProvider } from '@neometaharness/db';
 import type { ExtensionStatus, GatewayEvent } from '@neometaharness/contracts';
 import type { ComputerNotice } from '@neometaharness/computers';
-import { dependencyProblem, loadManifest, resolveOrder, type LocatedExtension } from './manifest.js';
+import { dependencyProblem, loadManifest, resolveOrder, type LocatedExtension, type ExtensionSettingsSchema } from './manifest.js';
 import { ExtensionProcess } from './process.js';
 export { ComputerMcpBridge, type ComputerMcpConfig, type ComputerMcpProjection } from './computer-mcp.js';
 export { SkillsBridge, type SkillProjection } from './skills.js';
@@ -33,6 +33,11 @@ export function defineExtension(extension: NeoExtension): NeoExtension {
   return extension;
 }
 
+function secretNameForKey(key: string): string {
+  const sanitized = key.replace(/[^A-Za-z0-9_]/g, '_').toUpperCase();
+  return `SEC_${sanitized}`.slice(0, 128);
+}
+
 export class GatewayEvents {
   private nextSeq = 0;
   private readonly history: GatewayEvent[] = [];
@@ -40,6 +45,13 @@ export class GatewayEvents {
 
   publish(extensionId: string, status: ExtensionStatus['status']): void {
     const event: GatewayEvent = { seq: ++this.nextSeq, extensionId, status, type: 'extension.state' };
+    this.history.push(event);
+    if (this.history.length > 1000) this.history.shift();
+    for (const listener of this.listeners) listener(event);
+  }
+
+  publishSettings(extension: string, values: Record<string, unknown>): void {
+    const event: GatewayEvent = { seq: ++this.nextSeq, extension, type: 'settings.change', values };
     this.history.push(event);
     if (this.history.length > 1000) this.history.shift();
     for (const listener of this.listeners) listener(event);
@@ -95,6 +107,7 @@ export class NeoKernel {
   private readonly entries = new Map<string, Entry>();
   private readonly routes = new Map<string, RouteHandler>();
   private readonly contributions = new Map<string, { id: string; [key: string]: unknown }>();
+  private readonly activeSettings = new Map<string, Record<string, unknown>>();
   private operation: Promise<unknown> = Promise.resolve();
   private order: string[] = [];
 
@@ -127,7 +140,15 @@ export class NeoKernel {
   status(id: string): ExtensionStatus {
     const entry = this.entries.get(id);
     if (!entry) throw new Error(`Unknown extension: ${id}`);
-    return { id, desired: entry.desired, status: entry.status, ...(entry.reason ? { reason: entry.reason } : {}), routes: this.routesFor(id) };
+    const manifest = this.discovered.get(id)?.manifest;
+    return {
+      id,
+      desired: entry.desired,
+      status: entry.status,
+      ...(entry.reason ? { reason: entry.reason } : {}),
+      routes: this.routesFor(id),
+      ...(manifest?.settings ? { settings: manifest.settings as any } : {}),
+    };
   }
 
   async health(id: string): Promise<Health | undefined> {
@@ -231,6 +252,107 @@ export class NeoKernel {
     return handler?.({ method, body });
   }
 
+  hasExtension(id: string): boolean {
+    return this.discovered.has(id);
+  }
+
+  getSettingsSchema(id: string): ExtensionSettingsSchema | undefined {
+    return this.discovered.get(id)?.manifest.settings;
+  }
+
+  async getSettings(id: string): Promise<{
+    values: Record<string, unknown>;
+    sanitized: Record<string, unknown>;
+    schema?: ExtensionSettingsSchema;
+  }> {
+    const discovered = this.discovered.get(id);
+    const schema = discovered?.manifest.settings;
+    const defaults: Record<string, unknown> = {};
+    if (schema?.properties) {
+      for (const [key, prop] of Object.entries(schema.properties)) {
+        if (prop.default !== undefined) {
+          defaults[key] = prop.default;
+        }
+      }
+    }
+    const dbValues = (await this.db.getExtensionSettings?.(id)) ?? {};
+    const values: Record<string, unknown> = { ...defaults, ...dbValues };
+    const sanitized: Record<string, unknown> = { ...defaults, ...dbValues };
+
+    const vault = this.services.vault as {
+      get(scope: { kind: string; workspaceId: string; subjectId?: string }, name: string): Promise<string | undefined>;
+    } | undefined;
+
+    if (schema?.properties && vault) {
+      const scope = { kind: 'engine', workspaceId: 'default', subjectId: id };
+      for (const [key, prop] of Object.entries(schema.properties)) {
+        if (prop.secret) {
+          const secretName = secretNameForKey(key);
+          let secretVal: string | undefined;
+          try {
+            secretVal = await vault.get(scope, secretName);
+          } catch {}
+          const hasSecret = secretVal !== undefined && secretVal.length > 0;
+          if (hasSecret) {
+            values[key] = secretVal;
+          } else {
+            delete values[key];
+          }
+          sanitized[key] = { set: hasSecret };
+        }
+      }
+    }
+
+    return { values, sanitized, schema };
+  }
+
+  async saveSettings(id: string, incomingValues: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const discovered = this.discovered.get(id);
+    const schema = discovered?.manifest.settings;
+    const vault = this.services.vault as {
+      get(scope: { kind: string; workspaceId: string; subjectId?: string }, name: string): Promise<string | undefined>;
+      put(scope: { kind: string; workspaceId: string; subjectId?: string }, name: string, value: string): Promise<unknown>;
+    } | undefined;
+    const scope = { kind: 'engine', workspaceId: 'default', subjectId: id };
+
+    const currentDb = (await this.db.getExtensionSettings?.(id)) ?? {};
+    const updatedDb: Record<string, unknown> = { ...currentDb };
+    const secretUpdates: Record<string, string> = {};
+
+    for (const [key, val] of Object.entries(incomingValues)) {
+      const isSecret = Boolean(schema?.properties?.[key]?.secret);
+      if (isSecret && vault) {
+        if (typeof val === 'string' && val.length > 0) {
+          secretUpdates[key] = val;
+        }
+      } else if (!isSecret) {
+        updatedDb[key] = val;
+      }
+    }
+
+    if (this.db.setExtensionSettings) {
+      await this.db.setExtensionSettings(id, updatedDb);
+    }
+
+    for (const [key, secretVal] of Object.entries(secretUpdates)) {
+      const secretName = secretNameForKey(key);
+      await vault!.put(scope, secretName, secretVal);
+    }
+
+    const { values, sanitized } = await this.getSettings(id);
+
+    const runningSettings = this.activeSettings.get(id);
+    if (runningSettings) {
+      for (const key of Object.keys(runningSettings)) {
+        if (!(key in values)) delete runningSettings[key];
+      }
+      Object.assign(runningSettings, values);
+    }
+
+    this.events.publishSettings(id, sanitized);
+    return sanitized;
+  }
+
   hasRoute(path: string): boolean { return this.routes.has(path); }
 
   routesFor(id: string): string[] {
@@ -244,13 +366,21 @@ export class NeoKernel {
       const entryUrl = pathToFileURL(resolve(directory, manifest.runtime.entry)).href;
       const module = await import(entryUrl) as { default: NeoExtension };
       if (typeof module.default?.activate !== 'function') throw new Error(`Missing activate() in ${id}`);
+      const { values: initialSettings } = await this.getSettings(id);
+      const settingsObj = { ...initialSettings };
+      this.activeSettings.set(id, settingsObj);
       let check: () => Health | Promise<Health> = () => ({ ok: true });
       const fiber = await this.cordis.plugin({
         name: `neo:${id}`,
         apply: async (cordisContext) => {
           const ctx: ExtensionContext = {
             provide: (name, value) => { cordisContext.provide(name, value); },
-            inject: <T>(name: string) => (cordisContext.reflect.get(name) ?? this.services[name]) as T | undefined,
+            inject: <T>(name: string) => {
+              if (name === 'settings') {
+                return settingsObj as T;
+              }
+              return (cordisContext.reflect.get(name) ?? this.services[name]) as T | undefined;
+            },
             effect: (register) => { cordisContext.effect(register); },
             route: (path, handler) => { cordisContext.effect(() => this.addRoute(id, path, handler)); },
             contribute: (kind, value) => { cordisContext.effect(() => this.addContribution(id, kind, value)); },
@@ -259,7 +389,13 @@ export class NeoKernel {
           await module.default.activate(ctx);
         },
       });
-      return { dispose: () => fiber.dispose(), health: async () => check() };
+      return {
+        dispose: async () => {
+          this.activeSettings.delete(id);
+          await fiber.dispose();
+        },
+        health: async () => check(),
+      };
     }
     if (manifest.runtime.type === 'process') {
       const runtime = new ExtensionProcess(manifest.runtime.command, directory);

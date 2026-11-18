@@ -43,6 +43,11 @@ interface ExtensionStateTable {
   enabled: number;
 }
 
+interface ExtensionSettingsTable {
+  id: string;
+  data: string;
+}
+
 export type VaultScopeKind = 'workspace' | 'bot' | 'engine';
 
 export interface VaultStoredSecret {
@@ -114,6 +119,7 @@ function toVaultRow(record: VaultStoredSecret): VaultSecretTable {
 export interface NeoTables extends AgentTables {
   memory_entry: MemoryEntry;
   extension_state: ExtensionStateTable;
+  extension_settings: ExtensionSettingsTable;
   vault_secret: VaultSecretTable;
 }
 
@@ -122,6 +128,8 @@ export interface DatabaseProvider {
   migrate(): Promise<void>;
   getEnabled(id: string): Promise<boolean>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
+  getExtensionSettings?(id: string): Promise<Record<string, unknown> | undefined>;
+  setExtensionSettings?(id: string, values: Record<string, unknown>): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -152,6 +160,10 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
       .addColumn('id', 'text', (column) => column.primaryKey())
       .addColumn('enabled', 'integer', (column) => column.notNull())
       .execute();
+    await this.db.schema.createTable('extension_settings').ifNotExists()
+      .addColumn('id', 'text', (column) => column.primaryKey())
+      .addColumn('data', 'text', (column) => column.notNull())
+      .execute();
     await this.db.schema.createTable('vault_secret').ifNotExists()
       .addColumn('id', 'text', (column) => column.primaryKey())
       .addColumn('scope_kind', 'text', (column) => column.notNull())
@@ -179,6 +191,23 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
     const value = enabled ? 1 : 0;
     await this.db.insertInto('extension_state').values({ id, enabled: value })
       .onConflict((conflict) => conflict.column('id').doUpdateSet({ enabled: value })).execute();
+  }
+
+  async getExtensionSettings(id: string): Promise<Record<string, unknown> | undefined> {
+    const row = await this.db.selectFrom('extension_settings')
+      .select('data').where('id', '=', id).executeTakeFirst();
+    if (!row) return undefined;
+    try {
+      return JSON.parse(row.data);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async setExtensionSettings(id: string, values: Record<string, unknown>): Promise<void> {
+    const data = JSON.stringify(values);
+    await this.db.insertInto('extension_settings').values({ id, data })
+      .onConflict((conflict) => conflict.column('id').doUpdateSet({ data })).execute();
   }
 
   async getVaultSecret(id: string): Promise<VaultStoredSecret | undefined> {

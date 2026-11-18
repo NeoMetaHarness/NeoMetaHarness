@@ -982,6 +982,39 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return withHealth(input.id);
       }),
     },
+    settings: {
+      get: os.settings.get.handler(async ({ input, context }) => {
+        authorize('settings.get', context);
+        if (!input?.extension) throw new ORPCError('BAD_REQUEST', { message: 'extension required' });
+        if (!kernel.hasExtension(input.extension)) {
+          throw new ORPCError('NOT_FOUND', { message: `Extension ${input.extension} not found` });
+        }
+        const { sanitized, schema } = await kernel.getSettings(input.extension);
+        return {
+          extension: input.extension,
+          schema: schema as any,
+          values: sanitized,
+          ...sanitized,
+        };
+      }),
+      set: os.settings.set.handler(async ({ input, context }) => {
+        authorize('settings.set', context);
+        if (!input?.extension) throw new ORPCError('BAD_REQUEST', { message: 'extension required' });
+        if (!kernel.hasExtension(input.extension)) {
+          throw new ORPCError('NOT_FOUND', { message: `Extension ${input.extension} not found` });
+        }
+        const rawValues = (input as any).values ?? (() => {
+          const { extension: _, ...rest } = input as any;
+          return rest;
+        })();
+        const sanitized = await kernel.saveSettings(input.extension, rawValues);
+        return {
+          extension: input.extension,
+          values: sanitized,
+          ...sanitized,
+        };
+      }),
+    },
     vault: {
       list: os.vault.list.handler(async ({ input, context }) => {
         await authorizeVault('list', input?.scope, context);

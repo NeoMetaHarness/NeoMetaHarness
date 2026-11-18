@@ -8,6 +8,7 @@ export const extensionStatusSchema = z.object({
   reason: z.string().optional(),
   health: z.object({ ok: z.boolean(), pid: z.number().optional() }).optional(),
   routes: z.array(z.string()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const computerActionSchema = z.discriminatedUnion('action', [
@@ -45,6 +46,7 @@ export const gatewayEventSchema = z.discriminatedUnion('type', [
     providerId: z.string(), engine: z.string(), targetId: z.string(),
     action: z.enum(['click', 'move', 'type', 'capture', 'key', 'scroll', 'navigate', 'status']),
     outcome: z.enum(['allowed', 'denied', 'failed']) }),
+  z.object({ seq: z.number().int(), type: z.literal('settings.change'), extension: z.string(), values: z.record(z.string(), z.unknown()) }),
 ]);
 
 export type GatewayEvent = z.infer<typeof gatewayEventSchema>;
@@ -449,6 +451,22 @@ const baseNeoContract = {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
     disable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
+  },
+  settings: {
+    get: oc.input(z.object({ extension: z.string().min(1) }))
+      .output(z.object({
+        extension: z.string(),
+        values: z.record(z.string(), z.unknown()),
+        schema: z.record(z.string(), z.unknown()).optional(),
+      }).passthrough()),
+    set: oc.input(z.object({
+      extension: z.string().min(1),
+      values: z.record(z.string(), z.unknown()).optional(),
+    }).passthrough())
+      .output(z.object({
+        extension: z.string(),
+        values: z.record(z.string(), z.unknown()),
+      }).passthrough()),
   },
   vault: {
     list: oc.input(z.object({ scope: vaultScopeSchema })).output(z.array(vaultMetadataSchema)),

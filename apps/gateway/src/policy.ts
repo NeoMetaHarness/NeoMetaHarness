@@ -139,6 +139,10 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'extensions.enable': 'admin',
   'extensions.disable': 'admin',
 
+  // settings
+  'settings.get': 'viewer',
+  'settings.set': 'admin',
+
   // vault
   'vault.list': 'viewer',
   'vault.put': 'member',
