@@ -258,7 +258,7 @@
   "known_risks": [
     {
       "id": "flaky-p1-5-exit",
-      "note": "p1-5 'desktop exit' timed out once under heavy parallel helper load (2026-11-18); passes on rerun. Watch."
+      "note": "p1-5 'desktop exit' timed out once under heavy parallel helper load (2026-11-18); passes on rerun. Watch. Failed again 2026-11-18 ~16:40 ('gateway and Python exit') under 110 helper processes; PASS 2x isolated. Exit timeouts too tight under load."
     }
   ],
   "p4_tasks": {
@@ -348,6 +348,20 @@
       "title": "Extension toggle-safety suite (routes, health, processes, projections)",
       "status": "in_progress",
       "owner": "antigravity"
+    }
+  },
+  "p6_tasks": {
+    "P6-1": {
+      "title": "Superagent Sources (neo/cron, neo/channel) + Policy from member identity",
+      "status": "done",
+      "owner": "codex",
+      "evidence": "PM rerun 2x + regression 26/27 (p1-5 exit timeout under load, PASS 2x isolated): P6-1 PASS authenticated scripted build_first; cron source -> Inbox -> report; channel @neo -> Inbox -> reply; requesterRole set server-side from NeoAuthContext; viewer act blocked with reason; destructive -> admin",
+      "follow_up": "destructive detection is keyword-based; real Telegram ChannelSource wiring after P2-5 lands; Neo timer used (Hermes cron has no Neo callback, engine-hermes/src/runtime.ts:329-334)"
+    },
+    "P6-2": {
+      "title": "Decision log (Panda-compatible traces) + ticket post-mortems -> skill proposals",
+      "status": "in_progress",
+      "owner": "codex"
     }
   }
 }
