@@ -1,0 +1,24 @@
+.inbox-page { max-width: 980px; margin: 0 auto; }
+.inbox-composer { display: grid; gap: 14px; padding: 24px; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
+.inbox-composer > label { font-weight: 700; font-size: 18px; }
+.inbox-composer textarea, .inbox-composer select { font: inherit; background: transparent; color: inherit; padding: 12px; border: 1px solid color-mix(in srgb, currentColor 50%, transparent); }
+.inbox-composer textarea { resize: vertical; width: 100%; }
+.inbox-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 18px; }
+.inbox-controls > label { display: grid; gap: 6px; }
+.inbox-modes { display: flex; gap: 14px; padding: 4px 12px 8px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); }
+.inbox-modes legend { font-size: 12px; }
+.inbox-modes label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.inbox-items { margin-top: 28px; display: grid; gap: 14px; }
+.inbox-item { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); padding: 20px; overflow-wrap: anywhere; }
+.inbox-item-header { display: flex; gap: 16px; align-items: center; justify-content: space-between; text-transform: capitalize; }
+.inbox-mode { opacity: .75; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.inbox-status { border: 1px solid currentColor; padding: 4px 10px; font-size: 12px; }
+.inbox-request { font-size: 17px; margin: 14px 0; }
+.inbox-accept { cursor: pointer; font: inherit; font-weight: 700; background: currentColor; border: 1px solid currentColor; padding: 8px 16px; color: inherit; background: transparent; }
+.inbox-accept:hover { outline: 2px solid currentColor; }
+.inbox-accept:disabled { opacity: .5; cursor: default; }
+.inbox-report { border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent); padding-top: 14px; }
+.inbox-report h3 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; }
+.inbox-report-group { font-size: 13px; margin: 8px 0; }
+.inbox-report-group p { margin: 5px 0; }
+.inbox-blocked { font-weight: 650; border-left: 3px solid currentColor; padding-left: 12px; }

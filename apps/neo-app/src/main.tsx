@@ -5,6 +5,7 @@ import { AppShell, NeoTheme, SideNav, SideNavItem, SideNavSection } from '@neome
 import './shell.css';
 
 const Extensions = lazy(() => import('./pages/Extensions'));
+const Inbox = lazy(() => import('./pages/Inbox'));
 const Agents = lazy(() => import('./pages/Agents'));
 const Skills = lazy(() => import('./pages/Skills'));
 const Memory = lazy(() => import('./pages/Memory'));
@@ -62,7 +63,7 @@ function NeoApp() {
     }>
       <div className="neo-page">
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
-          {path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : <Placeholder name={current.label} />}
+          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : <Placeholder name={current.label} />}
         </Suspense>
       </div>
     </AppShell>
