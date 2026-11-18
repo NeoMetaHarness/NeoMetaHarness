@@ -188,6 +188,11 @@
       "owner": "codex",
       "evidence": "pnpm test:p1-5",
       "verified_by_pm": "2026-11-18 x2: real Tauri build, WebView2 shows all extensions, live toggle 404/200, python ok, no SW, clean exit, no leftover processes; Rust shell 158 LOC (thin)"
+    },
+    "P1-7": {
+      "title": "Route policy table + contract-coverage auth test",
+      "status": "in_progress",
+      "owner": "antigravity"
     }
   },
   "p2_tasks": {
@@ -232,6 +237,17 @@
     "P2-5": {
       "title": "channels first slice: Telegram via Hermes platforms, vault-projected token, Channels UI",
       "status": "in_progress",
+      "owner": "sol-a",
+      "note": "delivered pre-auth; Sol-A rebasing onto auth with guards"
+    },
+    "P2-6": {
+      "title": "Models hub: providers in vault, route roles, projections into Hermes + DSH, Panda router stub",
+      "status": "in_progress",
+      "owner": "codex"
+    },
+    "P2-7": {
+      "title": "Routines (Hermes cron) + Tasks (Hermes kanban) UI; P2 exit",
+      "status": "in_progress",
       "owner": "sol-a"
     }
   },
@@ -253,6 +269,13 @@
     },
     "P4-3": {
       "title": "skills-registry (git-backed) + projections into Hermes profiles and DSH; P4 exit",
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "PM rerun 2x pre-auth + 1x on authenticated main: P4-3_BROWSER PASS hermes=true dsh=true registry-v3=true rollback=true disabled-404=true other-extensions=true; git via execFile with validated names; DSH via skill-filesystem/src/index.ts:263; P4 exit (learn on bot A -> registry -> bot B + DSH use it) met; PM added role guards on x.skills-registry",
+      "follow_up": "skills keyed globally by name (fix in P4-4)"
+    },
+    "P4-4": {
+      "title": "DSH memory context plugin + per-owner skill identity + workspace in memory bridge",
       "status": "in_progress",
       "owner": "sol-b"
     }
@@ -291,8 +314,10 @@
     },
     "P5-3": {
       "title": "Inbox page + production superagent worker (LlmAdapter seam, real DSH session), auth-ready MCP bridge",
-      "status": "in_progress",
-      "owner": "codex"
+      "status": "done",
+      "owner": "codex",
+      "evidence": "PM rerun on authenticated main: P5-3_BROWSER PASS act=ready observe=ready blocked=reason disabled=visible other_extension=healthy hermes_requests=6 dsh_worker=6 (2x pre-auth, 1x post-auth in 23/23 regression); SUPERAGENT_MODEL PASS vault=true auth=true; injectable LlmAdapter, scripted models only in test/; MCP bridge authenticated with superagent-minted scoped API key",
+      "follow_up": "pinned DSH 0.2.2-rc.1 SDK lacks standalone preset-scoped MCP (packages/sdk/server/src/server.ts:564-591) -> worker on testkit host behind WorkerHost; live model unverified"
     }
   }
 }
