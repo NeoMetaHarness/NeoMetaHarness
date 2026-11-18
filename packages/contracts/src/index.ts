@@ -25,6 +25,7 @@ const computerInfoSchema = z.object({
     gpu: z.boolean().optional(),
   }),
   holder: z.enum(['agent', 'human']),
+  assignments: z.array(z.object({ engine: z.string(), targetId: z.string() })),
 });
 
 export const gatewayEventSchema = z.discriminatedUnion('type', [
@@ -177,6 +178,10 @@ const baseNeoContract = {
       engine: z.enum(['hermes', 'dsh']), targetId: z.string().min(1), computerId: z.string().min(1),
     })).output(z.object({ engine: z.string(), targetId: z.string(), computerId: z.string() })),
     kill: oc.input(z.object({ engaged: z.boolean() })).output(z.object({ engaged: z.boolean() })),
+    state: oc.output(z.object({ engaged: z.boolean() })),
+    capture: oc.input(z.object({ id: z.string().min(1) })).output(z.object({
+      png: z.string(), width: z.number().int().positive(), height: z.number().int().positive(),
+    })),
   },
   events: {
     subscribe: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))

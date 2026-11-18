@@ -47,6 +47,7 @@ export interface ComputerInfo {
   providerId: string;
   capabilities: ComputerCapabilities;
   holder: LeaseHolder;
+  assignments: { engine: string; targetId: string }[];
 }
 export interface ComputerBinding { endpoint: string; token: string; computerId: string }
 
@@ -85,6 +86,9 @@ export class ComputerRegistry {
         screen: false, input: false, browserCdp: false, shell: false, files: false, snapshot: false,
       },
       holder: entry.holder,
+      assignments: [...this.assignments.values()]
+        .filter((assignment) => assignment.computerId === id)
+        .map(({ engine, targetId }) => ({ engine, targetId })),
     }));
   }
 
@@ -156,6 +160,14 @@ export class ComputerRegistry {
     this.killed = engaged;
     this.publish({ type: 'computer.kill', engaged });
     return { engaged };
+  }
+
+  state(): { engaged: boolean } { return { engaged: this.killed }; }
+
+  async capture(id: string): Promise<Capture> {
+    const entry = this.entries.get(id);
+    if (!entry) throw new Error('Unknown computer');
+    return this.runQueued(entry, () => Promise.resolve(entry.computer.capture()));
   }
 
   async lease(id: string, holder: LeaseHolder): Promise<ComputerInfo> {

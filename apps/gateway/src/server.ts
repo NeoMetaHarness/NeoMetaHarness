@@ -159,6 +159,8 @@ export async function startGateway(options: GatewayOptions) {
         return input;
       }),
       kill: os.computers.kill.handler(async ({ input }) => computers.kill(input.engaged)),
+      state: os.computers.state.handler(async () => computers.state()),
+      capture: os.computers.capture.handler(async ({ input }) => computers.capture(input.id)),
     },
     events: {
       subscribe: os.events.subscribe.handler(async function* ({ input, signal }) {
