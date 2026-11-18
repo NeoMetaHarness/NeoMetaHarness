@@ -1,0 +1,7 @@
+{
+  "id": "computer-fake",
+  "version": "0.1.0",
+  "displayName": "Deterministic fake computer",
+  "kind": ["feature"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}

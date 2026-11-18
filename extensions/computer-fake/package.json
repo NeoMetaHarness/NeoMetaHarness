@@ -1,0 +1,10 @@
+{
+  "name": "@neometaharness/computer-fake",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@neometaharness/kernel": "workspace:*",
+    "@neometaharness/computers": "workspace:*"
+  }
+}
