@@ -787,8 +787,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/')) {
-        if (!kernel.hasRoute(path) && context.role && context.role !== 'viewer') {
+      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/')) {
+        const honchoDisabledRead = path === '/x/memory-honcho/status' || path === '/x/memory-honcho/list';
+        if (!kernel.hasRoute(path) && !honchoDisabledRead && context.role && context.role !== 'viewer') {
           res.writeHead(404).end();
           return;
         }

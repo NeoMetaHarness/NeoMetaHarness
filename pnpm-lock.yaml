@@ -489,6 +489,25 @@ importers:
         specifier: 8.18.3
         version: 8.18.3
 
+  extensions/memory-honcho:
+    dependencies:
+      '@neometaharness/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+      '@neometaharness/vault':
+        specifier: workspace:*
+        version: link:../../packages/vault
+    devDependencies:
+      '@types/node':
+        specifier: 22.18.13
+        version: 22.18.13
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   extensions/memory-local:
     dependencies:
       '@neometaharness/db':
