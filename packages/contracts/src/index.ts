@@ -481,12 +481,22 @@ export const inboxItemSchema = z.object({
   createdAt: z.number(), updatedAt: z.number(),
 });
 export const inboxEventSchema = z.object({ seq: z.number().int(), item: inboxItemSchema });
+export const inboxDecisionSchema = z.object({
+  trace_id: z.string(), ticketId: z.string(), source: z.string(), inputsSummary: z.string(),
+  candidates: z.array(z.string()), chosenAction: z.string(), modelRole: z.enum(['eval', 'coding']),
+  latencyMs: z.number(), outcome: z.string(), model_id: z.string(), success: z.boolean(),
+  actual_latency_ms: z.number(), choice: z.object({ model_id: z.string() }),
+  ranking: z.array(z.object({ model_id: z.string() })), at: z.number(),
+});
+export type InboxDecision = z.infer<typeof inboxDecisionSchema>;
 export type InboxItem = z.infer<typeof inboxItemSchema>;
 export type InboxEvent = z.infer<typeof inboxEventSchema>;
 export const inboxContract = {
   ask: oc.input(z.object({ text: z.string().min(1), botId: z.string().min(1),
     mode: z.enum(['observe', 'act']).default('observe') })).output(inboxItemSchema),
   list: oc.output(z.array(inboxItemSchema)),
+  decisions: { list: oc.input(z.object({ ticketId: z.string().optional(),
+    limit: z.number().int().min(1).max(500).default(100) })).output(z.array(inboxDecisionSchema)) },
   accept: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
   events: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))
     .output(eventIterator(inboxEventSchema)),

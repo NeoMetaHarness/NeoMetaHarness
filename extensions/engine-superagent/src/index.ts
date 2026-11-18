@@ -10,6 +10,7 @@ import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
 import { NeoCronSource, type ScheduledAsk } from './cron-source.js';
 import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './channel-source.js';
 import { blockedReason } from './ask-policy.js';
+import { DecisionLog } from './decision-log.js';
 
 type Report = NonNullable<InboxItem['report']>;
 type Candidate = { evalId: string; triggers: { id: string }[] };
@@ -40,7 +41,8 @@ export class NeoSourceAdapter {
 }
 
 class SuperagentService {
-  constructor(private readonly models: ModelFactory, private readonly worker: WorkerHost = new PresetWorkerHost(models)) {}
+  constructor(private readonly models: ModelFactory, private readonly decisions: DecisionLog,
+    private readonly worker: WorkerHost = new PresetWorkerHost(models)) {}
   private readonly items = new Map<string, InboxItem>();
   private readonly candidates = new Map<string, Candidate>();
   private readonly events: InboxEvent[] = [];
@@ -189,34 +191,45 @@ class SuperagentService {
     this.engine.candidateDelivered(candidate.evalId);
     // Observe mode retains the accepted proposal for human approval.
     if (item.mode === 'observe') return this.update(item, { status: 'suggestion' });
-    this.acceptCandidate(item, candidate, source);
+    await this.acceptCandidate(item, candidate, source);
     return this.items.get(item.id)!;
   }
 
   private async evaluate(item: InboxItem, candidate: Candidate): Promise<void> {
-    const { adapter, provider, model } = await this.models('eval', item);
-    const request = createUserMessage({ content: [{ type: 'text', text: JSON.stringify({
-      evalId: candidate.evalId, triggerIds: candidate.triggers.map((trigger) => trigger.id),
-      botId: item.botId, text: item.text, mode: item.mode,
-    }) }], source: { kind: 'user' } });
-    let result = '';
-    for await (const chunk of adapter.stream({ provider, model, messages: [request] })) {
-      if (chunk.type === 'block-end' && chunk.block.type === 'text') result += chunk.block.text;
-    }
-    if ((JSON.parse(result) as { decision: string }).decision !== 'accept') {
-      throw new Error('Superagent Eval declined the proposed ticket');
+    const started = Date.now();
+    let outcome = 'failed';
+    try {
+      const { adapter, provider, model } = await this.models('eval', item);
+      const request = createUserMessage({ content: [{ type: 'text', text: JSON.stringify({
+        evalId: candidate.evalId, triggerIds: candidate.triggers.map((trigger) => trigger.id),
+        botId: item.botId, text: item.text, mode: item.mode,
+      }) }], source: { kind: 'user' } });
+      let result = '';
+      for await (const chunk of adapter.stream({ provider, model, messages: [request] })) {
+        if (chunk.type === 'block-end' && chunk.block.type === 'text') result += chunk.block.text;
+      }
+      outcome = (JSON.parse(result) as { decision: string }).decision === 'accept' ? 'accepted' : 'declined';
+      if (outcome !== 'accepted') throw new Error('Superagent Eval declined the proposed ticket');
+    } finally {
+      await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+        inputsSummary: item.text.slice(0, 240), candidates: candidate.triggers.map((trigger) => trigger.id),
+        chosenAction: 'eval', modelRole: 'eval', latencyMs: Date.now() - started, outcome });
     }
   }
 
-  private acceptCandidate(item: InboxItem, candidate: Candidate, source = 'neo/app'): void {
+  private async acceptCandidate(item: InboxItem, candidate: Candidate, source = 'neo/app'): Promise<void> {
+    const started = Date.now();
     this.engine.decide(`${source}:${item.id}`, {
       kind: 'accept', title: item.text.slice(0, 100), scope: source,
       reason: 'Explicit Ask Neo request', evalId: candidate.evalId,
     });
     this.candidates.delete(`${source}:${item.id}`);
+    await this.decisions.record({ ticketId: item.id, source, inputsSummary: item.text.slice(0, 240),
+      candidates: [candidate.evalId], chosenAction: 'accept', modelRole: 'eval',
+      latencyMs: Date.now() - started, outcome: 'accepted' });
   }
 
-  accept(input: { id: string }): InboxItem {
+  async accept(input: { id: string }): Promise<InboxItem> {
     const item = this.items.get(input.id);
     if (!item) throw new Error('Suggestion not found');
     if (item.status !== 'suggestion') throw new Error(`Cannot accept ${item.status} ticket`);
@@ -227,11 +240,12 @@ class SuperagentService {
     }
     const candidate = this.candidates.get(`${item.source ?? 'neo/app'}:${item.id}`);
     if (!candidate) throw new Error('Suggestion Eval expired');
-    this.acceptCandidate(item, candidate, item.source);
+    await this.acceptCandidate(item, candidate, item.source);
     return this.items.get(item.id)!;
   }
 
   list(): InboxItem[] { return [...this.items.values()].map((item) => structuredClone(item)); }
+  listDecisions(input: { ticketId?: string; limit?: number }) { return this.decisions.list(input); }
 
   cronList(): ScheduledAsk[] { return this.cron!.list(); }
   cronCreate(input: unknown): Promise<ScheduledAsk> {
@@ -266,12 +280,15 @@ class SuperagentService {
   private async runTicket(ticketId: string, assignmentId: string): Promise<void> {
     const item = [...this.items.values()].find((value) => value.ticketId === ticketId);
     if (!item || this.closed) return;
+    const started = Date.now();
+    let outcome = 'failed';
     try {
       this.engine.assignmentStarted(ticketId, assignmentId);
       this.workerReady ??= this.worker.start(this.workerHome, this.gatewayUrl(), this.token);
       await this.workerReady;
       const result = await this.worker.delegate(item.botId, item.text);
       if (this.closed) return;
+      outcome = 'ready';
       const report: Report = {
         status: 'ready', summary: result.summary, changes: [], tests: result.tests, risks: result.risks, options: [],
       };
@@ -282,10 +299,15 @@ class SuperagentService {
       const message = error instanceof Error ? error.message : String(error);
       const status = /disabled|unavailable|interrupted|stopped|unknown|require.*enabled.*engine-hermes/i.test(message)
         ? 'blocked' : 'failed';
+      outcome = status;
       const report: Report = { status, summary: `Hermes delegation ${status}: ${message}`, changes: [], tests: [],
         risks: [message], options: [] };
       this.engine.report(ticketId, { state: status, summary: report.summary });
       this.update(item, { status, report });
+    } finally {
+      if (!this.closed) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+        inputsSummary: item.text.slice(0, 240), candidates: [assignmentId], chosenAction: 'delegate',
+        modelRole: 'coding', latencyMs: Date.now() - started, outcome });
     }
   }
 
@@ -335,7 +357,7 @@ export default defineExtension({
     const models = process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_TEST_ADAPTER
       ? (await import(process.env.NMH_SUPERAGENT_TEST_ADAPTER) as { createModelFactory: ModelFactory }).createModelFactory
       : modelHubFactory(() => ctx.inject<ModelHubResolver>('modelHub'));
-    const service = new SuperagentService(models);
+    const service = new SuperagentService(models, new DecisionLog(join(dataDir, 'engine-superagent', 'traces')));
     const channel = ctx.inject<ChannelSource>('channelSource')
       ?? (process.env.NODE_ENV === 'test' ? new FakeChannelSource() : undefined);
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, apiKeyToken, channel);
@@ -352,6 +374,7 @@ export default defineExtension({
     });
     ctx.route('ask', ({ body }) => service.ask(body));
     ctx.route('list', () => service.list());
+    ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number }));
     ctx.route('accept', ({ body }) => service.accept(body as { id: string }));
     ctx.route('cron/list', () => service.cronList());
     ctx.route('cron/create', ({ body }) => service.cronCreate(body));

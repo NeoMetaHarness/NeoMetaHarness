@@ -296,6 +296,12 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('inbox.list', context);
         return invokeInbox('list', {}) as Promise<InboxItem[]>;
       }),
+      decisions: {
+        list: os.inbox.decisions.list.handler(async ({ input, context }) => {
+          authorize('inbox.decisions.list', context);
+          return invokeInbox('decisions/list', input) as Promise<import('@neometaharness/contracts').InboxDecision[]>;
+        }),
+      },
       accept: os.inbox.accept.handler(async ({ input, context }) => {
         authorize('inbox.accept', context);
         return invokeInbox('accept', input) as Promise<InboxItem>;
