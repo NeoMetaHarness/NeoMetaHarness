@@ -75,6 +75,9 @@ export async function createAcpBridge(ctx: ExtensionContext, dataDir: string,
         if (engine !== sessions.get(sessionId)) throw new Error('DSH session was disabled');
         if (method === 'session/cancel') { await engine.cancel({ sessionId }); return respond({}); }
         if (method === 'session/prompt') {
+          if ((params.prompt ?? []).some((block: any) => block.type !== 'text')) {
+            throw new Error('Neo coding currently accepts text prompts only');
+          }
           const abort = new AbortController();
           const onClose = () => abort.abort();
           socket.once('close', onClose);

@@ -17,7 +17,7 @@ type T3 = {
   workflowRequest(method: string, input: unknown): Promise<any>;
   workflowCommand(input: Record<string, unknown>): Promise<unknown>;
   subscribeThread(id: string): AsyncIterable<any>;
-  listThreads(): Promise<{ projects: Array<{ id: string; workspaceRoot: string }> }>;
+  listThreads(): Promise<{ projects: Array<{ id: string; workspaceRoot: string }>; threads: Array<{ worktreePath?: string | null }> }>;
   terminalOutput(input: { threadId: string; terminalId: string }, signal?: AbortSignal): AsyncIterable<any>;
   onWorkflowDisconnect(cleanup: () => Promise<void>): () => void;
 };
@@ -45,7 +45,7 @@ export default defineExtension({
       }
       throw new Error('Thread not found');
     };
-    const owned = new Map<string, { cwd: string; branch: string }>();
+    const allowedRoots = new Set<string>();
     const busy = new Set<string>();
     const exclusive = async <T>(id: string, fn: () => Promise<T>) => {
       if (busy.has(id)) throw new Error('Thread workflow operation is already running');
@@ -54,10 +54,9 @@ export default defineExtension({
     };
     const bridge = await createAcpBridge(ctx, storage, async (cwd) => {
       const actual = await realpath(cwd);
-      const roots = (await t3().listThreads()).projects.map(p => p.workspaceRoot);
-      for (const root of [...roots, ...[...owned.values()].map(v => v.cwd)]) {
-        if (actual === await realpath(root)) return;
-      }
+      // Never call T3 back during ACP session/new: T3 may hold its dispatch lock
+      // while waiting for this session. Capture approved roots at registration.
+      if (allowedRoots.has(actual)) return;
       throw new Error('ACP cwd is not a registered project or thread worktree');
     });
     const terminalIds = new Map<string, string>();
@@ -80,6 +79,12 @@ export default defineExtension({
       const models = ctx.inject<{ active: boolean; resolve(role: string): Promise<unknown> }>('modelHub');
       if (!models?.active) throw new Error('Configure a coding model in the Models hub first');
       await models.resolve('coding');
+      const catalog = await t3().listThreads();
+      for (const path of [...catalog.projects.map(p => p.workspaceRoot), ...catalog.threads.map(t => t.worktreePath)]) {
+        if (!path) continue;
+        const actual = await realpath(path).catch(() => undefined);
+        if (actual) allowedRoots.add(actual);
+      }
       bridge.setWorkspace((body as { workspaceId: string }).workspaceId);
       await t3().workflowRequest('server.updateSettings', { patch: {}, providerInstanceMutation: {
         operation: 'upsert', instanceId: 'neo-coding', instance: {
@@ -121,7 +126,7 @@ export default defineExtension({
         await t3().workflowCommand({ type: 'thread.metadata.update', threadId: input.threadId,
           worktreePath: cwd, branch: input.branch, expectedEmpty: true,
           expectedWorktreePath: null, expectedBranch: current.branch ?? null });
-        owned.set(input.threadId, { cwd, branch: input.branch });
+        allowedRoots.add(await realpath(cwd));
         return { path: cwd, branch: input.branch };
       });
     });

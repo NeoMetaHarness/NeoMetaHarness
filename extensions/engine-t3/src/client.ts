@@ -184,6 +184,7 @@ export class T3ControlPlane {
         threads: (snapshot.threads as any[]).map((thread) => ({
           id: thread.id, projectId: thread.projectId, title: thread.title, status: thread.status,
           activeRunId: thread.activeRunId, itemCount: thread.itemCount,
+          worktreePath: thread.worktreePath, branch: thread.branch,
           pendingRuntimeRequest: thread.pendingRuntimeRequest
             ? { id: thread.pendingRuntimeRequest.id, kind: thread.pendingRuntimeRequest.kind } : null,
         })),
