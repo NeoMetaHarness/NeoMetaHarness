@@ -15,6 +15,7 @@
     "test:p4-1": "node test/p4-1.mjs",
     "test:p4-2": "node test/p4-2.mjs",
     "test:p5-3": "node test/p5-3.mjs",
+    "test:p6-1": "node test/p6-1.mjs",
     "test:p4-3": "node test/p4-3.mjs",
     "test:p4-4": "node test/p4-4.mjs",
     "test:p4-5": "node test/p4-5.mjs",
