@@ -40,12 +40,15 @@ async function awaitHttp(url, label) {
   throw new Error(`${label} did not respond at ${url}`);
 }
 
+let AUTH = '';
+const authHeaders = () => ({ authorization: `Bearer ${AUTH}` });
+
 async function startGateway(dbFile, hermesHome, modelUrl) {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: gatewayDir,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
-    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_HERMES_HOME: hermesHome, NMH_HERMES_MODEL_URL: modelUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0' },
+    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_HERMES_HOME: hermesHome, NMH_HERMES_MODEL_URL: modelUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let errors = '';
   child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
@@ -55,6 +58,7 @@ async function startGateway(dbFile, hermesHome, modelUrl) {
     const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
     const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
     lines.on('line', (line) => {
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) AUTH = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
       if (line.startsWith('GATEWAY_READY ')) success(JSON.parse(line.slice('GATEWAY_READY '.length)).port);
     });
     child.once('error', fail);
@@ -265,7 +269,7 @@ async function runHermes(rpc, base, profile, kind) {
   const result = kind === 'learn'
     ? await rpc.x['engine-hermes'].skills.learn({ profile, description: 'A workflow for the papaya checksum protocol' })
     : await rpc.x['engine-hermes'].runs.start({ profile, input: `Apply the papaya checksum protocol, ${profile}` });
-  const socket = new WebSocket(base.replace(/^http/, 'ws') + '/ws');
+  const socket = new WebSocket(base.replace(/^http/, 'ws') + '/ws', ['bearer.' + AUTH]);
   await new Promise((done, reject) => { socket.onopen = done; socket.onerror = reject; });
   try {
     const { RPCLink: WsLink } = await import('@orpc/client/websocket');
@@ -288,7 +292,7 @@ async function trial(previewPort) {
     gateway = await startGateway(join(temporary, 'state.sqlite'), join(temporary, 'hermes-home'),
       `http://127.0.0.1:${model.port}/v1`);
     const base = `http://127.0.0.1:${gateway.port}`;
-    const rpc = createORPCClient(new RPCLink({ url: base }));
+    const rpc = createORPCClient(new RPCLink({ url: base, headers: authHeaders }));
     for (const id of ['sample-ts', 'engine-hermes', 'engine-dsh', 'skills-registry']) {
       const response = await rpc.extensions.enable({ id });
       assert.equal(response.status, 'running', `${id}: ${response.reason}`);
@@ -314,7 +318,7 @@ async function trial(previewPort) {
     console.log('P4-3_STAGE learned and imported bot A skill at version 1 with provenance');
 
     chrome = await startChrome(join(temporary, 'chrome'));
-    const page = await pageSession(chrome, `http://127.0.0.1:${previewPort}/skills?gateway=${encodeURIComponent(base)}`);
+    const page = await pageSession(chrome, `http://127.0.0.1:${previewPort}/skills?gateway=${encodeURIComponent(base)}&token=${encodeURIComponent(AUTH)}`);
     try {
       await page.eventually('!!document.querySelector("[data-testid=skills-page]")', 'Skills lazy route');
       await page.evaluate('document.querySelector("[data-testid=registry-tab]").click()');
@@ -387,10 +391,10 @@ async function trial(previewPort) {
       console.log('P4-3_STAGE metadata-only provenance revision and historical rollback verified');
 
       await rpc.extensions.disable({ id: 'skills-registry' });
-      assert.equal((await fetch(base + '/x/skills-registry/list')).status, 404);
+      assert.equal((await fetch(base + '/x/skills-registry/list', { headers: authHeaders() })).status, 404);
       await assert.rejects(readFile(join(temporary, 'hermes-home', 'profiles', 'botb', 'skills', skill.name, 'SKILL.md'), 'utf8'));
       await assert.rejects(readFile(join(projected, 'SKILL.md'), 'utf8'));
-      assert.equal((await fetch(base + '/x/sample-ts/hello')).status, 200);
+      assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: authHeaders() })).status, 200);
       await runHermes(rpc, base, 'botb', 'run');
       await rpc.x['engine-dsh'].prompt({ sessionId: dsh.sessionId, text: 'Still healthy after registry disable' });
       await rpc.x['engine-dsh'].wait({ sessionId: dsh.sessionId });

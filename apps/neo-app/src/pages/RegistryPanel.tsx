@@ -4,13 +4,19 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
 import { Button } from '@neometaharness/ui';
-import { gatewayUrl } from '../config';
+import { gatewayUrl, gatewayToken } from '../config';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Skill = { name: string; version: number; sourceProfile: string; sourcePath: string; trust: string; updatedAt: number };
 type Version = { version: number; hash: string; metadata: Skill };
 type Assignment = { name: string; engine: 'hermes' | 'dsh'; targetId: string };
-const api = createORPCClient<Client>(new RPCLink({ url: gatewayUrl() })).x['skills-registry'];
+const api = createORPCClient<Client>(new RPCLink({
+  url: gatewayUrl(),
+  headers: () => {
+    const token = gatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  },
+})).x['skills-registry'];
 
 export default function RegistryPanel({ profile, profiles }: { profile: string; profiles: string[] }) {
   const [skills, setSkills] = useState<Skill[]>([]);

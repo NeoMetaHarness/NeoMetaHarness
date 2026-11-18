@@ -5,11 +5,17 @@ import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type InboxItem } from '@neometaharness/contracts';
 import { Button } from '@neometaharness/ui';
-import { gatewayUrl } from '../config';
+import { gatewayUrl, gatewayToken } from '../config';
 import './inbox.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
-const http = createORPCClient<Client>(new HttpLink({ url: gatewayUrl() }));
+const http = createORPCClient<Client>(new HttpLink({
+  url: gatewayUrl(),
+  headers: () => {
+    const token = gatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  },
+}));
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 function textNode(tag: string, content: string, className?: string): HTMLElement {
@@ -116,7 +122,10 @@ export default function Inbox() {
     }
     async function listen() {
       while (!closed) {
-        socket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws');
+        {
+          const token = gatewayToken();
+          socket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws', token ? ['bearer.' + token] : undefined);
+        }
         const ws = socket;
         let stateChange = false;
         try {

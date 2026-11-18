@@ -50,6 +50,9 @@ function upstreamCache() {
   }
 }
 
+let AUTH = '';
+const authHeaders = () => ({ authorization: `Bearer ${AUTH}` });
+
 async function startGateway(dbFile, hermesHome, modelUrl, dshUrl) {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: gatewayDir,
@@ -60,7 +63,7 @@ async function startGateway(dbFile, hermesHome, modelUrl, dshUrl) {
       NMH_SUPERAGENT_TEST_ADAPTER: new URL('../../../extensions/engine-superagent/test/scripted-models.ts', import.meta.url).href,
       NMH_UPSTREAM_CACHE: upstreamCache(),
       NMH_DB_PATH: dbFile, NMH_HERMES_HOME: hermesHome, NMH_HERMES_MODEL_URL: modelUrl,
-      NMH_SUPERAGENT_MODEL_URL: dshUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0',
+      NMH_SUPERAGENT_MODEL_URL: dshUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1',
     },
   });
   let errors = '';
@@ -71,6 +74,7 @@ async function startGateway(dbFile, hermesHome, modelUrl, dshUrl) {
     const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
     const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
     lines.on('line', (line) => {
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) AUTH = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
       if (line.startsWith('GATEWAY_READY ')) success(JSON.parse(line.slice('GATEWAY_READY '.length)).port);
     });
     child.once('error', fail);
@@ -280,7 +284,7 @@ async function trial(previewPort) {
     gateway = await startGateway(join(temporary, 'state.sqlite'),
       join(temporary, 'hermes-home'), `http://127.0.0.1:${hermes.port}/v1`, `http://127.0.0.1:${dsh.port}`);
     const base = `http://127.0.0.1:${gateway.port}`;
-    const rpc = createORPCClient(new RPCLink({ url: base }));
+    const rpc = createORPCClient(new RPCLink({ url: base, headers: authHeaders }));
     assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
     const engine = await rpc.extensions.enable({ id: 'engine-hermes' });
     assert.equal(engine.status, 'running', engine.reason ?? gateway.errors());
@@ -289,7 +293,7 @@ async function trial(previewPort) {
     const bot = await rpc.agents.bots.create({ name: 'Neo Inbox Test Agent' });
 
     chrome = await startChrome(join(temporary, 'chrome'));
-    page = await pageSession(chrome, `http://127.0.0.1:${previewPort}/inbox?gateway=${encodeURIComponent(base)}`);
+    page = await pageSession(chrome, `http://127.0.0.1:${previewPort}/inbox?gateway=${encodeURIComponent(base)}&token=${encodeURIComponent(AUTH)}`);
     await page.eventually('document.querySelector(".inbox-page") && document.querySelector(".connection")?.textContent === "Live"', 'Inbox lazy page and event stream');
     await page.eventually(`document.querySelector('select[aria-label="Agent"]')?.value === '${bot.id}'`, 'bot selector');
     assert.equal(await page.evaluate('document.querySelector("input[name=mode]:checked")?.value'), 'observe');
@@ -338,7 +342,7 @@ async function trial(previewPort) {
 
     await rpc.extensions.disable({ id: 'engine-superagent' });
     await page.eventually('!!document.querySelector("[data-testid=inbox-disabled]")', 'Inbox extension-disabled state');
-    assert.equal((await fetch(base + '/x/sample-ts/hello')).status, 200, 'unrelated extension healthy');
+    assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: authHeaders() })).status, 200, 'unrelated extension healthy');
     console.log(`P5-3_BROWSER PASS act=ready observe=ready blocked=reason disabled=visible other_extension=healthy hermes_requests=${hermes.seen.length} dsh_worker=${dsh.seen.length}`);
 
     assert.equal((await rpc.extensions.enable({ id: 'engine-hermes' })).status, 'running');
