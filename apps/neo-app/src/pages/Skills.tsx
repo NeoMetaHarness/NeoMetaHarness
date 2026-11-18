@@ -7,6 +7,7 @@ import { neoContract } from '@neometaharness/contracts';
 import { Button, StreamView, type StreamViewHandle } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './skills.css';
+import RegistryPanel from './RegistryPanel';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Skill = { name: string; provenance?: string; usage?: number; category?: string; enabled?: boolean };
@@ -37,6 +38,7 @@ export default function Skills() {
   const [runStatus, setRunStatus] = useState('');
   const [streamKey, setStreamKey] = useState(0);
   const [notice, setNotice] = useState('');
+  const [tab, setTab] = useState<'library' | 'registry'>('library');
   const [error, setError] = useState('');
   const selected = useRef(profile);
   const mounted = useRef(true);
@@ -167,6 +169,14 @@ export default function Skills() {
     </header>
     {error && <p className="page-error" role="alert">{error}</p>}
     {notice && <p role="status" className="skills-notice">{notice}</p>}
+    <nav className="skills-tabs" aria-label="Skills views">
+      <button type="button" data-testid="library-tab" aria-current={tab === 'library' ? 'page' : undefined}
+        onClick={() => setTab('library')}>Library</button>
+      <button type="button" data-testid="registry-tab" aria-current={tab === 'registry' ? 'page' : undefined}
+        onClick={() => setTab('registry')}>Registry</button>
+    </nav>
+    {tab === 'registry' && <RegistryPanel profile={profile} profiles={[...new Set(['default', ...profiles])]} />}
+    <div hidden={tab !== 'library'}>
     <section className="skills-learn skills-panel">
       <h2>Learn a skill</h2>
       <form onSubmit={(event) => void learn(event)}>
@@ -215,6 +225,7 @@ export default function Skills() {
               {item.installed ? 'Installed' : 'Install in P4-2'}</Button>
           </li>)}</ul>}
       </section>
+    </div>
     </div>
   </section>;
 }

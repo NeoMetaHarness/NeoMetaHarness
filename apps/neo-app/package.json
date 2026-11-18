@@ -14,6 +14,7 @@
     "test:p4-1": "node test/p4-1.mjs",
     "test:p4-2": "node test/p4-2.mjs",
     "test:p5-3": "node test/p5-3.mjs",
+    "test:p4-3": "node test/p4-3.mjs",
     "test:p3-2": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p3-2.mjs",
     "test:p5-2": "pnpm --dir ../gateway exec tsx ../../apps/neo-app/test/p5-2.mjs"
   },
