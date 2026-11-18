@@ -194,6 +194,16 @@
       "status": "done",
       "owner": "antigravity",
       "evidence": "PM rerun on main: gateway 13/13 x2 incl. policy.test (85 procedures 1:1 with CONTRACT_POLICY; unauth 401, non-member 403, viewer 403 above viewer; auth before engine: disabled ext -> 401/403 never 404); PM proved coverage bites (deleting one entry fails 3/3 policy tests); authorize() fails closed on unknown routes; full regression 23/23; docs/05 'Adding a route'"
+    },
+    "P1-8": {
+      "title": "Desktop tray, launcher, deep links, onboarding wizard",
+      "status": "in_progress",
+      "owner": "sol-a"
+    },
+    "P1-9": {
+      "title": "Schema-driven Settings",
+      "status": "in_progress",
+      "owner": "antigravity"
     }
   },
   "p2_tasks": {
@@ -305,6 +315,11 @@
       "owner": "sol-b",
       "evidence": "PM rerun 2x + regression 31/31 on main: P4-6_EXIT PASS (passing skill assigned; failing blocked then admin override audited; skill above ceiling not projected; malicious Hub fixture blocked with report; benign installs). Hub scan is read-only regex over preview (no execution), path-escape checks, install requires admin approval when blocked and re-scan if contents changed; policy: assign/evaluate/override/ceiling.set/hub.approve admin",
       "follow_up": "live Hermes Skills Hub unverified; multi-file Hub skills need upstream file-content access; ceilings enforced at projection only; heuristic scan"
+    },
+    "P4-7": {
+      "title": "Fix skills-safety gaps found by security review (SEC-14/17/18)",
+      "status": "in_progress",
+      "owner": "sol-b"
     }
   },
   "p3_tasks": {
@@ -327,6 +342,11 @@
       "title": "Second computer provider + bot swaps computers without restart (P3 exit, no Docker here)",
       "status": "in_progress",
       "owner": "sol-a"
+    },
+    "P3-4": {
+      "title": "computer-vnc provider (RFB client, fake RFB server in tests)",
+      "status": "in_progress",
+      "owner": "sol61"
     }
   },
   "p5_tasks": {
@@ -357,8 +377,8 @@
       "owner": "sol-b"
     },
     "P5-5": {
-      "title": "Coding exit: DSH as T3 provider, switch provider mid-thread, worktree/terminal/PR prep",
-      "status": "in_progress",
+      "title": "Coding exit: DSH as T3 provider, switch provider, worktree/terminal/PR prep",
+      "status": "review",
       "owner": "sol61"
     }
   },
@@ -370,8 +390,20 @@
     },
     "P7-2": {
       "title": "Security review: threat model, findings, fixes with tests",
+      "status": "done",
+      "owner": "opus",
+      "evidence": "PM review + reruns on main: gateway 19/19 x2 (13 + 6 security.test.ts: SEC-01..05 each reproduced by a failing test before the fix), auth 5/5, full regression 31/32 (models e2e failed once at DSH session create under load, PASS 3x on rerun). Fixed: SEC-01 desktop sign-up blocked (403), SEC-02 only bootstrap/owner/admin may create a workspace, SEC-03 API key role capped at owner's real membership, SEC-04 Host (421) / Origin (403) guard on HTTP+WS, SEC-05 authorize->404->oRPC order for every role. Docs: docs/security/threat-model.md, review-2026-11.md (20 findings)",
+      "follow_up": "15 open Medium/Low findings tracked in P7-4 (Opus), P4-7 (Sol-B: SEC-14/17/18), SEC-06 CDP port and SEC-09 Tauri token after P1-8/P3-3 land; behaviour changes: desktop sign-up off, API keys need owner membership, non-loopback Host refused (NEO_ALLOWED_HOSTS for proxies)"
+    },
+    "P7-4": {
+      "title": "Fix remaining open security findings (SEC-07, SEC-08, Lows)",
       "status": "in_progress",
       "owner": "opus"
+    },
+    "P7-3": {
+      "title": "Backup and restore drill",
+      "status": "review",
+      "owner": "sol61"
     }
   },
   "p6_tasks": {
@@ -389,7 +421,12 @@
       "evidence": "PM rerun 2x + regression 31/33 (p2-3 shutdown timeout under load -> PASS on rerun; p4-3 caught a PM merge bug: skills re-versioned on every sync -> fixed 05aece8, PASS); P6-2 PASS authenticated scripted build_first; Panda-style JSONL traces with resolved model ids (PandaOrchestratorAPI.md:75-95,214-225); post-mortems on Inbox; reusable procedures -> registry at suggest with superagent:<ticket> provenance"
     },
     "P6-3": {
-      "title": "neo/upstream self-maintenance source (read-only) + Inbox question/approval/failure items",
+      "title": "neo/upstream source + Inbox question/approval/failure",
+      "status": "review",
+      "owner": "codex"
+    },
+    "P6-4": {
+      "title": "GitHub source + @neo comments (fake GitHub only)",
       "status": "in_progress",
       "owner": "codex"
     }
