@@ -236,5 +236,20 @@
       "status": "in_progress",
       "owner": "sol-b"
     }
+  },
+  "p3_tasks": {
+    "P3-1": {
+      "title": "Screen-agnostic Computers: registry, safety events, kill switch, leases; projections into Hermes + DSH",
+      "status": "done",
+      "owner": "sol-a",
+      "evidence": "pnpm --dir packages/computers test",
+      "verified_by_pm": "2026-11-18 x2 on main: Hermes run + DSH session on ONE fake computer (ordered 4 actions, 8 acting events), kill switch 403, human lease 403, handback 200, provider disable leaves rest healthy; full regression green. PM merged with Sol-B profile-closing guard in engine-hermes.",
+      "follow_up": "computer RPC needs P1-6 auth roles"
+    },
+    "P3-2": {
+      "title": "Computers page + headless-Chrome computer provider",
+      "status": "in_progress",
+      "owner": "sol-a"
+    }
   }
 }
