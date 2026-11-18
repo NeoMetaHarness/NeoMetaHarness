@@ -419,6 +419,14 @@ export const inboxContract = {
     delete: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ deleted: z.boolean() })),
     fire: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ ok: z.boolean() })),
   },
+  channel: {
+    emit: oc.input(z.object({ id: z.string().min(1), channelId: z.string().min(1),
+      botId: z.string().min(1), senderId: z.string().min(1),
+      memberRole: z.enum(['viewer', 'member', 'admin', 'owner']),
+      text: z.string(), mode: z.enum(['observe', 'act']).optional() }))
+      .output(z.object({ ok: z.boolean() })),
+    replies: oc.output(z.array(z.object({ channelId: z.string(), inReplyTo: z.string(), text: z.string() }))),
+  },
 };
 
 export const neoContract = { ...baseNeoContract, agents: agentsContract, inbox: inboxContract };

@@ -8,6 +8,7 @@ import { loadPinnedSuperagent } from './pinned.js';
 import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './model.js';
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
 import { NeoCronSource, type ScheduledAsk } from './cron-source.js';
+import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './channel-source.js';
 
 type Report = NonNullable<InboxItem['report']>;
 type Candidate = { evalId: string; triggers: { id: string }[] };
@@ -48,19 +49,22 @@ class SuperagentService {
   private readonly sources = new Map<string, NeoSourceAdapter>();
   private readonly unregisterSources: (() => void)[] = [];
   private cron?: NeoCronSource;
+  private channel?: ChannelSource;
+  private unsubscribeChannel?: () => void;
+  private readonly channelReplies = new Map<string, { channelId: string; inReplyTo: string }>();
   private readonly inflight = new Set<Promise<void>>();
   private workerReady?: Promise<void>;
   private workerHome = '';
   private gatewayUrl!: () => string;
   private token?: string;
 
-  async start(home: string, gatewayUrl: () => string, token?: string): Promise<void> {
+  async start(home: string, gatewayUrl: () => string, token?: string, channel?: ChannelSource): Promise<void> {
     this.workerHome = home;
     this.gatewayUrl = gatewayUrl;
     this.token = token;
     const upstream = await loadPinnedSuperagent();
     const repo = new upstream.MemoryRepositories();
-    const kinds = ['neo/app', 'neo/cron'];
+    const kinds = ['neo/app', 'neo/cron', 'neo/channel'];
     const sourceKinds = kinds.map((kind) => ({
       kind, title: { en: kind, zh: kind },
       description: { en: `Neo source ${kind}`, zh: `Neo source ${kind}` },
@@ -127,6 +131,10 @@ class SuperagentService {
       await this.ask({ text: job.text, botId: job.botId, mode: job.mode }, 'neo/cron');
     });
     await this.cron.start();
+    if (channel) {
+      this.channel = channel;
+      this.unsubscribeChannel = channel.subscribe((message) => this.fromChannel(message));
+    }
   }
 
   private update(item: InboxItem, patch: Partial<InboxItem>): InboxItem {
@@ -136,10 +144,25 @@ class SuperagentService {
     this.events.push(event);
     if (this.events.length > 1000) this.events.shift();
     for (const listener of this.listeners) listener();
+    if (next.report && this.channel && this.channelReplies.has(next.id)) {
+      const destination = this.channelReplies.get(next.id)!;
+      this.channelReplies.delete(next.id);
+      const delivery = this.channel.reply({ ...destination, text: next.report.summary });
+      void delivery.catch((error) => console.error('Neo channel report delivery failed:', error));
+    }
     return next;
   }
 
-  async ask(input: unknown, source = 'neo/app'): Promise<InboxItem> {
+  private async fromChannel(message: ChannelMessage): Promise<void> {
+    if (this.closed || !/(^|\s)@neo\b/i.test(message.text)) return;
+    const text = message.text.replace(/(^|\s)@neo\b/i, '$1').trim();
+    if (!text) return;
+    await this.ask({ text, botId: message.botId, mode: message.mode ?? 'act' }, 'neo/channel', (item) => {
+      this.channelReplies.set(item.id, { channelId: message.channelId, inReplyTo: message.id });
+    });
+  }
+
+  async ask(input: unknown, source = 'neo/app', onCreated?: (item: InboxItem) => void): Promise<InboxItem> {
     if (this.closed) throw new Error('Superagent is stopped');
     const request = askSchema.parse(input);
     const now = Date.now();
@@ -147,6 +170,7 @@ class SuperagentService {
       ...request, id: randomUUID(), source: source as InboxItem['source'], status: 'suggestion', createdAt: now, updatedAt: now,
     };
     this.items.set(item.id, item);
+    onCreated?.(item);
     await this.sources.get(source)!.receive(item);
     this.engine.evaluateDue();
     const triggerId = `${source}:${item.id}`;
@@ -251,6 +275,7 @@ class SuperagentService {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.unsubscribeChannel?.();
     await this.cron?.stop();
     for (const listener of this.listeners) listener();
     await this.worker.close();
@@ -295,7 +320,9 @@ export default defineExtension({
       ? (await import(process.env.NMH_SUPERAGENT_TEST_ADAPTER) as { createModelFactory: ModelFactory }).createModelFactory
       : modelHubFactory(() => ctx.inject<ModelHubResolver>('modelHub'));
     const service = new SuperagentService(models);
-    await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, apiKeyToken);
+    const channel = ctx.inject<ChannelSource>('channelSource')
+      ?? (process.env.NODE_ENV === 'test' ? new FakeChannelSource() : undefined);
+    await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, apiKeyToken, channel);
     ctx.effect(() => async () => {
       if (apiKeyId) {
         if (auth?.api?.deleteApiKey) {
@@ -314,6 +341,10 @@ export default defineExtension({
     ctx.route('cron/create', ({ body }) => service.cronCreate(body));
     ctx.route('cron/delete', ({ body }) => service.cronDelete(body as { id: string }));
     if (process.env.NODE_ENV === 'test') ctx.route('cron/fire', ({ body }) => service.cronFire(body as { id: string }));
+    if (process.env.NODE_ENV === 'test' && channel instanceof FakeChannelSource) {
+      ctx.route('channel/emit', async ({ body }) => { await channel.emit(body as ChannelMessage); return { ok: true }; });
+      ctx.route('channel/replies', () => channel.replies);
+    }
     ctx.route('events', ({ body }) => {
       const { since, signal } = body as { since: number; signal?: AbortSignal };
       return service.subscribe(since, signal);

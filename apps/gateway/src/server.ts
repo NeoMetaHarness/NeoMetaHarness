@@ -319,6 +319,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           return invokeInbox('cron/fire', input) as Promise<{ ok: boolean }>;
         }),
       },
+      channel: {
+        emit: os.inbox.channel.emit.handler(async ({ input, context }) => {
+          authorize('inbox.channel.emit', context);
+          if (process.env.NODE_ENV !== 'test') throw new ORPCError('NOT_FOUND');
+          return invokeInbox('channel/emit', input) as Promise<{ ok: boolean }>;
+        }),
+        replies: os.inbox.channel.replies.handler(async ({ context }) => {
+          authorize('inbox.channel.replies', context);
+          if (process.env.NODE_ENV !== 'test') throw new ORPCError('NOT_FOUND');
+          return invokeInbox('channel/replies', {}) as Promise<{ channelId: string; inReplyTo: string; text: string }[]>;
+        }),
+      },
     },
     x: {
       models: {

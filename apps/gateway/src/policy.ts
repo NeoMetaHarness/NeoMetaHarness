@@ -144,6 +144,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'inbox.cron.list': 'viewer',
   'inbox.cron.delete': 'member',
   'inbox.cron.fire': 'admin',
+  'inbox.channel.emit': 'admin',
+  'inbox.channel.replies': 'admin',
 };
 
 export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
