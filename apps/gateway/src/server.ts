@@ -42,6 +42,7 @@ import {
 import { toNodeHandler } from 'better-auth/node';
 import { coalesceText } from './coalesce.js';
 import { createAgentGateway } from './agents.js';
+import { backupSource } from './backup-source.js';
 import {
   requireViewer,
   requireMember,
@@ -247,7 +248,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     forget(sessionId: string) { memoryConsumers.delete(memoryKey('dsh', sessionId)); },
   };
   const skillsBridge = new SkillsBridge();
+  const extensionDataDir = join(dirname(resolve(options.databaseFile)), 'extensions');
+  const backupStorage = backupSource(db, extensionDataDir,
+    options.vaultKeyFile ?? join(dirname(resolve(options.databaseFile)), 'vault-keys', 'master.key'));
   const kernel = new NeoKernel(db, {
+    backupSource: backupStorage,
     computers,
     vault,
     auth,
@@ -255,7 +260,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     memoryBridge,
     dshMemoryBridge,
     skillsBridge,
-    extensionDataDir: join(dirname(resolve(options.databaseFile)), 'extensions'),
+    extensionDataDir,
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
   });
 
@@ -299,6 +304,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   }
 
   const agentApi = await createAgentGateway(db, kernel);
+  for (const extension of kernel.list()) {
+    const manifest = JSON.parse(readFileSync(join(resolve(options.extensionsDir ?? defaultExtensions), extension.id, 'neo.extension.json'), 'utf8'));
+    backupStorage.versions[extension.id] = manifest.version;
+  }
   const os = implement(neoContract).$context<GatewayAuthContext>().use(policyMiddleware as any);
 
   const invokeT3 = async (route: string, body: unknown) => {
@@ -366,6 +375,13 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   };
 
   const router = {
+    system: {
+      backup: os.system.backup.handler(async ({ input, context }) => {
+        authorize('system.backup', context);
+        if (!kernel.hasRoute('/x/backup/backup')) throw new ORPCError('NOT_FOUND', { message: 'Backup extension is disabled' });
+        return kernel.invokeRoute('/x/backup/backup', 'RPC', input) as Promise<{ out: string; files: number; format: number }>;
+      }),
+    },
     agents: agentApi.router,
     inbox: {
       ask: os.inbox.ask.handler(async ({ input, context }) => {

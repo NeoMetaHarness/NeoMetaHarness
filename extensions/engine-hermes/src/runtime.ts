@@ -163,7 +163,7 @@ async function killTree(child: ChildProcess): Promise<void> {
 }
 
 export class HermesRuntime {
-  private readonly home = resolve(process.env.NMH_HERMES_HOME ?? join(cacheDir, 'home'));
+  private readonly home: string;
   private readonly credentials: CredentialSource;
   private readonly dashboardToken = secret();
   private dashboard?: HostedProcess;
@@ -181,7 +181,9 @@ export class HermesRuntime {
   constructor(
     credentials: CredentialSource = new ProfileFileCredentials(resolve(process.env.NMH_HERMES_HOME ?? join(cacheDir, 'home'))),
     private readonly onProfileReady?: (profile: string, home: string) => Promise<string | undefined>,
+    home = resolve(process.env.NMH_HERMES_HOME ?? join(cacheDir, 'home')),
   ) {
+    this.home = resolve(home);
     this.credentials = credentials;
   }
 

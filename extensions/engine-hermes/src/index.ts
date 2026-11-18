@@ -5,14 +5,17 @@ import { HermesRuntime, ProfileFileCredentials, VaultCredentials } from './runti
 import { projectHermesMemory, type MemoryBridge } from './memory.js';
 import type { SkillsBridge } from '@neometaharness/kernel';
 import type { VaultService } from '@neometaharness/vault';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 
 type ModelProjector = { projectHermes(profile: string, home: string): Promise<string | undefined> };
 
 export default defineExtension({
   async activate(ctx) {
-    const home = resolve(process.env.NMH_HERMES_HOME ?? fileURLToPath(new URL('../.cache/home', import.meta.url)));
+    const storage = ctx.inject<string>('extensionDataDir');
+    const restoredHome = storage ? join(storage, 'engine-hermes', 'home') : undefined;
+    const home = resolve(process.env.NMH_HERMES_HOME ?? (restoredHome && existsSync(restoredHome) ? restoredHome : fileURLToPath(new URL('../.cache/home', import.meta.url))));
     const vault = ctx.inject<VaultService>('vault');
     const credentials = vault ? new VaultCredentials(vault, home) : new ProfileFileCredentials(home);
     const computers = ctx.inject<ComputerRegistry>('computers');
@@ -26,7 +29,7 @@ export default defineExtension({
       // The Neo backend reads binding.json on every action. Swapping the
       // computer capability never requires restarting this Hermes bot.
       return JSON.stringify([computerBinding ? 'neo_vnc' : undefined, memoryVersion, skillsVersion, modelVersion]);
-    });
+    }, home);
     await service.start();
     ctx.provide('agentRuntime', service);
     ctx.effect(() => () => service.disconnect());

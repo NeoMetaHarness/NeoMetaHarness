@@ -1,0 +1,7 @@
+{
+  "id": "backup",
+  "version": "0.1.0",
+  "displayName": "Encrypted backup and restore",
+  "kind": ["system"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}

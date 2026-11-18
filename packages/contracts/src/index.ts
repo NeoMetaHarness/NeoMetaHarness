@@ -380,6 +380,10 @@ export const channelsContract = {
 };
 
 const baseNeoContract = {
+  system: {
+    backup: oc.input(z.object({ out: z.string().min(1), passphrase: z.string().min(12) }))
+      .output(z.object({ out: z.string(), files: z.number().int(), format: z.number().int() })),
+  },
   x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
