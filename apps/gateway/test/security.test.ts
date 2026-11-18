@@ -317,3 +317,24 @@ test('SEC-13: authorization runs before input validation on core routes, over HT
     }
   });
 });
+
+test('SEC-15: the app sends its token only to a loopback gateway or the configured gateway origin', async () => {
+  const g = globalThis as any;
+  const saved = { window: g.window, localStorage: g.localStorage };
+  const store = new Map([['neo_desktop_token', 'stored-owner-token']]);
+  g.localStorage = { getItem: (k: string) => store.get(k) ?? null };
+  const at = (search: string) => { g.window = { location: { search, origin: 'https://app.neo.test' } }; };
+  try {
+    const { gatewayUrl, gatewayToken } = await import('../../neo-app/src/config.ts');
+    at('?gateway=https%3A%2F%2Fevil.test');
+    assert.notEqual(gatewayUrl(), 'https://evil.test', 'a foreign ?gateway= override is ignored');
+    assert.match(gatewayUrl(), /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/, 'falls back to the configured loopback gateway');
+    at('?gateway=http%3A%2F%2F127.0.0.1%3A5555');
+    assert.equal(gatewayUrl(), 'http://127.0.0.1:5555', 'the Tauri shell may point at its loopback gateway');
+    assert.equal(gatewayToken(), 'stored-owner-token', 'a loopback gateway receives the stored token');
+    at('?gateway=http%3A%2F%2Flocalhost.evil.test%3A5555');
+    assert.ok(!gatewayUrl().includes('evil'), 'look-alike hosts are not loopback');
+  } finally {
+    g.window = saved.window; g.localStorage = saved.localStorage;
+  }
+});
