@@ -69,13 +69,41 @@ test('SEC-03: a user cannot mint an API key whose metadata claims a role they do
     const created = await fetch(`${base}/auth/api-key/create`, json(
       { name: 'x', metadata: { role: 'owner', workspaceId: 'default' } },
       { authorization: `Bearer ${attacker.token}` }));
-    const key = created.ok ? (await created.json() as { key?: string }).key : undefined;
-    if (key) {
-      const disable = await fetch(`${base}/extensions/disable`,
-        json({ json: { id: 'sample-ts' } }, { 'x-api-key': key }));
-      assert.equal(disable.status, 401, 'client-supplied API key metadata must never grant a role');
-      const bearer = await fetch(`${base}/extensions/list`, json({ json: {} }, { authorization: `Bearer ${key}` }));
-      assert.equal(bearer.status, 401, 'client-supplied API key metadata must never grant a role (Bearer form)');
+    assert.equal(created.status, 200, 'precondition: Better Auth lets any session mint a key with metadata');
+    const { key } = await created.json() as { key: string };
+    const disable = await fetch(`${base}/extensions/disable`,
+      json({ json: { id: 'sample-ts' } }, { 'x-api-key': key }));
+    assert.equal(disable.status, 401, 'client-supplied API key metadata must never grant a role');
+    const bearer = await fetch(`${base}/extensions/list`, json({ json: {} }, { authorization: `Bearer ${key}` }));
+    assert.equal(bearer.status, 401, 'client-supplied API key metadata must never grant a role (Bearer form)');
+  });
+});
+
+test('SEC-03b: an API key can narrow but never widen its owner\'s membership role', async () => {
+  await withGateway('server', async (_gateway, base) => {
+    const owner = await signUp(base, 'owner@corp.test');
+    const org = await (await fetch(`${base}/auth/organization/create`,
+      json({ name: 'Corp', slug: 'corp' }, { authorization: `Bearer ${owner.token}` }))).json() as { id: string };
+    const viewer = await signUp(base, 'viewer@corp.test');
+    const invite = await fetch(`${base}/auth/organization/add-member`, json(
+      { organizationId: org.id, userId: viewer.userId, role: 'viewer' }, { authorization: `Bearer ${owner.token}` }));
+    // add-member is server-only in Better Auth; fall back to the invitation flow if refused.
+    if (!invite.ok) {
+      const inv = await (await fetch(`${base}/auth/organization/invite-member`, json(
+        { organizationId: org.id, email: 'viewer@corp.test', role: 'viewer' }, { authorization: `Bearer ${owner.token}` }))).json() as { id: string };
+      const accepted = await fetch(`${base}/auth/organization/accept-invitation`, json(
+        { invitationId: inv.id }, { authorization: `Bearer ${viewer.token}` }));
+      assert.equal(accepted.status, 200, 'viewer joins the workspace');
     }
+    const mint = async (token: string, role: string) => (await (await fetch(`${base}/auth/api-key/create`,
+      json({ name: role, metadata: { role, workspaceId: org.id } }, { authorization: `Bearer ${token}` }))).json() as { key: string }).key;
+    const narrowed = await mint(owner.token!, 'viewer');
+    assert.equal((await fetch(`${base}/extensions/list`, json({ json: {} }, { 'x-api-key': narrowed }))).status, 200,
+      'owner key narrowed to viewer may read');
+    assert.equal((await fetch(`${base}/extensions/disable`, json({ json: { id: 'sample-ts' } }, { 'x-api-key': narrowed }))).status, 403,
+      'owner key narrowed to viewer may not administer');
+    const widened = await mint(viewer.token!, 'owner');
+    assert.equal((await fetch(`${base}/extensions/disable`, json({ json: { id: 'sample-ts' } }, { 'x-api-key': widened }))).status, 403,
+      'viewer key claiming owner is capped at viewer');
   });
 });

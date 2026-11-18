@@ -281,6 +281,36 @@ function toHeaders(input: any): Headers {
   return headers;
 }
 
+const ROLE_RANK: Record<NeoRole, number> = { viewer: 0, member: 1, admin: 2, owner: 3 };
+const DENIED: NeoAuthContext = { user: null, session: null, workspaceId: null, role: null };
+
+/**
+ * API key metadata is caller-supplied (any session may POST /auth/api-key/create),
+ * so metadata.role can only narrow authority. The effective role is the lower of
+ * the declared role and the key owner's actual membership in the declared workspace.
+ */
+async function apiKeyContext(kysely: Kysely<any> | undefined, key: any): Promise<NeoAuthContext> {
+  const meta = (key.metadata ?? {}) as Record<string, unknown>;
+  const workspaceId = (meta.workspaceId as string) ?? (key.organizationId as string) ?? null;
+  const declared = meta.role as NeoRole;
+  // @better-auth/api-key stores the owning user as referenceId (older shapes: userId).
+  const userId = (key.referenceId ?? key.userId) as string | undefined;
+  if (!(declared in ROLE_RANK) || !userId || !workspaceId || !kysely) return DENIED;
+  const member = await kysely.selectFrom('member').select('role')
+    .where('userId', '=', userId).where('organizationId', '=', workspaceId)
+    .executeTakeFirst() as { role?: NeoRole } | undefined;
+  const held = member?.role;
+  if (!held || !(held in ROLE_RANK)) return DENIED;
+  const role = ROLE_RANK[declared] <= ROLE_RANK[held] ? declared : held;
+  return {
+    user: { id: userId, email: '', name: key.name },
+    session: null,
+    workspaceId,
+    role,
+    apiKey: { id: key.id, name: key.name, metadata: meta },
+  };
+}
+
 export async function resolveAuthContext(
   auth: any,
   headersInput: any,
@@ -301,20 +331,7 @@ export async function resolveAuthContext(
         body: { key: apiKeyHeader },
       });
       if (verifyRes?.valid && verifyRes?.key) {
-        const key = verifyRes.key;
-        const meta = (key.metadata ?? {}) as Record<string, unknown>;
-        const workspaceId = (meta.workspaceId as string) ?? (key.organizationId as string) ?? null;
-        const role = (meta.role as NeoRole) ?? null;
-        if (!role) {
-          return { user: null, session: null, workspaceId: null, role: null };
-        }
-        return {
-          user: { id: key.userId ?? 'api-key-user', email: '', name: key.name },
-          session: null,
-          workspaceId,
-          role,
-          apiKey: { id: key.id, name: key.name, metadata: meta },
-        };
+        return await apiKeyContext(kysely, verifyRes.key);
       }
     } catch {
       // invalid or expired key
@@ -384,20 +401,7 @@ export async function resolveAuthContext(
         body: { key: token },
       });
       if (verifyRes?.valid && verifyRes?.key) {
-        const key = verifyRes.key;
-        const meta = (key.metadata ?? {}) as Record<string, unknown>;
-        const workspaceId = (meta.workspaceId as string) ?? (key.organizationId as string) ?? null;
-        const role = (meta.role as NeoRole) ?? null;
-        if (!role) {
-          return { user: null, session: null, workspaceId: null, role: null };
-        }
-        return {
-          user: { id: key.userId ?? 'api-key-user', email: '', name: key.name },
-          session: null,
-          workspaceId,
-          role,
-          apiKey: { id: key.id, name: key.name, metadata: meta },
-        };
+        return await apiKeyContext(kysely, verifyRes.key);
       }
     } catch {
       // not an api key either

@@ -390,15 +390,18 @@ export default defineExtension({
     let apiKeyId: string | undefined;
     if (auth?.api?.createApiKey) {
       try {
-        const user = await auth.kysely?.selectFrom('user').select(['id']).executeTakeFirst?.();
-        const org = await auth.kysely?.selectFrom('organization').select(['id']).executeTakeFirst?.();
-        if (user?.id) {
+        // Bind the bridge key to an actual workspace owner: API key roles are
+        // capped by the key owner's membership, so an arbitrary first user or
+        // workspace would yield a key with no authority.
+        const owner = await auth.kysely?.selectFrom('member').select(['userId', 'organizationId'])
+          .where('role', '=', 'owner').orderBy('createdAt').executeTakeFirst?.();
+        if (owner?.userId) {
           const keyRes = await auth.api.createApiKey({
             body: {
-              userId: user.id,
+              userId: owner.userId,
               name: 'superagent-bridge',
               rateLimitEnabled: false,
-              metadata: { role: 'member', workspaceId: org?.id ?? 'default' },
+              metadata: { role: 'member', workspaceId: owner.organizationId },
             },
           });
           if (keyRes?.key) {
