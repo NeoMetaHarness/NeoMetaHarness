@@ -1,0 +1,7 @@
+{
+  "id": "engine-superagent",
+  "version": "0.1.0",
+  "displayName": "Neo super agent",
+  "kind": ["engine"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}
