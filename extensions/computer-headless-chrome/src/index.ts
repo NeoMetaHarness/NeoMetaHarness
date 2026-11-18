@@ -154,7 +154,9 @@ async function launchChrome(): Promise<ChromeInstance> {
         return { png: data, width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
       },
       input: async (action: ComputerInput) => {
-        if (action.action === 'click') {
+        if (action.action === 'move') {
+          await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: action.x, y: action.y });
+        } else if (action.action === 'click') {
           await send('Input.dispatchMouseEvent', {
             type: 'mousePressed', x: action.x, y: action.y, button: 'left', clickCount: 1,
           });

@@ -10,16 +10,21 @@ export class RfbClient {
   pixels = Buffer.alloc(0); // RGBA, top-to-bottom, independent of server pixel format.
   private queue: Promise<unknown> = Promise.resolve();
   private constructor(private readonly io: RfbTransport) {}
-  static async connect(host: string, port: number, password?: string, timeout = 8000): Promise<RfbClient> {
+  static async connect(host: string, port: number, password?: string, timeout = 8000, signal?: AbortSignal): Promise<RfbClient> {
+    if (signal?.aborted) throw new Error('RFB attachment cancelled');
     const socket = createConnection({ host, port });
     socket.setNoDelay(true);
     const io = new RfbTransport(socket, timeout), client = new RfbClient(io);
+    const aborted = () => io.close('RFB attachment cancelled');
+    signal?.addEventListener('abort', aborted, { once: true });
+    socket.once('close', () => signal?.removeEventListener('abort', aborted));
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { socket.destroy(); reject(new Error('RFB connect timed out')); }, timeout);
-        const connected = () => { clearTimeout(timer); socket.off('error', failed); resolve(); };
-        const failed = () => { clearTimeout(timer); socket.off('connect', connected); reject(new Error('RFB connection failed')); };
-        socket.once('connect', connected); socket.once('error', failed);
+        const cleanup = () => { clearTimeout(timer); socket.off('connect', connected); socket.off('error', failed); socket.off('close', failed); };
+        const connected = () => { cleanup(); resolve(); };
+        const failed = () => { cleanup(); reject(new Error('RFB connection failed')); };
+        socket.once('connect', connected); socket.once('error', failed); socket.once('close', failed);
       });
       await client.initialize(password);
       return client;

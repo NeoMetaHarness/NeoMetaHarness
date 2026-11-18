@@ -13,6 +13,7 @@ export const extensionStatusSchema = z.object({
 export const computerActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('capture') }),
   z.object({ action: z.literal('click'), x: z.number().finite(), y: z.number().finite() }),
+  z.object({ action: z.literal('move'), x: z.number().finite(), y: z.number().finite() }),
   z.object({ action: z.literal('type'), text: z.string().max(10000) }),
   z.object({ action: z.literal('key'), keys: z.string().max(256) }),
   z.object({ action: z.literal('scroll'), direction: z.string().max(24), amount: z.number().finite() }),
@@ -34,7 +35,7 @@ export const gatewayEventSchema = z.discriminatedUnion('type', [
     status: z.enum(['running', 'disabled', 'degraded']), type: z.literal('extension.state') }),
   z.object({ seq: z.number().int(), type: z.literal('computer.acting'),
     computerId: z.string(), engine: z.string(), active: z.boolean(),
-    action: z.enum(['click', 'type', 'capture', 'key', 'scroll']) }),
+    action: z.enum(['click', 'move', 'type', 'capture', 'key', 'scroll']) }),
   z.object({ seq: z.number().int(), type: z.literal('computer.lease'),
     computerId: z.string(), holder: z.enum(['agent', 'human']) }),
   z.object({ seq: z.number().int(), type: z.literal('computer.kill'), engaged: z.boolean() }),

@@ -1,4 +1,8 @@
 .computers-page { max-width: 1480px; margin: 0 auto; }
+.computers-vnc { display: flex; flex-direction: column; gap: 8px; margin-block: 16px; }
+.computers-vnc label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.computers-vnc input { min-width: 0; font: inherit; padding: 6px; color: inherit; background: transparent; border: 1px solid currentColor; }
+.computers-vnc small { font-size: 12px; opacity: .7; }
 .computers-header { align-items: center; position: sticky; top: 0; z-index: 5; padding-block: 12px; backdrop-filter: blur(14px); }
 .computers-stopped { border: 2px solid currentColor; padding: 12px 16px; font-weight: 650; }
 .computers-layout { display: grid; grid-template-columns: minmax(235px, 285px) minmax(0, 1fr); gap: 28px; }

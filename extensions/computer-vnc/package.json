@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "test": "tsx --test test/rfb.test.ts", "typecheck": "tsc --noEmit" },
+  "scripts": { "test": "tsx --test test/rfb.test.ts test/provider.test.ts", "typecheck": "tsc --noEmit" },
   "dependencies": { "@neometaharness/kernel": "workspace:*", "@neometaharness/computers": "workspace:*", "@neometaharness/vault": "workspace:*" },
   "devDependencies": { "@types/node": "22.18.13", "typescript": "5.9.3", "tsx": "4.20.6" }
 }

@@ -14,6 +14,7 @@ export interface StreamEndpoint { protocol: 'png' | 'rfb' | 'webrtc' | 'mjpeg'; 
 export interface Capture { png: string; width: number; height: number }
 export type ComputerInput =
   | { action: 'click'; x: number; y: number }
+  | { action: 'move'; x: number; y: number }
   | { action: 'type'; text: string }
   | { action: 'key'; keys: string }
   | { action: 'scroll'; direction: string; amount: number };
@@ -34,9 +35,11 @@ export interface Computer {
 export interface ComputerProvider {
   capabilities: ComputerCapabilities;
   provision(spec: Record<string, unknown>): Computer | Promise<Computer>;
-  attach(target: string): Computer | Promise<Computer>;
+  attach(target: string, context?: ComputerAttachContext): Computer | Promise<Computer>;
   release(id: string): void | Promise<void>;
 }
+/** Set by the authenticated Gateway, never parsed from an untrusted target string. */
+export interface ComputerAttachContext { workspaceId?: string }
 export type ComputerNotice =
   | { type: 'computer.acting'; computerId: string; engine: string; active: boolean; action: ComputerAction['action'] }
   | { type: 'computer.lease'; computerId: string; holder: LeaseHolder }
@@ -92,7 +95,7 @@ export class ComputerRegistry {
     }));
   }
 
-  async attach(providerId: string, target: string): Promise<ComputerInfo> {
+  async attach(providerId: string, target: string, context?: ComputerAttachContext): Promise<ComputerInfo> {
     const provider = this.providers.get(providerId);
     if (!provider) throw new Error('Computer provider is unavailable');
     if (this.entries.has(target) || this.attaching.has(target) || this.releasing.has(target)) {
@@ -100,7 +103,7 @@ export class ComputerRegistry {
     }
     this.attaching.add(target);
     try {
-      const computer = await provider.attach(target);
+      const computer = await provider.attach(target, context);
       // An extension could be disabled while a provider is attaching.
       if (this.providers.get(providerId) !== provider) {
         await provider.release(target);

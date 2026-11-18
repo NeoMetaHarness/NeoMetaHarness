@@ -7,6 +7,7 @@ import { neoContract, type GatewayEvent } from '@neometaharness/contracts';
 import { Button } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './computers.css';
+import VncAttach from './VncAttach';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Row = Awaited<ReturnType<Client['computers']['list']>>[number];
@@ -102,8 +103,8 @@ export default function Computers() {
           frame.current.width = shot.width;
           frame.current.height = shot.height;
         }
-      } catch {
-        // A released computer disappears during the next list refresh.
+      } catch (reason) {
+        if (!closed) setError(String(reason));
       } finally {
         fetching = false;
       }
@@ -146,6 +147,14 @@ export default function Computers() {
           const added = await http.computers.attach({ providerId: 'computer-headless-chrome', target: `chrome-${crypto.randomUUID()}` });
           setSelected(added.id);
         })}>Attach Chrome</Button>
+        <VncAttach busy={busy} attach={target => void perform(async () => {
+          const available = await http.extensions.list();
+          if (available.find(({ id }) => id === 'computer-vnc')?.status !== 'running') {
+            await http.extensions.enable({ id: 'computer-vnc' });
+          }
+          const added = await http.computers.attach({ providerId: 'computer-vnc', target });
+          setSelected(added.id);
+        })} />
         <div className="computers-list" aria-label="Attached computers">
           {computers.map((computer) => <button type="button" key={computer.id} data-testid={`computer-${computer.id}`}
             className={selected === computer.id ? 'computer-row selected' : 'computer-row'}

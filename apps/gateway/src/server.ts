@@ -846,7 +846,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }),
       attach: os.computers.attach.handler(async ({ input, context }) => {
         authorize('computers.attach', context);
-        return computers.attach(input.providerId, input.target);
+        try { return await computers.attach(input.providerId, input.target, { workspaceId: context.workspaceId }); }
+        catch { throw new ORPCError('BAD_REQUEST', { message: 'Computer attachment failed; check the target, security type and vault credentials' }); }
       }),
       release: os.computers.release.handler(async ({ input, context }) => {
         authorize('computers.release', context);
@@ -871,7 +872,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }),
       capture: os.computers.capture.handler(async ({ input, context }) => {
         authorize('computers.capture', context);
-        return computers.capture(input.id);
+        try { return await computers.capture(input.id); }
+        catch { throw new ORPCError('BAD_GATEWAY', { message: 'Computer capture failed; release and reattach the computer' }); }
       }),
     },
     events: {
