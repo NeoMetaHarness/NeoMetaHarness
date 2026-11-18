@@ -10,8 +10,8 @@ import { ExtensionProcess } from './process.js';
 export { ComputerMcpBridge, type ComputerMcpConfig, type ComputerMcpProjection } from './computer-mcp.js';
 export { SkillsBridge, type SkillProjection } from './skills.js';
 
-export { dependencyProblem, loadManifest, resolveOrder } from './manifest.js';
-export type { ExtensionManifest, LocatedExtension } from './manifest.js';
+export { dependencyProblem, loadManifest, resolveOrder, validateSettings } from './manifest.js';
+export type { ExtensionManifest, LocatedExtension, ExtensionSettingsSchema, SettingPropertySchema, SettingPropertyType } from './manifest.js';
 
 export type RouteHandler = (input: { method: string; body?: unknown }) => unknown | Promise<unknown>;
 export type Health = { ok: boolean; pid?: number };

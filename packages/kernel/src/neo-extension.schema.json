@@ -20,7 +20,32 @@
     "contributes": { "type": "object" },
     "projections": { "type": "object" },
     "permissions": { "type": "object" },
-    "activation": { "type": "array", "items": { "type": "string" } }
+    "activation": { "type": "array", "items": { "type": "string" } },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["object"] },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["string", "number", "integer", "boolean"] },
+              "enum": { "type": "array", "minItems": 1 },
+              "title": { "type": "string" },
+              "description": { "type": "string" },
+              "default": {},
+              "secret": { "type": "boolean" },
+              "minimum": { "type": "number" },
+              "maximum": { "type": "number" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

@@ -120,3 +120,80 @@ test('routesFor(id) enumerates routes registered by an extension', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('validates settings JSON Schema subset (string, number, boolean, enum, secret: true)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nmh-settings-'));
+  try {
+    const path = join(dir, 'neo.extension.json');
+    // 1. Valid settings schema
+    await writeFile(path, JSON.stringify({
+      id: 'settings-ext',
+      version: '1.0.0',
+      displayName: 'Settings Extension',
+      runtime: { type: 'content' },
+      settings: {
+        type: 'object',
+        properties: {
+          serverUrl: { type: 'string', title: 'Server URL', default: 'http://localhost' },
+          port: { type: 'number', title: 'Port', default: 8080 },
+          enabled: { type: 'boolean', title: 'Enabled', default: true },
+          logLevel: { enum: ['debug', 'info', 'warn', 'error'], title: 'Log Level', default: 'info' },
+          apiKey: { type: 'string', title: 'API Key', secret: true },
+        },
+        required: ['serverUrl', 'apiKey'],
+      },
+    }));
+    const loaded = await loadManifest(dir);
+    assert.ok(loaded.settings);
+    assert.equal(loaded.settings.properties.serverUrl.type, 'string');
+    assert.equal(loaded.settings.properties.apiKey.secret, true);
+    assert.equal(loaded.settings.properties.logLevel.enum?.length, 4);
+
+    // 2. Reject unsupported type (e.g. array)
+    await writeFile(path, JSON.stringify({
+      id: 'settings-ext',
+      version: '1.0.0',
+      displayName: 'Settings Extension',
+      runtime: { type: 'content' },
+      settings: {
+        type: 'object',
+        properties: {
+          items: { type: 'array' },
+        },
+      },
+    }));
+    await assert.rejects(loadManifest(dir), /Invalid manifest|Invalid settings/);
+
+    // 3. Reject non-boolean secret
+    await writeFile(path, JSON.stringify({
+      id: 'settings-ext',
+      version: '1.0.0',
+      displayName: 'Settings Extension',
+      runtime: { type: 'content' },
+      settings: {
+        type: 'object',
+        properties: {
+          token: { type: 'string', secret: 'yes' },
+        },
+      },
+    }));
+    await assert.rejects(loadManifest(dir), /Invalid manifest|Invalid settings/);
+
+    // 4. Reject empty enum
+    await writeFile(path, JSON.stringify({
+      id: 'settings-ext',
+      version: '1.0.0',
+      displayName: 'Settings Extension',
+      runtime: { type: 'content' },
+      settings: {
+        type: 'object',
+        properties: {
+          kind: { enum: [] },
+        },
+      },
+    }));
+    await assert.rejects(loadManifest(dir), /Invalid manifest|Invalid settings/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

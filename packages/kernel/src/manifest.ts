@@ -3,6 +3,25 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import semver from 'semver';
 
+export type SettingPropertyType = 'string' | 'number' | 'integer' | 'boolean';
+
+export interface SettingPropertySchema {
+  type?: SettingPropertyType;
+  enum?: (string | number)[];
+  title?: string;
+  description?: string;
+  default?: string | number | boolean;
+  secret?: boolean;
+  minimum?: number;
+  maximum?: number;
+}
+
+export interface ExtensionSettingsSchema {
+  type?: 'object';
+  properties: Record<string, SettingPropertySchema>;
+  required?: string[];
+}
+
 export interface ExtensionManifest {
   id: string;
   version: string;
@@ -12,6 +31,40 @@ export interface ExtensionManifest {
     | { type: 'cordis'; entry: string }
     | { type: 'process'; command: string[]; protocol: 'jsonrpc' | 'jsonrpc+mcp' }
     | { type: 'ui-only' | 'content' };
+  settings?: ExtensionSettingsSchema;
+}
+
+export function validateSettings(id: string, settings: unknown): ExtensionSettingsSchema {
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
+    throw new Error(`Invalid settings schema for ${id}: settings must be an object`);
+  }
+  const s = settings as Record<string, unknown>;
+  if (s.type !== undefined && s.type !== 'object') {
+    throw new Error(`Invalid settings schema for ${id}: root type must be object`);
+  }
+  if (!s.properties || typeof s.properties !== 'object' || s.properties === null || Array.isArray(s.properties)) {
+    throw new Error(`Invalid settings schema for ${id}: properties must be an object`);
+  }
+  const properties = s.properties as Record<string, unknown>;
+  for (const [key, prop] of Object.entries(properties)) {
+    if (typeof prop !== 'object' || prop === null || Array.isArray(prop)) {
+      throw new Error(`Invalid settings property '${key}' in ${id}`);
+    }
+    const p = prop as Record<string, unknown>;
+    if (!p.type && !p.enum) {
+      throw new Error(`Invalid settings property '${key}' in ${id}: must specify type or enum`);
+    }
+    if (p.type !== undefined && !['string', 'number', 'integer', 'boolean'].includes(p.type as string)) {
+      throw new Error(`Invalid settings property '${key}' in ${id}: unsupported type '${p.type}'`);
+    }
+    if (p.enum !== undefined && (!Array.isArray(p.enum) || p.enum.length === 0)) {
+      throw new Error(`Invalid settings property '${key}' in ${id}: enum must be a non-empty array`);
+    }
+    if (p.secret !== undefined && typeof p.secret !== 'boolean') {
+      throw new Error(`Invalid settings property '${key}' in ${id}: secret must be boolean`);
+    }
+  }
+  return settings as ExtensionSettingsSchema;
 }
 
 const schema = JSON.parse(await readFile(new URL('./neo-extension.schema.json', import.meta.url), 'utf8'));
@@ -32,6 +85,9 @@ export async function loadManifest(directory: string): Promise<ExtensionManifest
     if (!entry.startsWith(base + '\\') && !entry.startsWith(base + '/') && entry !== base) {
       throw new Error(`Extension entry escapes install root: ${manifest.id}`);
     }
+  }
+  if (manifest.settings) {
+    validateSettings(manifest.id, manifest.settings);
   }
   return manifest;
 }
