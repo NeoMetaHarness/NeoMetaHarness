@@ -2,7 +2,8 @@
 // docs/security/review-2026-11.md through the real gateway HTTP surface.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, copyFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request as httpRequest } from 'node:http';
@@ -221,4 +222,33 @@ test('SEC-08: server mode is invite-only by default; the first account needs the
     assert.equal(invite.status, 200);
     assert.equal((await post('new@corp.test')).status, 200, 'an invited email may sign up');
   }, { signup: undefined });
+});
+
+
+test('SEC-10: process extensions receive only an allowlisted environment, never gateway secrets', async () => {
+  const leaked = { NMH_GATEWAY_TOKEN: 'leak-token', NEO_AUTH_SECRET: 'x'.repeat(40), OPENAI_API_KEY: 'sk-leak', NEO_EXT_PROBE_OK: 'not-declared' };
+  const saved = Object.fromEntries(Object.keys(leaked).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, leaked);
+  const root = await mkdtemp(join(tmpdir(), 'nmh-sec-env-'));
+  const ext = join(root, 'extensions', 'env-probe');
+  await mkdir(ext, { recursive: true });
+  await copyFile(fileURLToPath(new URL('./fixtures/env-probe.mjs', import.meta.url)), join(ext, 'probe.mjs'));
+  await writeFile(join(ext, 'neo.extension.json'), JSON.stringify({ id: 'env-probe', version: '0.1.0', displayName: 'Env probe',
+    kind: ['feature'], runtime: { type: 'process', command: [process.execPath, 'probe.mjs'], protocol: 'jsonrpc' } }));
+  const gateway = await startGateway({ databaseFile: join(root, 'state/gateway.db'), extensionsDir: join(root, 'extensions'), mode: 'desktop' });
+  try {
+    const base = `http://127.0.0.1:${gateway.port}`;
+    const auth = { authorization: `Bearer ${gateway.desktopToken}` };
+    const enabled = await fetch(`${base}/extensions/enable`, json({ json: { id: 'env-probe' } }, auth));
+    assert.equal((await enabled.json() as { json: { status: string } }).json.status, 'running', 'probe extension starts');
+    const res = await fetch(`${base}/x/env-probe/env`, { headers: auth });
+    assert.equal(res.status, 200);
+    const { names, hasPath } = await res.json() as { names: string[]; hasPath: boolean };
+    assert.ok(hasPath, 'runtime essentials such as PATH still reach the extension');
+    for (const key of Object.keys(leaked)) assert.ok(!names.includes(key), `${key} must not reach a process extension`);
+  } finally {
+    await gateway.close();
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
+  }
 });

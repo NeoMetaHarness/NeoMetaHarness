@@ -7,6 +7,30 @@ export interface ProcessInitialization {
   contributions: { kind: string; id: string; name?: string }[];
 }
 
+/** OS/runtime variables a process extension needs to start; nothing secret. */
+const RUNTIME_ENV = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'OS', 'TEMP', 'TMP', 'TMPDIR',
+  'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
+  'USER', 'USERNAME', 'LOGNAME', 'SHELL', 'LANG', 'LANGUAGE', 'TZ', 'TERM',
+  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'NODE_ENV',
+]);
+/** Toolchain prefixes (uv, Python, XDG dirs, locale) that never carry Neo credentials. */
+const RUNTIME_PREFIXES = ['UV_', 'PYTHON', 'XDG_', 'LC_'];
+
+/**
+ * Process extensions get an allowlisted environment, like the engine projectors:
+ * never the gateway's tokens, auth secret or provider keys (SEC-10).
+ */
+export function extensionEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const upper = key.toUpperCase();
+    if (RUNTIME_ENV.has(upper) || RUNTIME_PREFIXES.some((prefix) => upper.startsWith(prefix))) env[key] = value;
+  }
+  return env;
+}
+
 export class ExtensionProcess {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
@@ -18,6 +42,7 @@ export class ExtensionProcess {
     const [executable, ...args] = command;
     this.child = spawn(executable!, args, {
       cwd: directory,
+      env: extensionEnv(),
       windowsHide: true,
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
