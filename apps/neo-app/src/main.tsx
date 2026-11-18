@@ -13,6 +13,7 @@ const Computers = lazy(() => import('./pages/Computers'));
 const Coding = lazy(() => import('./pages/Coding'));
 const Channels = lazy(() => import('./pages/Channels'));
 const Routines = lazy(() => import('./pages/Routines'));
+const Tasks = lazy(() => import('./pages/Tasks'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Placeholder = lazy(() => import('./pages/Placeholder'));
 const pages = [
@@ -20,6 +21,7 @@ const pages = [
   { label: 'Agents', path: '/agents', icon: 'person' },
   { label: 'Coding', path: '/coding', icon: 'code' },
   { label: 'Routines', path: '/routines', icon: 'calendar' },
+  { label: 'Tasks', path: '/tasks', icon: 'list' },
   { label: 'Computers', path: '/computers', icon: 'desktop' },
   { label: 'Skills', path: '/skills', icon: 'star' },
   { label: 'Memory', path: '/memory', icon: 'book' },
@@ -68,7 +70,7 @@ function NeoApp() {
     }>
       <div className="neo-page">
         <Suspense fallback={<p role="status">Loading {current.label}â€¦</p>}>
-          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/settings/channels' ? <Channels /> : path === '/settings' ? <Settings onOpenChannels={() => navigate('/settings/channels')} /> : <Placeholder name={current.label} />}
+          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/settings/channels' ? <Channels /> : path === '/settings' ? <Settings onOpenChannels={() => navigate('/settings/channels')} /> : <Placeholder name={current.label} />}
         </Suspense>
       </div>
     </AppShell>

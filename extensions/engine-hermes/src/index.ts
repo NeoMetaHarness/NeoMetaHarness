@@ -76,6 +76,25 @@ export default defineExtension({
       const { id, profile } = body as { id: string; profile?: string };
       return service.deleteCron(id, profile);
     });
+    ctx.route('kanban/boards', () => service.kanbanBoards());
+    ctx.route('kanban/create-board', ({ body }) => {
+      const { slug, name } = body as { slug: string; name?: string };
+      return service.createKanbanBoard(slug, name);
+    });
+    ctx.route('kanban/board', ({ body }) => service.kanbanBoard((body as { workspace: string }).workspace));
+    ctx.route('kanban/create', ({ body }) => {
+      const { workspace, title, body: detail, assignee } = body as { workspace: string; title: string; body?: string; assignee: string };
+      return service.createKanbanTask(workspace, title, assignee, detail);
+    });
+    ctx.route('kanban/assign', ({ body }) => {
+      const { workspace, id, assignee } = body as { workspace: string; id: string; assignee: string };
+      return service.assignKanbanTask(workspace, id, assignee);
+    });
+    ctx.route('kanban/task', ({ body }) => {
+      const { workspace, id } = body as { workspace: string; id: string };
+      return service.kanbanTask(workspace, id);
+    });
+    ctx.route('kanban/dispatch', ({ body }) => service.dispatchKanban((body as { workspace: string }).workspace));
     ctx.route('skills/list', ({ body }) => service.listSkills((body as { profile: string }).profile));
     ctx.route('skills/hub', ({ body }) => service.officialSkills((body as { profile: string }).profile));
     ctx.route('skills/curator', ({ body }) => service.curatorStatus((body as { profile: string }).profile));

@@ -503,6 +503,36 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             return invokeHermes('cron/delete', input);
           }),
         },
+        kanban: {
+          boards: os.x['engine-hermes'].kanban.boards.handler(async ({ context }) => {
+            requireViewer(context);
+            return invokeHermes('kanban/boards', {}) as Promise<{ boards: Record<string, unknown>[]; current: string }>;
+          }),
+          createBoard: os.x['engine-hermes'].kanban.createBoard.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('kanban/create-board', input) as Promise<Record<string, unknown>>;
+          }),
+          board: os.x['engine-hermes'].kanban.board.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('kanban/board', input) as Promise<{ columns: { name: string; tasks: Record<string, unknown>[] }[]; assignees: string[]; latest_event_id: number; now: number }>;
+          }),
+          create: os.x['engine-hermes'].kanban.create.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('kanban/create', input) as Promise<{ task: Record<string, unknown> | null }>;
+          }),
+          assign: os.x['engine-hermes'].kanban.assign.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('kanban/assign', input) as Promise<{ task: Record<string, unknown> }>;
+          }),
+          task: os.x['engine-hermes'].kanban.task.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('kanban/task', input) as Promise<{ task: Record<string, unknown>; events: unknown[]; runs: unknown[] }>;
+          }),
+          dispatch: os.x['engine-hermes'].kanban.dispatch.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('kanban/dispatch', input) as Promise<Record<string, unknown>>;
+          }),
+        },
       },
     },
     extensions: {
@@ -725,7 +755,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }
 
       if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/channels/')) {
-        if (!kernel.hasRoute(path) && context.role && context.role !== 'viewer' && !path.startsWith('/x/channels/')) {
+        const extensionPath = path.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+        if (!kernel.hasRoute(extensionPath) && context.role && context.role !== 'viewer' && !path.startsWith('/x/channels/')) {
           res.writeHead(404).end();
           return;
         }
@@ -863,6 +894,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     async close() {
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((done) => wss.close(() => done()));
+      http.closeAllConnections();
       await new Promise<void>((done) => http.close(() => done()));
       await agentApi.stop();
       await kernel.close();

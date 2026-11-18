@@ -393,6 +393,39 @@ export class HermesRuntime {
       .then(async (r) => await r.json() as { ok: boolean });
   }
 
+  // Hermes v0.23.2: plugins/kanban/dashboard/plugin_api.py:357-455,690-713,1267-1275,1409-1452.
+  private kanbanPath(path: string, workspace?: string): string {
+    return `/api/plugins/kanban/${path}${workspace ? `?board=${encodeURIComponent(workspace)}` : ''}`;
+  }
+  async kanbanBoards() {
+    return this.request('dashboard', this.kanbanPath('boards')).then(async (r) => await r.json());
+  }
+  async createKanbanBoard(slug: string, name?: string) {
+    return this.request('dashboard', this.kanbanPath('boards'), { method: 'POST', body: { slug, name } })
+      .then(async (r) => await r.json());
+  }
+  async kanbanBoard(workspace: string) {
+    return this.request('dashboard', this.kanbanPath('board', workspace)).then(async (r) => await r.json());
+  }
+  async createKanbanTask(workspace: string, title: string, assignee: string, body?: string) {
+    return this.request('dashboard', this.kanbanPath('tasks', workspace), {
+      method: 'POST', body: { title, body, assignee },
+    }).then(async (r) => await r.json());
+  }
+  async assignKanbanTask(workspace: string, id: string, assignee: string) {
+    return this.request('dashboard', this.kanbanPath(`tasks/${encodeURIComponent(id)}`, workspace), {
+      method: 'PATCH', body: { assignee },
+    }).then(async (r) => await r.json());
+  }
+  async kanbanTask(workspace: string, id: string) {
+    return this.request('dashboard', this.kanbanPath(`tasks/${encodeURIComponent(id)}`, workspace))
+      .then(async (r) => await r.json());
+  }
+  async dispatchKanban(workspace: string) {
+    return this.request('dashboard', this.kanbanPath('dispatch', workspace), { method: 'POST' })
+      .then(async (r) => await r.json());
+  }
+
   private skillPath(path: string, profile: string): string {
     return `${path}?profile=${encodeURIComponent(profileName(profile))}`;
   }

@@ -182,6 +182,23 @@ export const hermesContract = {
       .output(z.object({ runs: z.array(z.record(z.string(), z.unknown())), limit: z.number() })),
     delete: oc.input(z.object({ id: z.string().min(1), profile: z.string().min(1).optional() })).output(z.unknown()),
   },
+  kanban: {
+    boards: oc.output(z.object({ boards: z.array(z.record(z.string(), z.unknown())), current: z.string() })),
+    createBoard: oc.input(z.object({ slug: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/), name: z.string().optional() }))
+      .output(z.record(z.string(), z.unknown())),
+    board: oc.input(z.object({ workspace: z.string().min(1) }))
+      .output(z.object({ columns: z.array(z.object({ name: z.string(), tasks: z.array(z.record(z.string(), z.unknown())) })),
+        assignees: z.array(z.string()), latest_event_id: z.number(), now: z.number() }).passthrough()),
+    create: oc.input(z.object({ workspace: z.string().min(1), title: z.string().min(1),
+      body: z.string().optional(), assignee: z.string().min(1) }))
+      .output(z.object({ task: z.record(z.string(), z.unknown()).nullable() }).passthrough()),
+    assign: oc.input(z.object({ workspace: z.string().min(1), id: z.string().min(1), assignee: z.string().min(1) }))
+      .output(z.object({ task: z.record(z.string(), z.unknown()) })),
+    task: oc.input(z.object({ workspace: z.string().min(1), id: z.string().min(1) }))
+      .output(z.object({ task: z.record(z.string(), z.unknown()), events: z.array(z.unknown()), runs: z.array(z.unknown()) }).passthrough()),
+    dispatch: oc.input(z.object({ workspace: z.string().min(1) }))
+      .output(z.record(z.string(), z.unknown())),
+  },
 };
 
 export const memoryEntrySchema = z.object({

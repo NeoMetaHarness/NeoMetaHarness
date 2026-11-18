@@ -62,6 +62,7 @@ function json(res, data, status = 200) {
 
 function modelServer() {
   let calls = 0;
+  let completionRequested = false;
   const server = httpServer(async (req, res) => {
     if (req.url === '/v1/models') {
       json(res, { object: 'list', data: [{ id: 'fake-model', object: 'model' }] });
@@ -73,13 +74,30 @@ function modelServer() {
     }
     const request = await requestBody(req);
     calls++;
+    const tools = request.tools?.map((tool) => tool.function?.name) ?? [];
+    const isKanbanTurn = JSON.stringify(request.messages ?? []).includes('Complete scripted task');
+    const invokeCompletion = isKanbanTurn && tools.includes('kanban_complete') && !completionRequested;
+    if (invokeCompletion) completionRequested = true;
+    const toolCall = { id: 'call_p27_kanban_complete', type: 'function', function: {
+      name: 'kanban_complete', arguments: JSON.stringify({ summary: 'Scripted task completed successfully.' }),
+    } };
     if (!request.stream) {
       json(res, { id: 'neo-channel', object: 'chat.completion', model: 'fake-model',
-        choices: [{ index: 0, message: { role: 'assistant', content: responseText },
-          finish_reason: 'stop' }] });
+        choices: [{ index: 0, message: invokeCompletion
+          ? { role: 'assistant', content: null, tool_calls: [toolCall] }
+          : { role: 'assistant', content: responseText },
+          finish_reason: invokeCompletion ? 'tool_calls' : 'stop' }] });
       return;
     }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+    if (invokeCompletion) {
+      res.write('data: ' + JSON.stringify({ id: 'neo-channel', object: 'chat.completion.chunk', model: 'fake-model',
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, ...toolCall }] }, finish_reason: null }] }) + '\n\n');
+      res.write('data: ' + JSON.stringify({ id: 'neo-channel', object: 'chat.completion.chunk', model: 'fake-model',
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }) + '\n\n');
+      res.end('data: [DONE]\n\n');
+      return;
+    }
     for (const delta of [{ role: 'assistant', content: '' }, { content: responseText }, {}]) {
       res.write('data: ' + JSON.stringify({ id: 'neo-channel', object: 'chat.completion.chunk',
         created: 1, model: 'fake-model',
@@ -246,13 +264,22 @@ async function main() {
     if (phase !== 'routines') {
     await viewer.navigate(url('/tasks'));
     await eventually(() => viewer.evaluate('!!document.querySelector("[data-testid=tasks-page]")'), 'lazy Tasks page');
-    await viewer.type('[data-testid=tasks-slug]', 'p2-7-space');
+    await viewer.evaluate(`(() => { const el = document.querySelector('[data-testid=tasks-slug]'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(el, 'p2-7-space'); el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=tasks-slug]")?.value === "p2-7-space"'), 'workspace slug entered');
+    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=tasks-create-board]")?.getAttribute("aria-disabled") !== "true"'), 'workspace submit enabled');
     await viewer.evaluate('document.querySelector("[data-testid=tasks-create-board]").click()');
-    await eventually(async () => (await rpc.x['engine-hermes'].kanban.boards()).boards.some((board) => board.slug === 'p2-7-space'), 'workspace board created');
+    try {
+      await eventually(async () => (await rpc.x['engine-hermes'].kanban.boards()).boards.some((board) => board.slug === 'p2-7-space'), 'workspace board created', 20000);
+    } catch (error) {
+      const uiState = await viewer.evaluate(`({ error: document.querySelector('[data-testid=tasks-page] [role=alert]')?.textContent, slug: document.querySelector('[data-testid=tasks-slug]')?.value, status: document.querySelector('[data-testid=tasks-status]')?.textContent })`);
+      throw new Error(`${String(error)}; Tasks UI: ${JSON.stringify(uiState)}`);
+    }
     await eventually(() => viewer.evaluate('document.querySelector("[data-testid=tasks-workspace]")?.value === "p2-7-space"'), 'workspace selected');
     await viewer.type('[data-testid=tasks-title]', 'Complete scripted task');
     await viewer.type('[data-testid=tasks-body]', 'Produce a concise reply using the scripted model');
+    await eventually(() => viewer.evaluate('Array.from(document.querySelector("#tasks-assignee")?.options ?? []).some(option => option.value === "work_bot")'), 'Hermes bot available in UI');
     await viewer.evaluate(`const select = document.querySelector('#tasks-assignee'); select.value = 'work_bot'; select.dispatchEvent(new Event('change', { bubbles: true }));`);
+    await eventually(() => viewer.evaluate('document.querySelector("#tasks-assignee")?.value === "work_bot"'), 'bot selection applied');
     await viewer.evaluate('document.querySelector("[data-testid=tasks-create]").click()');
     let board;
     await eventually(async () => {
