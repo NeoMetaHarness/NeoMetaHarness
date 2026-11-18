@@ -976,9 +976,21 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }
 
       if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/')) {
-        // Every handler authorizes first; its invoke helper then answers NOT_FOUND
-        // when the extension is unavailable. No availability shortcut runs before
-        // policy, so no role learns anything its policy does not allow.
+        // Order for every role: authorize the procedure, then report availability,
+        // then let oRPC validate method and input. Authorization runs before
+        // anything else, so no role learns more than its policy allows, and a
+        // disabled engine answers 404 whatever the request body or method.
+        const procedure = path.slice(1).split('/').join('.');
+        if (CONTRACT_POLICY[procedure]) {
+          authorize(procedure, context as GatewayAuthContext);
+          const extensionPath = path.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+          // Honcho status/list and channels report their own disabled state.
+          const selfReporting = path === '/x/memory-honcho/status' || path === '/x/memory-honcho/list' || path.startsWith('/x/channels/');
+          if (!selfReporting && !kernel.hasRoute(extensionPath)) {
+            res.writeHead(404).end();
+            return;
+          }
+        }
         const matched = await httpRPC.handle(req, res, { context: context as GatewayAuthContext });
         if (!matched.matched) res.writeHead(404).end();
         return;
