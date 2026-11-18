@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request as httpRequest } from 'node:http';
+import { WebSocket } from 'ws';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import { startGateway } from '../src/server.js';
 
 type Gateway = Awaited<ReturnType<typeof startGateway>>;
@@ -289,4 +292,28 @@ test('SEC-11: the superagent bridge key expires, is swept after a crash, and nev
   const noOwner = new BridgeKey({ api: { createApiKey: async () => { throw new Error('must not mint'); } },
     kysely: { selectFrom: () => ({ select: () => ({ where: () => ({ orderBy: () => ({ executeTakeFirst: async () => undefined }) }) }) }) } });
   assert.equal(await noOwner.mint(), undefined, 'no owner yet means no key, and no fallback');
+});
+
+test('SEC-13: authorization runs before input validation on core routes, over HTTP and WebSocket', async () => {
+  await withGateway('server', async (gateway, base) => {
+    const roleless = await signUp(base, 'roleless@evil.test');
+    const as = { authorization: `Bearer ${roleless.token}` };
+    // Malformed input from a caller with no role must be refused by policy, not described by the validator.
+    for (const [route, body] of [['extensions/disable', { json: { wrong: 1 } }], ['vault/put', { json: { nope: true } }],
+      ['agents/bots/create', { json: 42 }]] as const) {
+      const res = await fetch(`${base}/${route}`, json(body, as));
+      const text = await res.text();
+      assert.equal(res.status, 403, `${route}: policy before validation`);
+      assert.ok(!/Input validation failed|invalid_type/i.test(text), `${route}: no schema disclosure`);
+    }
+    const ws = new WebSocket(`ws://127.0.0.1:${gateway.port}/ws`, [`bearer.${roleless.token}`]);
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    try {
+      const client = createORPCClient<any>(new WebSocketLink({ websocket: ws as any }));
+      await assert.rejects(client.extensions.disable({ wrong: 1 }), (error: any) => error?.code === 'FORBIDDEN',
+        'WS: policy before validation');
+    } finally {
+      ws.close();
+    }
+  });
 });

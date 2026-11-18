@@ -260,3 +260,17 @@ export function getContractProcedurePaths(contract: any, prefix = ''): string[] 
   }
   return paths;
 }
+
+/**
+ * oRPC middleware registered on the implementer, so it runs before input
+ * validation (SEC-13): a caller without the required role is refused by policy
+ * before the validator can describe the procedure's input schema. Handlers keep
+ * their own authorize() calls; this only moves the first check earlier.
+ */
+export function policyMiddleware({ context, path, next }: {
+  context: GatewayAuthContext; path: readonly string[]; next: () => any;
+}) {
+  const procedure = path.join('.');
+  if (procedure in CONTRACT_POLICY) authorize(procedure, context);
+  return next();
+}

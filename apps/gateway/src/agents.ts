@@ -5,7 +5,7 @@ import type { NeoKernel } from '@neometaharness/kernel';
 import { AgentService, HermesAgentRuntime } from '@neometaharness/agents';
 import { coalesceText } from './coalesce.js';
 import { requireViewer, requireMember, requireAdminOrOwner, type GatewayAuthContext } from './rbac.js';
-import { authorize, destructiveToolApproval } from './policy.js';
+import { authorize, destructiveToolApproval, policyMiddleware } from './policy.js';
 
 /** The gateway owns the service lifetime. It follows Hermes enable/disable transitions. */
 export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: NeoKernel) {
@@ -32,7 +32,7 @@ export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: Neo
     return service;
   };
   await sync();
-  const os = implement(neoContract).$context<GatewayAuthContext>();
+  const os = implement(neoContract).$context<GatewayAuthContext>().use(policyMiddleware as any);
   const router = {
     bots: {
       list: os.agents.bots.list.handler(({ context }) => {

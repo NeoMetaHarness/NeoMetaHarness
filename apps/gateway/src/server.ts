@@ -54,6 +54,7 @@ import {
   getPolicy,
   ROUTE_POLICY,
   CONTRACT_POLICY,
+  policyMiddleware,
   HTTP_ROUTE_POLICY,
   type PolicyLevel,
 } from './policy.js';
@@ -67,6 +68,7 @@ export {
   getPolicy,
   ROUTE_POLICY,
   CONTRACT_POLICY,
+  policyMiddleware,
   HTTP_ROUTE_POLICY,
   type GatewayAuthContext,
   type PolicyLevel,
@@ -297,7 +299,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   }
 
   const agentApi = await createAgentGateway(db, kernel);
-  const os = implement(neoContract).$context<GatewayAuthContext>();
+  const os = implement(neoContract).$context<GatewayAuthContext>().use(policyMiddleware as any);
 
   const invokeT3 = async (route: string, body: unknown) => {
     const path = `/x/engine-t3/${route}`;
