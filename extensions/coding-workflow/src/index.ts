@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { createAcpBridge } from './bridge.js';
 
 const execute = promisify(execFile);
-const git = async (cwd: string, args: string[]) => (await execute('git', ['-C', cwd, ...args], {
+const git = async (cwd: string, args: string[]) => (await execute('git', ['--literal-pathspecs', '-C', cwd, ...args], {
   windowsHide: true, maxBuffer: 4 * 1024 * 1024,
   env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
 })).stdout.trim();
