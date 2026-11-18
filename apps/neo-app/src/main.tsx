@@ -7,6 +7,7 @@ import './shell.css';
 const Extensions = lazy(() => import('./pages/Extensions'));
 const Agents = lazy(() => import('./pages/Agents'));
 const Skills = lazy(() => import('./pages/Skills'));
+const Memory = lazy(() => import('./pages/Memory'));
 const Computers = lazy(() => import('./pages/Computers'));
 const Coding = lazy(() => import('./pages/Coding'));
 const Placeholder = lazy(() => import('./pages/Placeholder'));
@@ -16,6 +17,7 @@ const pages = [
   { label: 'Coding', path: '/coding', icon: 'code' },
   { label: 'Computers', path: '/computers', icon: 'desktop' },
   { label: 'Skills', path: '/skills', icon: 'star' },
+  { label: 'Memory', path: '/memory', icon: 'book' },
   { label: 'Extensions', path: '/extensions', icon: 'extension' },
   { label: 'Settings', path: '/settings', icon: 'settings' },
 ] as const;
@@ -37,7 +39,7 @@ function NeoApp() {
     if (destination !== path) window.history.pushState({}, '', destination + window.location.search);
     setPath(destination);
   };
-  const current = pages.find((page) => page.path === path) ?? pages[5];
+  const current = pages.find((page) => page.path === path) ?? pages.find((page) => page.path === '/extensions')!;
 
   return <NeoTheme>
     <AppShell variant="section" contentPadding={0} sideNav={
@@ -60,7 +62,7 @@ function NeoApp() {
     }>
       <div className="neo-page">
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
-          {path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : <Placeholder name={current.label} />}
+          {path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : <Placeholder name={current.label} />}
         </Suspense>
       </div>
     </AppShell>

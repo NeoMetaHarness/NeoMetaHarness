@@ -1,0 +1,17 @@
+.memory-page { padding: 0 0 36px; }
+.memory-header, .memory-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.memory-editor, .memory-library { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); padding: 20px; margin-top: 18px; }
+.memory-editor { display: grid; gap: 12px; }
+.memory-editor h2, .memory-library h2 { margin: 0; font-size: 21px; }
+.memory-editor textarea { min-height: 100px; resize: vertical; width: 100%; }
+.memory-editor textarea, .memory-editor input, .memory-editor select, .memory-heading input {
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  padding: 10px; background: transparent; color: inherit; font: inherit;
+}
+.memory-fields, .memory-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.memory-fields label, .memory-heading label { display: grid; gap: 6px; }
+.memory-library ul { list-style: none; margin: 18px 0 0; padding: 0; }
+.memory-entry { border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); padding: 16px 0; }
+.memory-entry p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10px; }
+.memory-meta { display: flex; gap: 10px; flex-wrap: wrap; opacity: .75; font-size: 12px; margin-bottom: 12px; }
+@media(max-width: 760px) { .memory-header, .memory-heading { align-items: stretch; flex-direction: column; } }
