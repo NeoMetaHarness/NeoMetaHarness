@@ -44,22 +44,24 @@ async function startGateway(dbFile) {
     cwd: gatewayDir,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
-    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0' },
+    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let errors = '';
   child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
+  let token = '';
   const port = await new Promise((done, reject) => {
     const timer = setTimeout(() => reject(new Error(`Gateway startup timed out: ${errors}`)), 20000);
     const lines = createInterface({ input: child.stdout });
     const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
     const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
     lines.on('line', (line) => {
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
       if (line.startsWith('GATEWAY_READY ')) success(JSON.parse(line.slice('GATEWAY_READY '.length)).port);
     });
     child.once('error', fail);
     child.once('exit', (code) => fail(new Error(`Gateway exited ${code}: ${errors}`)));
   });
-  return { port, child, async close() {
+  return { port, token, child, async close() {
     if (child.exitCode !== null) return;
     const exit = new Promise((done) => child.once('exit', done));
     child.send('shutdown');
@@ -171,17 +173,18 @@ async function trial(number, previewPort) {
   let chrome;
   try {
     gateway = await startGateway(join(temporary, 'state.sqlite'));
+    const token = gateway.token;
     const base = `http://127.0.0.1:${gateway.port}`;
-    const rpc = createORPCClient(new RPCLink({ url: base }));
+    const rpc = createORPCClient(new RPCLink({ url: base, headers: () => ({ authorization: `Bearer ${token}` }) }));
     const listed = await rpc.extensions.list();
     const expectedRows = listed.length;
     assert.ok(['sample-ts', 'sample-py'].every((id) => listed.some((row) => row.id === id)), 'Both sample extensions are discoverable');
     assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
     assert.equal((await rpc.extensions.enable({ id: 'sample-py' })).status, 'running');
-    assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 200);
-    assert.equal((await fetch(`${base}/x/sample-py/hello`)).status, 200);
+    assert.equal((await fetch(`${base}/x/sample-ts/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
+    assert.equal((await fetch(`${base}/x/sample-py/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
 
-    const pageUrl = `http://127.0.0.1:${previewPort}/extensions?gateway=${encodeURIComponent(base)}`;
+    const pageUrl = `http://127.0.0.1:${previewPort}/extensions?gateway=${encodeURIComponent(base)}&token=${encodeURIComponent(token)}`;
     chrome = await startChrome(join(temporary, 'chrome'));
     const page = await pageSession(chrome, pageUrl);
     try {
@@ -195,13 +198,13 @@ async function trial(number, previewPort) {
 
       assert.equal(await page.evaluate('document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]").click(); true'), true);
       await page.eventually('document.querySelector("[data-testid=extension-sample-ts]")?.getAttribute("data-event-seq") === "3" && !document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]").checked', 'TS disabled from event seq 3');
-      assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 404);
-      assert.equal((await fetch(`${base}/x/sample-py/hello`)).status, 200);
+      assert.equal((await fetch(`${base}/x/sample-ts/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 404);
+      assert.equal((await fetch(`${base}/x/sample-py/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
 
       assert.equal(await page.evaluate('document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]").click(); true'), true);
       await page.eventually('document.querySelector("[data-testid=extension-sample-ts]")?.getAttribute("data-event-seq") === "4" && document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]").checked', 'TS reenabled from event seq 4');
-      assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 200);
-      assert.equal((await fetch(`${base}/x/sample-py/hello`)).status, 200);
+      assert.equal((await fetch(`${base}/x/sample-ts/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
+      assert.equal((await fetch(`${base}/x/sample-py/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
       console.log(`P1-2_BROWSER PASS trial=${number} rows=${expectedRows} event_seq=1,3,4 off=404 on=200 python=200`);
     } finally { await page.close(); }
   } finally {

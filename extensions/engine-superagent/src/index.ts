@@ -131,7 +131,8 @@ class DshWorker {
   private active = new Set<{ dispose(): Promise<void> }>();
   private next = 0;
 
-  async start(home: string, gatewayUrl: string): Promise<void> {
+  async start(home: string, gatewayUrl: string, token?: string): Promise<void> {
+    const effectiveToken = token ?? process.env.NMH_GATEWAY_TOKEN;
     await mkdir(home, { recursive: true });
     this.context.baseUrl = import.meta.url;
     await this.context.plugin(Loader);
@@ -149,7 +150,7 @@ class DshWorker {
           config: {
             transport: 'stdio', serverName: 'neo', command: process.execPath,
             args: [serverFile, gatewayUrl], cwd: home,
-            env: { DSH_HOME: home }, toolCallTimeoutMs: 90000,
+            env: { DSH_HOME: home, ...(effectiveToken ? { NMH_GATEWAY_TOKEN: effectiveToken } : {}) }, toolCallTimeoutMs: 90000,
             failOnStartupError: true, reconnect: { enabled: false },
           },
         }] });
@@ -225,10 +226,12 @@ class SuperagentService {
   private workerReady?: Promise<void>;
   private workerHome = '';
   private gatewayUrl!: () => string;
+  private token?: string;
 
-  async start(home: string, gatewayUrl: () => string): Promise<void> {
+  async start(home: string, gatewayUrl: () => string, token?: string): Promise<void> {
     this.workerHome = home;
     this.gatewayUrl = gatewayUrl;
+    this.token = token;
     const upstream = await loadPinnedSuperagent();
     const repo = new upstream.MemoryRepositories();
     const sourceKind = {
@@ -367,7 +370,7 @@ class SuperagentService {
     if (!item || this.closed) return;
     try {
       this.engine.assignmentStarted(ticketId, assignmentId);
-      this.workerReady ??= this.worker.start(this.workerHome, this.gatewayUrl());
+      this.workerReady ??= this.worker.start(this.workerHome, this.gatewayUrl(), this.token);
       await this.workerReady;
       const result = await this.worker.delegate(item.botId, item.text);
       if (this.closed) return;
@@ -401,10 +404,47 @@ export default defineExtension({
   async activate(ctx) {
     const gatewayUrl = ctx.inject<() => string>('gatewayUrl');
     const dataDir = ctx.inject<string>('extensionDataDir');
+    const auth = ctx.inject<any>('auth');
     if (!gatewayUrl || !dataDir) throw new Error('Superagent needs Gateway endpoint and isolated storage');
+
+    let apiKeyToken = process.env.NMH_GATEWAY_TOKEN;
+    let apiKeyId: string | undefined;
+    if (auth?.api?.createApiKey) {
+      try {
+        const user = await auth.kysely?.selectFrom('user').select(['id']).executeTakeFirst?.();
+        const org = await auth.kysely?.selectFrom('organization').select(['id']).executeTakeFirst?.();
+        if (user?.id) {
+          const keyRes = await auth.api.createApiKey({
+            body: {
+              userId: user.id,
+              name: 'superagent-bridge',
+              rateLimitEnabled: false,
+              metadata: { role: 'member', workspaceId: org?.id ?? 'default' },
+            },
+          });
+          if (keyRes?.key) {
+            apiKeyToken = keyRes.key;
+            apiKeyId = keyRes.id;
+          }
+        }
+      } catch (err) {
+        console.error('Superagent failed to mint API key:', err);
+      }
+    }
+
     const service = new SuperagentService();
-    await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl);
-    ctx.effect(() => () => service.close());
+    await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, apiKeyToken);
+    ctx.effect(() => async () => {
+      if (apiKeyId) {
+        if (auth?.api?.deleteApiKey) {
+          await auth.api.deleteApiKey({ body: { keyId: apiKeyId } }).catch(() => {});
+        }
+        if (auth?.kysely) {
+          await auth.kysely.deleteFrom('apiKey').where('id', '=', apiKeyId).execute().catch(() => {});
+        }
+      }
+      await service.close();
+    });
     ctx.route('ask', ({ body }) => service.ask(body));
     ctx.route('list', () => service.list());
     ctx.route('accept', ({ body }) => service.accept(body as { id: string }));

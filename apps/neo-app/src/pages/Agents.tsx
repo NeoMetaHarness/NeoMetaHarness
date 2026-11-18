@@ -8,7 +8,7 @@ import {
   Button, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList,
   StreamView, type StreamViewHandle,
 } from '@neometaharness/ui';
-import { gatewayUrl } from '../config';
+import { gatewayUrl, gatewayToken } from '../config';
 import './agents.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -23,7 +23,15 @@ type ActiveRun = {
   stopped: boolean;
 };
 
-const http = createORPCClient<Client>(new HttpLink({ url: gatewayUrl() }));
+const http = createORPCClient<Client>(
+  new HttpLink({
+    url: gatewayUrl(),
+    headers: () => {
+      const token = gatewayToken();
+      return token ? { authorization: `Bearer ${token}` } : {};
+    },
+  })
+);
 const terminal = new Set(['run.completed', 'run.failed', 'run.cancelled', 'run.interrupted']);
 
 function describeEvent(event: HermesEvent): string {
@@ -181,7 +189,9 @@ export default function Agents() {
       if (active.current !== run) return;
       run.runId = started.run_id;
       setStatus('Running');
-      run.socket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws');
+      const token = gatewayToken();
+      const wsUrl = gatewayUrl().replace(/^http/, 'ws') + '/ws';
+      run.socket = token ? new WebSocket(wsUrl, ['bearer.' + token]) : new WebSocket(wsUrl);
       const ws = createORPCClient<Client>(new WebSocketLink({ websocket: run.socket }));
       for await (const event of await ws.x['engine-hermes'].runs.events({
         profile: run.profile, runId: started.run_id,

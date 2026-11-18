@@ -6,13 +6,23 @@ import {
   migrateAuthSchema,
   bootstrapDesktopAuth,
   resolveAuthContext,
+  requireViewer,
+  requireMember,
+  requireAdminOrOwner,
+  requireOwner,
   NeoRole,
   NeoAuthContext,
 } from '../src/index.js';
 
-test('Better Auth migrations and bootstrapDesktopAuth idempotence', async () => {
+const TEST_SECRET = 'test-secret-at-least-32-chars-long-0123456789';
+
+test('createNeoAuth throws when options.secret is missing', () => {
+  assert.throws(() => createNeoAuth({}), (err: any) => err.message.includes('options.secret is required'));
+});
+
+test('Better Auth migrations and bootstrapDesktopAuth idempotence and session pruning', async () => {
   const sqlite = new DatabaseSync(':memory:');
-  const auth = createNeoAuth({ sqlite });
+  const auth = createNeoAuth({ sqlite, secret: TEST_SECRET });
   await migrateAuthSchema(auth);
 
   // First bootstrap run
@@ -27,6 +37,11 @@ test('Better Auth migrations and bootstrapDesktopAuth idempotence', async () => 
   assert.equal(res1.workspace.name, 'Local Dev Workspace');
   assert.ok(res1.token);
 
+  // Check that session count is 1
+  let sessions = await auth.kysely.selectFrom('session').selectAll().execute();
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].userAgent, 'Neo-Desktop/1.0');
+
   // Second bootstrap run on the exact same database
   const res2 = await bootstrapDesktopAuth(auth, {
     email: 'local.owner@neo.local',
@@ -36,11 +51,16 @@ test('Better Auth migrations and bootstrapDesktopAuth idempotence', async () => 
   assert.equal(res2.user.id, res1.user.id);
   assert.equal(res2.workspace.id, res1.workspace.id);
   assert.ok(res2.token);
+
+  // Prior session must be pruned, leaving exactly 1 session
+  sessions = await auth.kysely.selectFrom('session').selectAll().execute();
+  assert.equal(sessions.length, 1, 'Previous desktop session must be pruned on restart');
+  assert.equal(sessions[0].token, res2.token);
 });
 
 test('Organization roles and membership (owner, admin, member, viewer)', async () => {
   const sqlite = new DatabaseSync(':memory:');
-  const auth = createNeoAuth({ sqlite });
+  const auth = createNeoAuth({ sqlite, secret: TEST_SECRET });
   await migrateAuthSchema(auth);
 
   // 1. Owner
@@ -61,6 +81,10 @@ test('Organization roles and membership (owner, admin, member, viewer)', async (
   assert.equal(ownerCtx.user?.email, 'owner@test.local');
   assert.equal(ownerCtx.workspaceId, org.id);
   assert.equal(ownerCtx.role, 'owner');
+  assert.doesNotThrow(() => requireViewer(ownerCtx));
+  assert.doesNotThrow(() => requireMember(ownerCtx));
+  assert.doesNotThrow(() => requireAdminOrOwner(ownerCtx));
+  assert.doesNotThrow(() => requireOwner(ownerCtx));
 
   // 2. Member
   const memberUser = await auth.api.signUpEmail({
@@ -77,6 +101,10 @@ test('Organization roles and membership (owner, admin, member, viewer)', async (
   const memberCtx = await resolveAuthContext(auth, new Headers({ authorization: `Bearer ${memberUser.token}` }));
   assert.equal(memberCtx.user?.email, 'member@test.local');
   assert.equal(memberCtx.role, 'member');
+  assert.doesNotThrow(() => requireViewer(memberCtx));
+  assert.doesNotThrow(() => requireMember(memberCtx));
+  assert.throws(() => requireAdminOrOwner(memberCtx), (err: any) => err.status === 403);
+  assert.throws(() => requireOwner(memberCtx), (err: any) => err.status === 403);
 
   // 3. Viewer
   const viewerUser = await auth.api.signUpEmail({
@@ -93,16 +121,30 @@ test('Organization roles and membership (owner, admin, member, viewer)', async (
   const viewerCtx = await resolveAuthContext(auth, new Headers({ authorization: `Bearer ${viewerUser.token}` }));
   assert.equal(viewerCtx.user?.email, 'viewer@test.local');
   assert.equal(viewerCtx.role, 'viewer');
+  assert.doesNotThrow(() => requireViewer(viewerCtx));
+  assert.throws(() => requireMember(viewerCtx), (err: any) => err.status === 403);
+  assert.throws(() => requireAdminOrOwner(viewerCtx), (err: any) => err.status === 403);
+  assert.throws(() => requireOwner(viewerCtx), (err: any) => err.status === 403);
+
+  // 4. User with no workspace membership
+  const outsider = await auth.api.signUpEmail({
+    body: { email: 'outsider@test.local', password: 'OutsiderPass!123', name: 'Outsider' },
+  });
+  const outsiderCtx = await resolveAuthContext(auth, new Headers({ authorization: `Bearer ${outsider.token}` }));
+  assert.equal(outsiderCtx.user?.email, 'outsider@test.local');
+  assert.equal(outsiderCtx.role, null, 'User with no membership must have role null');
+  assert.throws(() => requireViewer(outsiderCtx), (err: any) => err.status === 403);
+  assert.throws(() => requireMember(outsiderCtx), (err: any) => err.status === 403);
 });
 
-test('API Key lifecycle: issue -> scoped use -> expire -> revoke', async () => {
+test('API Key lifecycle: issue -> scoped use -> expire -> revoke -> deny missing role', async () => {
   const sqlite = new DatabaseSync(':memory:');
-  const auth = createNeoAuth({ sqlite });
+  const auth = createNeoAuth({ sqlite, secret: TEST_SECRET });
   await migrateAuthSchema(auth);
 
   const boot = await bootstrapDesktopAuth(auth);
 
-  // 1. Issue an API key
+  // 1. Issue an API key with role: member
   const apiKeyRes = await auth.api.createApiKey({
     body: {
       name: 'ci-automation-key',
@@ -129,7 +171,20 @@ test('API Key lifecycle: issue -> scoped use -> expire -> revoke', async () => {
   assert.equal(authCtxBearer.role, 'member');
   assert.equal(authCtxBearer.workspaceId, boot.workspace.id);
 
-  // 3. Issue a revocable API key
+  // 3. API key without metadata.role must be denied (null user and role)
+  const noRoleKey = await auth.api.createApiKey({
+    body: {
+      name: 'no-role-key',
+      metadata: { workspaceId: boot.workspace.id },
+      expiresIn: 3600,
+    },
+    headers: new Headers({ authorization: `Bearer ${boot.token}` }),
+  });
+  const noRoleCtx = await resolveAuthContext(auth, new Headers({ 'x-api-key': noRoleKey.key }));
+  assert.equal(noRoleCtx.user, null, 'API key without role in metadata must be denied');
+  assert.equal(noRoleCtx.role, null);
+
+  // 4. Issue a revocable API key
   const revocableRes = await auth.api.createApiKey({
     body: {
       name: 'revocable-key',
@@ -154,51 +209,46 @@ test('API Key lifecycle: issue -> scoped use -> expire -> revoke', async () => {
   assert.equal(postRevoke.user, null, 'Revoked key must not resolve user');
   assert.equal(postRevoke.role, null, 'Revoked key must not resolve role');
 
-  // 4. Test expiration
+  // 5. Test expiration
   await new Promise((r) => setTimeout(r, 2200));
   const postExpire = await resolveAuthContext(auth, new Headers({ 'x-api-key': keySecret }));
   assert.equal(postExpire.user, null, 'Expired key must not resolve user');
 });
 
-test('Desktop mode loopback fallback and security boundaries', async () => {
+test('No ambient authority: tokenless requests always resolve to null user', async () => {
   const sqlite = new DatabaseSync(':memory:');
-  const auth = createNeoAuth({ sqlite });
+  const auth = createNeoAuth({ sqlite, secret: TEST_SECRET });
   await migrateAuthSchema(auth);
 
   const boot = await bootstrapDesktopAuth(auth);
-  const bootstrapContext: NeoAuthContext = {
-    user: boot.user,
-    session: boot.session,
-    workspaceId: boot.workspace.id,
-    role: 'owner',
-  };
 
-  // 1. Unauthenticated request from loopback in desktop mode -> inherits bootstrap context
+  // 1. Unauthenticated request on loopback in desktop mode -> rejected (null)
   const loopbackCtx = await resolveAuthContext(auth, new Headers(), {
     mode: 'desktop',
-    isLoopback: true,
-    bootstrapContext,
   });
-  assert.equal(loopbackCtx.user?.id, boot.user.id);
-  assert.equal(loopbackCtx.role, 'owner');
+  assert.equal(loopbackCtx.user, null, 'Unauthenticated loopback request must have null user');
+  assert.equal(loopbackCtx.role, null);
 
-  // 2. Unauthenticated request from non-loopback in desktop mode -> rejected (null)
-  const nonLoopbackCtx = await resolveAuthContext(auth, new Headers(), {
-    mode: 'desktop',
-    isLoopback: false,
-    bootstrapContext,
+  // 2. Unauthenticated request in server mode -> rejected (null)
+  const serverCtx = await resolveAuthContext(auth, new Headers(), {
+    mode: 'server',
   });
-  assert.equal(nonLoopbackCtx.user, null);
+  assert.equal(serverCtx.user, null, 'Unauthenticated server request must have null user');
 
-  // 3. Invalid Bearer token even on loopback -> rejected (null)
+  // 3. Invalid Bearer token -> rejected (null)
   const invalidTokenCtx = await resolveAuthContext(
     auth,
     new Headers({ authorization: 'Bearer invalid_bogus_token' }),
-    {
-      mode: 'desktop',
-      isLoopback: true,
-      bootstrapContext,
-    }
+    { mode: 'desktop' }
   );
-  assert.equal(invalidTokenCtx.user, null, 'Explicit bad token must not fall back to bootstrap context');
+  assert.equal(invalidTokenCtx.user, null, 'Invalid token must be rejected');
+
+  // 4. Authenticated bearer token with bootstrap token -> resolves owner
+  const validCtx = await resolveAuthContext(
+    auth,
+    new Headers({ authorization: 'Bearer ' + boot.token }),
+    { mode: 'desktop' }
+  );
+  assert.equal(validCtx.user?.id, boot.user.id);
+  assert.equal(validCtx.role, 'owner');
 });

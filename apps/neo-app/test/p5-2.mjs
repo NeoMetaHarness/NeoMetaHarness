@@ -213,9 +213,10 @@ async function main() {
     await pinnedSetup(temp, t3Url, scopedSession, providerId, projectId);
     process.env.NMH_T3_URL = t3Url;
     process.env.NMH_T3_SCOPED_SESSION = scopedSession;
-    gateway = await startGateway({ databaseFile: join(temp, 'neo.sqlite'), extensionsDir: join(repo, 'extensions') });
+    gateway = await startGateway({ databaseFile: join(temp, 'neo.sqlite'), extensionsDir: join(repo, 'extensions'), mode: 'desktop', dataDir: temp });
+    const token = gateway.desktopToken;
     const base = 'http://127.0.0.1:' + gateway.port;
-    const rpc = createORPCClient(new RPCLink({ url: base }));
+    const rpc = createORPCClient(new RPCLink({ url: base, headers: { authorization: `Bearer ${token}` } }));
     assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
     assert.equal((await rpc.extensions.enable({ id: 'engine-t3' })).status, 'running');
     assert.ok((await rpc.x['engine-t3'].threads.list()).projects.some((entry) => entry.id === projectId));
@@ -226,7 +227,7 @@ async function main() {
     await eventually(async () => (await fetch('http://127.0.0.1:' + previewPort + '/coding')).ok, 'Vite preview');
     await chrome.attach('viewer');
     viewer = await CDP.open(chrome.browser('viewer'));
-    await viewer.navigate('http://127.0.0.1:' + previewPort + '/coding?gateway=' + encodeURIComponent(base));
+    await viewer.navigate('http://127.0.0.1:' + previewPort + '/coding?gateway=' + encodeURIComponent(base) + '&token=' + encodeURIComponent(token));
     await eventually(() => viewer.evaluate('!!document.querySelector("[data-testid=coding-page]")'), 'lazy-loaded Coding route');
     await eventually(() => viewer.evaluate('!!document.querySelector("[data-testid=coding-title]")'), 'isolated T3 project visible');
     await viewer.type('[data-testid=coding-title]', 'P5-2 isolated thread');
@@ -306,7 +307,7 @@ async function main() {
       }));
       throw error;
     }
-    assert.equal((await fetch(base + '/x/sample-ts/hello')).status, 200);
+    assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).status, 200);
     assert.equal((await rpc.extensions.list()).find((entry) => entry.id === 'sample-ts')?.status, 'running');
     console.log('P5-2_GATEWAY_UI PASS project=list thread=create prompts=2 stream=visible approvals=deny+approve settled=true disabled=true sample=healthy');
   } finally {

@@ -139,6 +139,10 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
     this.memories = new MemoryRecords(this.db);
   }
 
+  get kysely(): Kysely<NeoTables> {
+    return this.db;
+  }
+
   getKysely(): Kysely<NeoTables> {
     return this.db;
   }

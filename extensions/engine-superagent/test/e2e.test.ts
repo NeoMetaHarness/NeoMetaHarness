@@ -129,28 +129,33 @@ async function fakeDshModel(): Promise<{
 }
 
 async function gateway(home: string, modelPort: number, dshModelPort: number): Promise<{
-  child: ChildProcess; port: number; get stderr(): string;
+  child: ChildProcess; port: number; token: string; get stderr(): string;
 }> {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: join(root, 'apps/gateway'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...process.env, NMH_UPSTREAM_CACHE: upstreamCache(), NMH_HERMES_HOME: join(home, 'hermes'),
       NMH_HERMES_MODEL_URL: `http://127.0.0.1:${modelPort}/v1`,
       NMH_SUPERAGENT_MODEL_URL: `http://127.0.0.1:${dshModelPort}`,
-      NMH_DB_PATH: join(home, 'db.sqlite'), NMH_EXTENSIONS_DIR: join(root, 'extensions'), NMH_PORT: '0' },
+      NMH_DB_PATH: join(home, 'db.sqlite'), NMH_EXTENSIONS_DIR: join(root, 'extensions'), NMH_PORT: '0',
+      NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let stderr = '';
   child.stderr!.on('data', (data: Buffer) => { stderr = (stderr + data.toString()).slice(-8000); });
+  let token = '';
   const port = await bounded(new Promise<number>((done, reject) => {
     const reader = createInterface({ input: child.stdout! });
     reader.on('line', (line) => {
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice(18).trim();
       if (!line.startsWith('GATEWAY_READY ')) return;
       reader.close();
-      done((JSON.parse(line.slice(14)) as { port: number }).port);
+      const payload = JSON.parse(line.slice(14)) as { port: number; token?: string };
+      if (payload.token) token = payload.token;
+      done(payload.port);
     });
     child.once('exit', (code) => reject(new Error(`Gateway exited ${code}: ${stderr}`)));
     child.once('error', reject);
   }), 'Gateway boot', 45000);
-  return { child, port, get stderr() { return stderr; } };
+  return { child, port, token, get stderr() { return stderr; } };
 }
 
 async function close(child?: ChildProcess): Promise<void> {
@@ -168,8 +173,11 @@ async function main() {
   let ws: WebSocket | undefined;
   try {
     app = await gateway(home, model.port, dshModel.port);
-    const client = createORPCClient<Client>(new HttpLink({ url: `http://127.0.0.1:${app.port}` }));
-    ws = new WebSocket(`ws://127.0.0.1:${app.port}/ws`);
+    const client = createORPCClient<Client>(new HttpLink({
+      url: `http://127.0.0.1:${app.port}`,
+      headers: { authorization: `Bearer ${app.token}` },
+    }));
+    ws = new WebSocket(`ws://127.0.0.1:${app.port}/ws`, ['bearer.' + app.token]);
     const live = createORPCClient<Client>(new WebSocketLink({ websocket: ws }));
     const hermes = await client.extensions.enable({ id: 'engine-hermes' });
     assert.equal(hermes.status, 'running', hermes.reason ?? app.stderr);

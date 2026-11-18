@@ -97,13 +97,17 @@ pub fn run() {
                 .map(PathBuf::from)
                 .map(Ok)
                 .unwrap_or_else(|| app.path().app_data_dir())?;
-            let (sidecar, port) = GatewaySidecar::launch(data_dir)?;
+            let (sidecar, port) = GatewaySidecar::launch(data_dir.clone())?;
             let gateway_pid = sidecar.child.id();
             app.manage(GatewayState(Mutex::new(Some(sidecar))));
 
-            let url = WebviewUrl::App(
-                format!("index.html?gateway=http%3A%2F%2F127.0.0.1%3A{port}").into(),
-            );
+            let token = fs::read_to_string(data_dir.join("desktop.token")).unwrap_or_default().trim().to_string();
+            let url = if token.is_empty() {
+                format!("index.html?gateway=http%3A%2F%2F127.0.0.1%3A{port}")
+            } else {
+                format!("index.html?gateway=http%3A%2F%2F127.0.0.1%3A{port}&token={token}")
+            };
+            let url = WebviewUrl::App(url.into());
             WebviewWindowBuilder::new(app, "main", url)
                 .title("Neo Meta Harness")
                 .inner_size(1280.0, 860.0)

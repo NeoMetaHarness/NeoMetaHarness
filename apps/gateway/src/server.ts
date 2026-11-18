@@ -1,35 +1,126 @@
 import { createServer } from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { readFileSync, writeFileSync, linkSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import { RPCHandler as WSRPCHandler } from '@orpc/server/ws';
 import { RPCHandler as HttpRPCHandler } from '@orpc/server/node';
 import { implement, ORPCError } from '@orpc/server';
-import { computerActionSchema, neoContract, type T3Event, type HermesEvent, type DshEvent, type VaultOperation, type InboxItem, type InboxEvent } from '@neometaharness/contracts';
-import { VaultService, KeyFileProvider, type KeyProvider, type VaultScope } from '@neometaharness/vault';
+import {
+  computerActionSchema,
+  neoContract,
+  type T3Event,
+  type HermesEvent,
+  type DshEvent,
+  type VaultOperation,
+  type InboxItem,
+  type InboxEvent,
+} from '@neometaharness/contracts';
+import {
+  VaultService,
+  KeyFileProvider,
+  type KeyProvider,
+  type VaultScope,
+} from '@neometaharness/vault';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
 import { NeoKernel } from '@neometaharness/kernel';
 import { ComputerRegistry } from '@neometaharness/computers';
+import {
+  createNeoAuth,
+  migrateAuthSchema,
+  bootstrapDesktopAuth,
+  resolveAuthContext,
+  type NeoAuth,
+} from '@neometaharness/auth';
+import { toNodeHandler } from 'better-auth/node';
 import { coalesceText } from './coalesce.js';
 import { createAgentGateway } from './agents.js';
+import {
+  requireViewer,
+  requireMember,
+  requireAdminOrOwner,
+  requireOwner,
+  type GatewayAuthContext,
+} from './rbac.js';
+
+export { requireViewer, requireMember, requireAdminOrOwner, requireOwner, type GatewayAuthContext };
 
 export interface GatewayOptions {
   databaseFile: string;
+  dataDir?: string;
   extensionsDir?: string;
   port?: number;
+  mode?: 'server' | 'desktop';
+  secret?: string;
   vaultKeyFile?: string;
   vaultKeyProvider?: KeyProvider;
   authorizeVault?: (operation: VaultOperation, scope: VaultScope) => boolean | Promise<boolean>;
 }
 
+export interface GatewayInstance {
+  port: number;
+  kernel: NeoKernel;
+  vault: VaultService;
+  computers: ComputerRegistry;
+  desktopToken?: string;
+  auth: NeoAuth;
+  db: SqliteDatabaseProvider;
+  close(): Promise<void>;
+}
+
 const defaultExtensions = fileURLToPath(new URL('../../../extensions/', import.meta.url));
 
-export async function startGateway(options: GatewayOptions) {
+function resolveOrGenerateSecret(dataDir: string, explicitSecret?: string): string {
+  if (explicitSecret) return explicitSecret;
+  const secretPath = join(dataDir, 'auth.secret');
+  if (existsSync(secretPath)) {
+    const val = readFileSync(secretPath, 'utf8').trim();
+    if (val.length >= 32) return val;
+    throw new Error('Auth secret in file is too short');
+  }
+  mkdirSync(dataDir, { recursive: true });
+  const secret = randomBytes(32).toString('hex');
+  const tmpPath = `${secretPath}.${randomUUID()}.tmp`;
+  writeFileSync(tmpPath, secret, { encoding: 'utf8', mode: 0o600 });
+  try {
+    linkSync(tmpPath, secretPath);
+  } catch (err: any) {
+    if (err?.code !== 'EEXIST') throw err;
+  } finally {
+    try { unlinkSync(tmpPath); } catch {}
+  }
+  return readFileSync(secretPath, 'utf8').trim();
+}
+
+export async function startGateway(options: GatewayOptions): Promise<GatewayInstance> {
+  const mode = options.mode ?? 'server';
   const db = new SqliteDatabaseProvider(options.databaseFile);
+  const dataDir = options.dataDir ?? (options.databaseFile !== ':memory:' ? dirname(resolve(options.databaseFile)) : process.cwd());
+  const authSecret = resolveOrGenerateSecret(
+    dataDir,
+    options.secret ?? process.env.BETTER_AUTH_SECRET ?? process.env.NEO_AUTH_SECRET,
+  );
+
+  const auth = createNeoAuth({
+    db: db.kysely,
+    baseURL: 'http://127.0.0.1:0',
+    secret: authSecret,
+  });
+  await migrateAuthSchema(auth);
+
+  let desktopToken: string | undefined;
+  if (mode === 'desktop') {
+    const desktop = await bootstrapDesktopAuth(auth, { dataDir });
+    desktopToken = desktop.token;
+  }
+
+  const authNodeHandler = toNodeHandler(auth);
+
   const vault = new VaultService(db, options.vaultKeyProvider ?? new KeyFileProvider(
     options.vaultKeyFile ?? join(dirname(resolve(options.databaseFile)), 'vault-keys', 'master.key'),
   ));
+
   let gatewayPort = 0;
   const computers = new ComputerRegistry(
     () => {
@@ -38,6 +129,7 @@ export async function startGateway(options: GatewayOptions) {
     },
     (notice) => kernel.events.publishComputer(notice),
   );
+
   const memoryScope = (profile: string) => ({
     kind: 'engine' as const, workspaceId: 'default', subjectId: `engine-hermes/${profile}`,
   });
@@ -53,19 +145,33 @@ export async function startGateway(options: GatewayOptions) {
       return { endpoint: `http://127.0.0.1:${gatewayPort}/internal/memory`, token, profile };
     },
   };
+
   const kernel = new NeoKernel(db, {
     computers,
     vault,
-    memoryRecords: db.memories,
+    auth,
+    memoryRecords: (db as any).memories,
     memoryBridge,
     extensionDataDir: join(dirname(resolve(options.databaseFile)), 'extensions'),
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
   });
-  const authorizeVault = async (operation: VaultOperation, scope: VaultScope) => {
-    if (await options.authorizeVault?.(operation, scope) !== true) {
+
+  const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
+    if (operation === 'list') {
+      requireViewer(context);
+    } else if (operation === 'put' || operation === 'rotate') {
+      requireMember(context);
+    } else if (operation === 'delete') {
+      requireAdminOrOwner(context);
+    }
+    if (context?.workspaceId && scope.workspaceId !== context.workspaceId && context.role !== 'owner') {
+      throw new ORPCError('FORBIDDEN', { message: 'Cross-workspace vault access forbidden' });
+    }
+    if (options.authorizeVault && (await options.authorizeVault(operation, scope)) !== true) {
       throw new ORPCError('UNAUTHORIZED', { message: 'Vault access denied' });
     }
   };
+
   try {
     await kernel.discover(resolve(options.extensionsDir ?? defaultExtensions));
   } catch (error) {
@@ -74,7 +180,8 @@ export async function startGateway(options: GatewayOptions) {
   }
 
   const agentApi = await createAgentGateway(db, kernel);
-  const os = implement(neoContract);
+  const os = implement(neoContract).$context<GatewayAuthContext>();
+
   const invokeT3 = async (route: string, body: unknown) => {
     const path = `/x/engine-t3/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'T3 extension is disabled' });
@@ -102,128 +209,284 @@ export async function startGateway(options: GatewayOptions) {
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Local memory extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+
   const withHealth = async (id: string) => {
     const health = await kernel.health(id).catch(() => ({ ok: false }));
     return { ...kernel.status(id), ...(health ? { health } : {}) };
   };
+
   const router = {
     agents: agentApi.router,
     inbox: {
-      ask: os.inbox.ask.handler(async ({ input }) => invokeInbox('ask', input) as Promise<InboxItem>),
-      list: os.inbox.list.handler(async () => invokeInbox('list', {}) as Promise<InboxItem[]>),
-      accept: os.inbox.accept.handler(async ({ input }) => invokeInbox('accept', input) as Promise<InboxItem>),
-      events: os.inbox.events.handler(async function* ({ input, signal }) {
+      ask: os.inbox.ask.handler(async ({ input, context }) => {
+        requireMember(context);
+        return invokeInbox('ask', input) as Promise<InboxItem>;
+      }),
+      list: os.inbox.list.handler(async ({ context }) => {
+        requireViewer(context);
+        return invokeInbox('list', {}) as Promise<InboxItem[]>;
+      }),
+      accept: os.inbox.accept.handler(async ({ input, context }) => {
+        requireMember(context);
+        return invokeInbox('accept', input) as Promise<InboxItem>;
+      }),
+      events: os.inbox.events.handler(async function* ({ input, signal, context }) {
+        requireViewer(context);
         const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;
         yield* stream;
       }),
     },
-    x: { 'memory-local': {
-      list: os.x['memory-local'].list.handler(async ({ input }) => invokeMemory('list', input) as ReturnType<typeof db.memories.list>),
-      add: os.x['memory-local'].add.handler(async ({ input }) => invokeMemory('add', input) as ReturnType<typeof db.memories.add>),
-      update: os.x['memory-local'].update.handler(async ({ input }) => (await invokeMemory('update', input) as Awaited<ReturnType<typeof db.memories.update>>) ?? null),
-      delete: os.x['memory-local'].delete.handler(async ({ input }) => invokeMemory('delete', input) as Promise<{ deleted: boolean }>),
-      export: os.x['memory-local'].export.handler(async ({ input }) => invokeMemory('export', input) as ReturnType<typeof db.memories.export>),
-    }, 'engine-dsh': {
-      create: os.x['engine-dsh'].create.handler(async ({ input }) => invokeDsh('create', input) as Promise<{ sessionId: string; pid: number }>),
-      prompt: os.x['engine-dsh'].prompt.handler(async ({ input }) => invokeDsh('prompt', input) as Promise<{ messageId: string }>),
-      events: os.x['engine-dsh'].events.handler(async function* ({ input, signal }) {
-        const stream = await invokeDsh('events', { ...input, signal }) as AsyncIterable<DshEvent>;
-        yield* coalesceText(stream);
-      }),
-      wait: os.x['engine-dsh'].wait.handler(async ({ input }) => invokeDsh('wait', input) as Promise<{ status: 'settled' }>),
-      cancel: os.x['engine-dsh'].cancel.handler(async ({ input }) => invokeDsh('cancel', input) as Promise<{ cancelled: boolean }>),
-      shutdown: os.x['engine-dsh'].shutdown.handler(async ({ input }) => invokeDsh('shutdown', input) as Promise<{ stopped: boolean }>),
-    }, 'engine-t3': {
-      create: os.x['engine-t3'].create.handler(async ({ input }) => invokeT3('create', input) as Promise<{ sequence: number }>),
-      send: os.x['engine-t3'].send.handler(async ({ input }) => invokeT3('send', input) as Promise<{ sequence: number }>),
-      events: os.x['engine-t3'].events.handler(async function* ({ input, signal }) {
-        const stream = await invokeT3('events', { ...input, signal }) as AsyncIterable<T3Event>;
-        yield* coalesceText(stream);
-      }),
-      approval: os.x['engine-t3'].approval.handler(async ({ input }) => invokeT3('approval', input) as Promise<{ sequence: number }>),
-      settle: os.x['engine-t3'].settle.handler(async ({ input }) => invokeT3('settle', input) as Promise<{ sequence: number }>),
-      stop: os.x['engine-t3'].stop.handler(async ({ input }) =>
-        invokeT3('stop', input) as Promise<{ outcome: 'killed' | 'released' | 'releasing' | 'shared'; sharedWithThreadIds: string[] }>),
-      diff: os.x['engine-t3'].diff.handler(async ({ input }) =>
-        invokeT3('diff', input) as Promise<{ threadId: string; fromTurnCount: number; toTurnCount: number; diff: string }>),
-      threads: {
-        list: os.x['engine-t3'].threads.list.handler(async () =>
-          invokeT3('threads/list', {}) as Promise<any>),
+    x: {
+      'memory-local': {
+        list: os.x['memory-local'].list.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeMemory('list', input) as ReturnType<typeof db.memories.list>;
+        }),
+        add: os.x['memory-local'].add.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeMemory('add', input) as ReturnType<typeof db.memories.add>;
+        }),
+        update: os.x['memory-local'].update.handler(async ({ input, context }) => {
+          requireMember(context);
+          return (await invokeMemory('update', input) as Awaited<ReturnType<typeof db.memories.update>>) ?? null;
+        }),
+        delete: os.x['memory-local'].delete.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeMemory('delete', input) as Promise<{ deleted: boolean }>;
+        }),
+        export: os.x['memory-local'].export.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeMemory('export', input) as ReturnType<typeof db.memories.export>;
+        }),
       },
-    }, 'engine-hermes': {
-      skills: {
-        list: os.x['engine-hermes'].skills.list.handler(async ({ input }) => invokeHermes('skills/list', input) as Promise<{ name: string; provenance?: string; usage?: number }[]>),
-        hub: os.x['engine-hermes'].skills.hub.handler(async ({ input }) => invokeHermes('skills/hub', input) as Promise<{ skills: { name: string }[] }>),
-        curator: os.x['engine-hermes'].skills.curator.handler(async ({ input }) => invokeHermes('skills/curator', input) as Promise<{ enabled: boolean; paused: boolean }>),
-        pause: os.x['engine-hermes'].skills.pause.handler(async ({ input }) => invokeHermes('skills/pause', input) as Promise<{ ok: boolean; paused: boolean }>),
-        run: os.x['engine-hermes'].skills.run.handler(async ({ input }) => invokeHermes('skills/run', input) as Promise<{ ok: boolean; pid: number; name: string }>),
-        graph: os.x['engine-hermes'].skills.graph.handler(async ({ input }) => invokeHermes('skills/graph', input) as Promise<{ nodes: { id: string; label: string; kind: string }[]; edges: { source: string; target: string }[] }>),
-        learn: os.x['engine-hermes'].skills.learn.handler(async ({ input }) => invokeHermes('skills/learn', input) as Promise<{ run_id: string }>),
-      },
-      profiles: {
-        list: os.x['engine-hermes'].profiles.list.handler(async () => invokeHermes('profiles/list', {}) as Promise<{ profiles: { name: string; path: string }[] }>),
-        create: os.x['engine-hermes'].profiles.create.handler(async ({ input }) => invokeHermes('profiles/create', input) as Promise<{ ok: boolean; name: string; path: string }>),
-        delete: os.x['engine-hermes'].profiles.delete.handler(async ({ input }) => invokeHermes('profiles/delete', input)),
-      },
-      runs: {
-        start: os.x['engine-hermes'].runs.start.handler(async ({ input }) => invokeHermes('runs/start', input) as Promise<{ run_id: string }>),
-        events: os.x['engine-hermes'].runs.events.handler(async function* ({ input, signal }) {
-          const stream = await invokeHermes('runs/events', { ...input, signal }) as AsyncIterable<HermesEvent>;
+      'engine-dsh': {
+        create: os.x['engine-dsh'].create.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeDsh('create', input) as Promise<{ sessionId: string; pid: number }>;
+        }),
+        prompt: os.x['engine-dsh'].prompt.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeDsh('prompt', input) as Promise<{ messageId: string }>;
+        }),
+        events: os.x['engine-dsh'].events.handler(async function* ({ input, signal, context }) {
+          requireViewer(context);
+          const stream = await invokeDsh('events', { ...input, signal }) as AsyncIterable<DshEvent>;
           yield* coalesceText(stream);
         }),
-        approve: os.x['engine-hermes'].runs.approve.handler(async ({ input }) => invokeHermes('runs/approve', input) as Promise<{ ok: boolean }>),
-        stop: os.x['engine-hermes'].runs.stop.handler(async ({ input }) => invokeHermes('runs/stop', input) as Promise<{ status: string }>),
+        wait: os.x['engine-dsh'].wait.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeDsh('wait', input) as Promise<{ status: 'settled' }>;
+        }),
+        cancel: os.x['engine-dsh'].cancel.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeDsh('cancel', input) as Promise<{ cancelled: boolean }>;
+        }),
+        shutdown: os.x['engine-dsh'].shutdown.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeDsh('shutdown', input) as Promise<{ stopped: boolean }>;
+        }),
       },
-      cron: {
-        list: os.x['engine-hermes'].cron.list.handler(async () => invokeHermes('cron/list', {}) as Promise<Record<string, unknown>[]>),
-        create: os.x['engine-hermes'].cron.create.handler(async ({ input }) => invokeHermes('cron/create', input) as Promise<{ id: string }>),
-        delete: os.x['engine-hermes'].cron.delete.handler(async ({ input }) => invokeHermes('cron/delete', input)),
+      'engine-t3': {
+        create: os.x['engine-t3'].create.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeT3('create', input) as Promise<{ sequence: number }>;
+        }),
+        send: os.x['engine-t3'].send.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeT3('send', input) as Promise<{ sequence: number }>;
+        }),
+        events: os.x['engine-t3'].events.handler(async function* ({ input, signal, context }) {
+          requireViewer(context);
+          const stream = await invokeT3('events', { ...input, signal }) as AsyncIterable<T3Event>;
+          yield* coalesceText(stream);
+        }),
+        approval: os.x['engine-t3'].approval.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeT3('approval', input) as Promise<{ sequence: number }>;
+        }),
+        settle: os.x['engine-t3'].settle.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeT3('settle', input) as Promise<{ sequence: number }>;
+        }),
+        stop: os.x['engine-t3'].stop.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeT3('stop', input) as Promise<{ outcome: 'killed' | 'released' | 'releasing' | 'shared'; sharedWithThreadIds: string[] }>;
+        }),
+        diff: os.x['engine-t3'].diff.handler(async ({ input, context }) => {
+          requireViewer(context);
+          return invokeT3('diff', input) as Promise<{ threadId: string; fromTurnCount: number; toTurnCount: number; diff: string }>;
+        }),
+        threads: {
+          list: os.x['engine-t3'].threads.list.handler(async ({ context }) => {
+            requireViewer(context);
+            return invokeT3('threads/list', {}) as Promise<any>;
+          }),
+        },
       },
-    } },
+      'engine-hermes': {
+        skills: {
+          list: os.x['engine-hermes'].skills.list.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('skills/list', input) as Promise<{ name: string; provenance?: string; usage?: number }[]>;
+          }),
+          hub: os.x['engine-hermes'].skills.hub.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('skills/hub', input) as Promise<{ skills: { name: string }[] }>;
+          }),
+          curator: os.x['engine-hermes'].skills.curator.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('skills/curator', input) as Promise<{ enabled: boolean; paused: boolean }>;
+          }),
+          pause: os.x['engine-hermes'].skills.pause.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('skills/pause', input) as Promise<{ ok: boolean; paused: boolean }>;
+          }),
+          run: os.x['engine-hermes'].skills.run.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('skills/run', input) as Promise<{ ok: boolean; pid: number; name: string }>;
+          }),
+          graph: os.x['engine-hermes'].skills.graph.handler(async ({ input, context }) => {
+            requireViewer(context);
+            return invokeHermes('skills/graph', input) as Promise<{ nodes: { id: string; label: string; kind: string }[]; edges: { source: string; target: string }[] }>;
+          }),
+          learn: os.x['engine-hermes'].skills.learn.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('skills/learn', input) as Promise<{ run_id: string }>;
+          }),
+        },
+        profiles: {
+          list: os.x['engine-hermes'].profiles.list.handler(async ({ context }) => {
+            requireViewer(context);
+            return invokeHermes('profiles/list', {}) as Promise<{ profiles: { name: string; path: string }[] }>;
+          }),
+          create: os.x['engine-hermes'].profiles.create.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('profiles/create', input) as Promise<{ ok: boolean; name: string; path: string }>;
+          }),
+          delete: os.x['engine-hermes'].profiles.delete.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('profiles/delete', input);
+          }),
+        },
+        runs: {
+          start: os.x['engine-hermes'].runs.start.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('runs/start', input) as Promise<{ run_id: string }>;
+          }),
+          events: os.x['engine-hermes'].runs.events.handler(async function* ({ input, signal, context }) {
+            requireViewer(context);
+            const stream = await invokeHermes('runs/events', { ...input, signal }) as AsyncIterable<HermesEvent>;
+            yield* coalesceText(stream);
+          }),
+          approve: os.x['engine-hermes'].runs.approve.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('runs/approve', input) as Promise<{ ok: boolean }>;
+          }),
+          stop: os.x['engine-hermes'].runs.stop.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('runs/stop', input) as Promise<{ status: string }>;
+          }),
+        },
+        cron: {
+          list: os.x['engine-hermes'].cron.list.handler(async ({ context }) => {
+            requireViewer(context);
+            return invokeHermes('cron/list', {}) as Promise<Record<string, unknown>[]>;
+          }),
+          create: os.x['engine-hermes'].cron.create.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('cron/create', input) as Promise<{ id: string }>;
+          }),
+          delete: os.x['engine-hermes'].cron.delete.handler(async ({ input, context }) => {
+            requireMember(context);
+            return invokeHermes('cron/delete', input);
+          }),
+        },
+      },
+    },
     extensions: {
-      list: os.extensions.list.handler(async () => Promise.all(kernel.list().map((extension) => withHealth(extension.id)))),
-      enable: os.extensions.enable.handler(async ({ input }) => { await kernel.enable(input.id); if (input.id === 'engine-hermes') await agentApi.sync(); return withHealth(input.id); }),
-      disable: os.extensions.disable.handler(async ({ input }) => { if (input.id === 'engine-hermes') await agentApi.stop(); await kernel.disable(input.id); return withHealth(input.id); }),
+      list: os.extensions.list.handler(async ({ context }) => {
+        requireViewer(context);
+        return Promise.all(kernel.list().map((extension) => withHealth(extension.id)));
+      }),
+      enable: os.extensions.enable.handler(async ({ input, context }) => {
+        requireAdminOrOwner(context);
+        await kernel.enable(input.id);
+        if (input.id === 'engine-hermes') await agentApi.sync();
+        return withHealth(input.id);
+      }),
+      disable: os.extensions.disable.handler(async ({ input, context }) => {
+        requireAdminOrOwner(context);
+        if (input.id === 'engine-hermes') await agentApi.stop();
+        await kernel.disable(input.id);
+        return withHealth(input.id);
+      }),
     },
     vault: {
-      list: os.vault.list.handler(async ({ input }) => {
-        await authorizeVault('list', input.scope);
+      list: os.vault.list.handler(async ({ input, context }) => {
+        await authorizeVault('list', input.scope, context);
         return vault.list(input.scope);
       }),
-      put: os.vault.put.handler(async ({ input }) => {
-        await authorizeVault('put', input.scope);
+      put: os.vault.put.handler(async ({ input, context }) => {
+        await authorizeVault('put', input.scope, context);
         return vault.put(input.scope, input.name, input.value);
       }),
-      rotate: os.vault.rotate.handler(async ({ input }) => {
-        await authorizeVault('rotate', input.scope);
+      rotate: os.vault.rotate.handler(async ({ input, context }) => {
+        await authorizeVault('rotate', input.scope, context);
         return vault.rotate(input.scope, input.name, input.value);
       }),
-      delete: os.vault.delete.handler(async ({ input }) => {
-        await authorizeVault('delete', input.scope);
+      delete: os.vault.delete.handler(async ({ input, context }) => {
+        await authorizeVault('delete', input.scope, context);
         return { deleted: await vault.delete(input.scope, input.name) };
       }),
     },
     computers: {
-      list: os.computers.list.handler(async () => computers.list()),
-      attach: os.computers.attach.handler(async ({ input }) => computers.attach(input.providerId, input.target)),
-      release: os.computers.release.handler(async ({ input }) => ({ released: await computers.release(input.id) })),
-      lease: os.computers.lease.handler(async ({ input }) => computers.lease(input.id, input.holder)),
-      assign: os.computers.assign.handler(async ({ input }) => {
+      list: os.computers.list.handler(async ({ context }) => {
+        requireViewer(context);
+        return computers.list();
+      }),
+      attach: os.computers.attach.handler(async ({ input, context }) => {
+        requireAdminOrOwner(context);
+        return computers.attach(input.providerId, input.target);
+      }),
+      release: os.computers.release.handler(async ({ input, context }) => {
+        requireAdminOrOwner(context);
+        return { released: await computers.release(input.id) };
+      }),
+      lease: os.computers.lease.handler(async ({ input, context }) => {
+        requireAdminOrOwner(context);
+        return computers.lease(input.id, input.holder);
+      }),
+      assign: os.computers.assign.handler(async ({ input, context }) => {
+        requireAdminOrOwner(context);
         computers.assign(input.engine, input.targetId, input.computerId);
         return input;
       }),
-      kill: os.computers.kill.handler(async ({ input }) => computers.kill(input.engaged)),
-      state: os.computers.state.handler(async () => computers.state()),
-      capture: os.computers.capture.handler(async ({ input }) => computers.capture(input.id)),
+      kill: os.computers.kill.handler(async ({ input, context }) => {
+        requireAdminOrOwner(context);
+        return computers.kill(input.engaged);
+      }),
+      state: os.computers.state.handler(async ({ context }) => {
+        requireViewer(context);
+        return computers.state();
+      }),
+      capture: os.computers.capture.handler(async ({ input, context }) => {
+        requireAdminOrOwner(context);
+        return computers.capture(input.id);
+      }),
     },
     events: {
-      subscribe: os.events.subscribe.handler(async function* ({ input, signal }) {
+      subscribe: os.events.subscribe.handler(async function* ({ input, signal, context }) {
+        requireViewer(context);
         yield* kernel.events.subscribe(input.since, signal);
       }),
     },
   };
+
+  const wsTickets = new Map<string, { context: GatewayAuthContext; expiresAt: number }>();
+
   const httpRPC = new HttpRPCHandler(router);
   const wsRPC = new WSRPCHandler(router);
+
   const http = createServer(async (req, res) => {
     try {
       const origin = req.headers.origin;
@@ -232,14 +495,16 @@ export async function startGateway(options: GatewayOptions) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Vary', 'Origin');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] ?? 'content-type');
+        res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] ?? 'content-type, authorization');
         if (req.headers['access-control-request-private-network'] === 'true') {
           res.setHeader('Access-Control-Allow-Private-Network', 'true');
         }
       }
       if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
+
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       const path = url.pathname;
+
       if (path === '/internal/memory/context' || path === '/internal/memory/write') {
         if (!kernel.hasRoute('/x/memory-local/list')) { res.writeHead(404).end(); return; }
         const writing = path.endsWith('/write');
@@ -287,6 +552,7 @@ export async function startGateway(options: GatewayOptions) {
         }
         return;
       }
+
       if (path === '/internal/computers/action') {
         if (req.method !== 'POST') { res.writeHead(405).end(); return; }
         const match = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.authorization ?? '');
@@ -316,13 +582,54 @@ export async function startGateway(options: GatewayOptions) {
         }
         return;
       }
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/memory-local/')) {
-        if (!kernel.hasRoute(path)) { res.writeHead(404).end(); return; }
-        const matched = await httpRPC.handle(req, res);
+
+      if (path === '/auth/ws-ticket') {
+        if (req.method !== 'POST') {
+          res.writeHead(405).end();
+          return;
+        }
+        const context = await resolveAuthContext(auth, req);
+        if (!context?.user) {
+          res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
+        const now = Date.now();
+        for (const [key, val] of wsTickets.entries()) {
+          if (val.expiresAt <= now) wsTickets.delete(key);
+        }
+        const ticket = randomBytes(32).toString('hex');
+        wsTickets.set(ticket, { context, expiresAt: now + 15_000 });
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ticket }));
+        return;
+      }
+
+      if (path.startsWith('/auth/')) {
+        await authNodeHandler(req, res);
+        return;
+      }
+
+      const context = await resolveAuthContext(auth, req);
+      if (!context?.user) {
+        res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+
+      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/')) {
+        if (!kernel.hasRoute(path) && context.role && context.role !== 'viewer') {
+          res.writeHead(404).end();
+          return;
+        }
+        const matched = await httpRPC.handle(req, res, { context: context as GatewayAuthContext });
         if (!matched.matched) res.writeHead(404).end();
         return;
       }
+
       if (kernel.hasRoute(path)) {
+        if (!context?.user) {
+          res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
+        requireViewer(context as GatewayAuthContext);
         if (req.method !== 'GET') {
           res.writeHead(405).end();
           return;
@@ -331,11 +638,18 @@ export async function startGateway(options: GatewayOptions) {
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify(result));
         return;
       }
+
       if (path.startsWith('/x/')) {
         res.writeHead(404).end();
         return;
       }
-      const matched = await httpRPC.handle(req, res);
+
+      if (req.method === 'POST' && !context?.user) {
+        res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+
+      const matched = await httpRPC.handle(req, res, { context: context as GatewayAuthContext });
       if (!matched.matched) res.writeHead(404).end();
     } catch (error) {
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
@@ -344,11 +658,73 @@ export async function startGateway(options: GatewayOptions) {
   });
 
   const wss = new WebSocketServer({ noServer: true });
-  http.on('upgrade', (req, socket, head) => {
-    if (req.url !== '/ws') { socket.destroy(); return; }
-    wss.handleUpgrade(req, socket, head, (ws) => { wss.emit('connection', ws, req); });
+  http.on('upgrade', async (req, socket, head) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (url.pathname !== '/ws') {
+      socket.destroy();
+      return;
+    }
+    const origin = req.headers.origin;
+    if (origin && !/^(?:https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?|https?:\/\/tauri\.localhost|tauri:\/\/localhost)$/.test(origin)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    let context: GatewayAuthContext | null = null;
+    let selectedProtocol: string | undefined;
+
+    const subprotocols = (req.headers['sec-websocket-protocol'] ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const bearerProto = subprotocols.find((p) => p.startsWith('bearer.'));
+    if (bearerProto) {
+      const token = bearerProto.slice(7);
+      context = (await resolveAuthContext(auth, {
+        headers: { authorization: `Bearer ${token}` },
+      })) as GatewayAuthContext;
+      if (context?.user) {
+        selectedProtocol = bearerProto;
+      } else {
+        context = null;
+      }
+    }
+
+    if (!context) {
+      const ticket = url.searchParams.get('ticket');
+      if (ticket) {
+        const entry = wsTickets.get(ticket);
+        if (entry) {
+          wsTickets.delete(ticket);
+          if (Date.now() <= entry.expiresAt) {
+            context = entry.context;
+          }
+        }
+      }
+    }
+
+    if (!context?.user) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    const upgradeHeaders: string[] = [];
+    if (selectedProtocol) {
+      upgradeHeaders.push(`Sec-WebSocket-Protocol: ${selectedProtocol}`);
+    }
+
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      (ws as any).authContext = context;
+      wss.emit('connection', ws, req);
+    });
   });
-  wss.on('connection', (ws) => { void wsRPC.upgrade(ws); });
+
+  wss.on('connection', (ws: WebSocket & { authContext?: GatewayAuthContext }) => {
+    void wsRPC.upgrade(ws, { context: ws.authContext! });
+  });
+
   try {
     await new Promise<void>((resolveListen, reject) => {
       http.once('error', reject);
@@ -358,20 +734,29 @@ export async function startGateway(options: GatewayOptions) {
     await kernel.close();
     throw error;
   }
+
   const address = http.address();
   if (!address || typeof address === 'string') throw new Error('Unexpected gateway address');
   gatewayPort = address.port;
+  if (auth.options) {
+    auth.options.baseURL = `http://127.0.0.1:${gatewayPort}`;
+  }
+
   return {
     port: address.port,
     kernel,
     vault,
     computers,
+    desktopToken,
+    auth,
+    db,
     async close() {
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((done) => wss.close(() => done()));
       await new Promise<void>((done) => http.close(() => done()));
       await agentApi.stop();
       await kernel.close();
+      await db.close();
     },
   };
 }

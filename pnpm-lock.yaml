@@ -175,6 +175,9 @@ importers:
       '@neometaharness/agents':
         specifier: workspace:*
         version: link:../../packages/agents
+      '@neometaharness/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@neometaharness/computers':
         specifier: workspace:*
         version: link:../../packages/computers
@@ -199,6 +202,9 @@ importers:
       '@orpc/server':
         specifier: 1.16.2
         version: 1.16.2(@opentelemetry/api@1.10.0)(ws@8.18.3)
+      better-auth:
+        specifier: 1.7.25
+        version: 1.7.25(@opentelemetry/api@1.10.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       ws:
         specifier: 8.18.3
         version: 8.18.3

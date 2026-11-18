@@ -111,7 +111,11 @@ async function trial(number) {
     status = await eventually(async () => JSON.parse(await readFile(statusFile, 'utf8')), 'Tauri gateway readiness', 250);
     assert.equal(status.appPid, desktop.pid);
     const base = `http://127.0.0.1:${status.port}`;
-    assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 404);
+    const token = (await eventually(async () => {
+      const text = await readFile(join(directory, 'state', 'desktop.token'), 'utf8');
+      return text.trim() || undefined;
+    }, 'desktop.token file')).trim();
+    assert.equal((await fetch(`${base}/x/sample-ts/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 404);
 
     // Rows = extensions the gateway discovers (every extensions/*/neo.extension.json), not a fixed number.
     const expectedRows = readdirSync(join(repoDir, 'extensions')).filter((name) => existsSync(join(repoDir, 'extensions', name, 'neo.extension.json'))).length;
@@ -123,22 +127,22 @@ async function trial(number) {
 
     await view.evaluate('document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]").click()');
     await view.eventually('document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]")?.checked === true', 'TS enabled');
-    assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 200);
+    assert.equal((await fetch(`${base}/x/sample-ts/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
 
     await view.evaluate('document.querySelector("[data-testid=extension-sample-py] input[type=checkbox]").click()');
     await view.eventually('document.querySelector("[data-testid=extension-sample-py] input[type=checkbox]")?.checked === true', 'Python enabled');
-    assert.equal((await fetch(`${base}/x/sample-py/hello`)).status, 200);
+    assert.equal((await fetch(`${base}/x/sample-py/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
     processTree = descendants(desktop.pid);
     assert.ok(processTree.some((entry) => entry.ProcessId === status.gatewayPid && /node/i.test(entry.Name)), 'Node gateway tracked');
     assert.ok(processTree.some((entry) => /python/i.test(entry.Name)), 'Python worker tracked');
 
     await view.evaluate('document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]").click()');
     await view.eventually('document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]")?.checked === false', 'TS disabled');
-    assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 404);
-    assert.equal((await fetch(`${base}/x/sample-py/hello`)).status, 200);
+    assert.equal((await fetch(`${base}/x/sample-ts/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 404);
+    assert.equal((await fetch(`${base}/x/sample-py/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
     await view.evaluate('document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]").click()');
     await view.eventually('document.querySelector("[data-testid=extension-sample-ts] input[type=checkbox]")?.checked === true', 'TS reenabled');
-    assert.equal((await fetch(`${base}/x/sample-ts/hello`)).status, 200);
+    assert.equal((await fetch(`${base}/x/sample-ts/hello`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
 
     closeWindow(desktop.pid);
     await eventually(() => !alive(desktop.pid), 'desktop exit');

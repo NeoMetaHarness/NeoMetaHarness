@@ -5,10 +5,16 @@ import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type ExtensionStatus, type GatewayEvent } from '@neometaharness/contracts';
 import { Switch } from '@neometaharness/ui';
-import { gatewayUrl } from '../config';
+import { gatewayUrl, gatewayToken } from '../config';
 
 type Client = ContractRouterClient<typeof neoContract>;
-const http = createORPCClient<Client>(new HttpLink({ url: gatewayUrl() }));
+const http = createORPCClient<Client>(new HttpLink({
+  url: gatewayUrl(),
+  headers: () => {
+    const token = gatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  },
+}));
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -39,7 +45,9 @@ export default function Extensions() {
     const subscribe = async () => {
       let firstConnection = true;
       while (!disposed) {
-        socket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws');
+        const token = gatewayToken();
+        const wsUrl = gatewayUrl().replace(/^http/, 'ws') + '/ws';
+        socket = token ? new WebSocket(wsUrl, ['bearer.' + token]) : new WebSocket(wsUrl);
         const stream = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
         try {
           await new Promise<void>((resolve, reject) => {

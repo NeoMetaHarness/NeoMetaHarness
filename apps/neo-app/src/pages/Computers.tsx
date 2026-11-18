@@ -5,12 +5,18 @@ import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type GatewayEvent } from '@neometaharness/contracts';
 import { Button } from '@neometaharness/ui';
-import { gatewayUrl } from '../config';
+import { gatewayUrl, gatewayToken } from '../config';
 import './computers.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Row = Awaited<ReturnType<Client['computers']['list']>>[number];
-const http = createORPCClient<Client>(new HttpLink({ url: gatewayUrl() }));
+const http = createORPCClient<Client>(new HttpLink({
+  url: gatewayUrl(),
+  headers: () => {
+    const token = gatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  },
+}));
 
 export default function Computers() {
   const [computers, setComputers] = useState<Row[]>([]);
@@ -44,7 +50,8 @@ export default function Computers() {
     let socket: WebSocket | undefined;
     const subscribe = async () => {
       while (!closed) {
-        socket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws');
+        const token = gatewayToken();
+        socket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws', token ? ['bearer.' + token] : undefined);
         const client = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
         try {
           await new Promise<void>((resolve, reject) => {

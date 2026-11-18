@@ -1,3 +1,5 @@
+import { writeFileSync, linkSync, unlinkSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Kysely } from 'kysely';
 import { betterAuth } from 'better-auth';
@@ -7,6 +9,8 @@ import { apiKey } from '@better-auth/api-key';
 import { getMigrations } from 'better-auth/db/migration';
 import { createNodeSqliteKysely } from '@neometaharness/db';
 import crypto from 'node:crypto';
+
+export type NeoAuth = any;
 
 export type NeoRole = 'owner' | 'admin' | 'member' | 'viewer';
 
@@ -34,10 +38,16 @@ export interface CreateNeoAuthOptions {
   db?: Kysely<any>;
   sqlite?: DatabaseSync;
   baseURL?: string;
+  basePath?: string;
   secret?: string;
+  trustedOrigins?: string[];
 }
 
 export function createNeoAuth(options: CreateNeoAuthOptions = {}): any {
+  if (!options?.secret) {
+    throw new Error('options.secret is required for createNeoAuth');
+  }
+
   let kysely = options.db;
   let sqlite = options.sqlite;
   if (!kysely) {
@@ -47,7 +57,17 @@ export function createNeoAuth(options: CreateNeoAuthOptions = {}): any {
 
   const auth = betterAuth({
     baseURL: options.baseURL ?? 'http://127.0.0.1:3000',
-    secret: options.secret ?? 'neo-meta-harness-auth-secret-key-32-chars-min',
+    basePath: options.basePath ?? '/auth',
+    secret: options.secret,
+    trustedOrigins: options.trustedOrigins ?? [
+      'http://127.0.0.1:*',
+      'http://localhost:*',
+      'https://tauri.localhost',
+      'tauri://localhost',
+    ],
+    advanced: {
+      disableCSRFCheck: true,
+    },
     database: {
       db: kysely,
       type: 'sqlite',
@@ -65,6 +85,9 @@ export function createNeoAuth(options: CreateNeoAuthOptions = {}): any {
       bearer() as any,
       apiKey({
         enableMetadata: true,
+        rateLimit: {
+          enabled: false,
+        },
         keyExpiration: {
           minExpiresIn: 0,
           maxExpiresIn: 365,
@@ -85,13 +108,36 @@ export interface BootstrapResult {
   user: { id: string; email: string; name?: string };
   workspace: { id: string; name: string; slug: string };
   token: string;
+  sessionToken: string;
   session: { id: string; token: string; expiresAt: Date | string };
   bootstrapped: boolean;
+}
+
+
+function saveDesktopToken(dataDir: string | undefined, token: string): void {
+  if (!dataDir) return;
+  mkdirSync(dataDir, { recursive: true });
+  const tokenPath = join(dataDir, 'desktop.token');
+  const tmpPath = `${tokenPath}.${crypto.randomUUID()}.tmp`;
+  writeFileSync(tmpPath, token, { encoding: 'utf8', mode: 0o600 });
+  try {
+    linkSync(tmpPath, tokenPath);
+  } catch (err: any) {
+    if (err?.code === 'EEXIST') {
+      try { unlinkSync(tokenPath); } catch {}
+      linkSync(tmpPath, tokenPath);
+    } else {
+      throw err;
+    }
+  } finally {
+    try { unlinkSync(tmpPath); } catch {}
+  }
 }
 
 export async function bootstrapDesktopAuth(
   auth: any,
   options: {
+    dataDir?: string;
     email?: string;
     password?: string;
     name?: string;
@@ -100,11 +146,17 @@ export async function bootstrapDesktopAuth(
   } = {}
 ): Promise<BootstrapResult> {
   const kysely: Kysely<any> = auth.kysely;
-  const email = options.email ?? 'local.owner@neo.local';
-  const password = options.password ?? 'DesktopOwnerPass!123';
-  const name = options.name ?? 'Desktop Local Owner';
-  const workspaceName = options.workspaceName ?? 'Local Workspace';
-  const workspaceSlug = options.workspaceSlug ?? 'local-workspace';
+  const email = options.email ?? 'owner@neo.local';
+  const password = options.password ?? crypto.randomBytes(32).toString('hex');
+  const name = options.name ?? 'Desktop Owner';
+  const workspaceName = options.workspaceName ?? 'Default Workspace';
+  const workspaceSlug = options.workspaceSlug ?? 'default';
+
+  // Revoke prior 'Neo-Desktop/1.0' sessions so session table doesn't grow forever
+  await kysely
+    .deleteFrom('session')
+    .where('userAgent', '=', 'Neo-Desktop/1.0')
+    .execute();
 
   // Check if any user already exists
   const existingUsers = await kysely.selectFrom('user').selectAll().execute();
@@ -134,12 +186,14 @@ export async function bootstrapDesktopAuth(
       })
       .execute();
 
+    saveDesktopToken(options.dataDir, sessionToken);
     return {
       user: { id: ownerUser.id, email: ownerUser.email, name: ownerUser.name },
       workspace: org
         ? { id: org.id, name: org.name, slug: org.slug }
         : { id: 'default', name: 'Default', slug: 'default' },
       token: sessionToken,
+      sessionToken,
       session: {
         id: sessionId,
         token: sessionToken,
@@ -149,7 +203,7 @@ export async function bootstrapDesktopAuth(
     };
   }
 
-  // First time bootstrap: create owner user
+  // First time bootstrap: create owner user with random unguessable password
   const signupRes = await auth.api.signUpEmail({
     body: {
       email,
@@ -160,6 +214,13 @@ export async function bootstrapDesktopAuth(
 
   const ownerUser = signupRes.user;
   const ownerToken = signupRes.token;
+
+  // Mark session with userAgent: 'Neo-Desktop/1.0'
+  await kysely
+    .updateTable('session')
+    .set({ userAgent: 'Neo-Desktop/1.0' })
+    .where('token', '=', ownerToken)
+    .execute();
 
   // Create organization
   const org = await auth.api.createOrganization({
@@ -176,24 +237,47 @@ export async function bootstrapDesktopAuth(
     headers: new Headers({ authorization: `Bearer ${ownerToken}` }),
   });
 
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+  saveDesktopToken(options.dataDir, ownerToken);
   return {
     user: { id: ownerUser.id, email: ownerUser.email, name: ownerUser.name },
     workspace: { id: org.id, name: org.name, slug: org.slug },
     token: ownerToken,
-    session: signupRes.session,
+    sessionToken: ownerToken,
+    session: {
+      id: ownerUser.id,
+      token: ownerToken,
+      expiresAt,
+    },
     bootstrapped: true,
   };
 }
 
+function toHeaders(input: any): Headers {
+  if (input instanceof Headers) return input;
+  if (input?.headers instanceof Headers) return input.headers;
+  const raw = input?.headers ?? input ?? {};
+  const headers = new Headers();
+  for (const [key, val] of Object.entries(raw)) {
+    if (val === undefined || val === null) continue;
+    if (Array.isArray(val)) {
+      for (const item of val) headers.append(key, item);
+    } else {
+      headers.set(key, String(val));
+    }
+  }
+  return headers;
+}
+
 export async function resolveAuthContext(
   auth: any,
-  headers: Headers,
-  options: {
+  headersInput: any,
+  _options: {
     mode?: string;
-    isLoopback?: boolean;
-    bootstrapContext?: NeoAuthContext | null;
   } = {}
 ): Promise<NeoAuthContext> {
+  const headers = toHeaders(headersInput);
   const kysely: Kysely<any> = auth.kysely;
   const authHeader = headers.get('authorization');
   const apiKeyHeader = headers.get('x-api-key');
@@ -209,7 +293,10 @@ export async function resolveAuthContext(
         const key = verifyRes.key;
         const meta = (key.metadata ?? {}) as Record<string, unknown>;
         const workspaceId = (meta.workspaceId as string) ?? (key.organizationId as string) ?? null;
-        const role = (meta.role as NeoRole) ?? 'member';
+        const role = (meta.role as NeoRole) ?? null;
+        if (!role) {
+          return { user: null, session: null, workspaceId: null, role: null };
+        }
         return {
           user: { id: key.userId ?? 'api-key-user', email: '', name: key.name },
           session: null,
@@ -246,7 +333,9 @@ export async function resolveAuthContext(
               .executeTakeFirst()) as any;
             if (firstMember) {
               workspaceId = firstMember.organizationId;
-              role = (firstMember.role as NeoRole) ?? 'member';
+              role = (firstMember.role as NeoRole) ?? null;
+            } else {
+              role = null;
             }
           } else {
             const member = (await kysely
@@ -255,7 +344,7 @@ export async function resolveAuthContext(
               .where('userId', '=', sessionRes.user.id)
               .where('organizationId', '=', workspaceId)
               .executeTakeFirst()) as any;
-            role = (member?.role as NeoRole) ?? 'member';
+            role = member ? ((member.role as NeoRole) ?? null) : null;
           }
         }
 
@@ -287,7 +376,10 @@ export async function resolveAuthContext(
         const key = verifyRes.key;
         const meta = (key.metadata ?? {}) as Record<string, unknown>;
         const workspaceId = (meta.workspaceId as string) ?? (key.organizationId as string) ?? null;
-        const role = (meta.role as NeoRole) ?? 'member';
+        const role = (meta.role as NeoRole) ?? null;
+        if (!role) {
+          return { user: null, session: null, workspaceId: null, role: null };
+        }
         return {
           user: { id: key.userId ?? 'api-key-user', email: '', name: key.name },
           session: null,
@@ -323,7 +415,9 @@ export async function resolveAuthContext(
               .executeTakeFirst()) as any;
             if (firstMember) {
               workspaceId = firstMember.organizationId;
-              role = (firstMember.role as NeoRole) ?? 'member';
+              role = (firstMember.role as NeoRole) ?? null;
+            } else {
+              role = null;
             }
           } else {
             const member = (await kysely
@@ -332,7 +426,7 @@ export async function resolveAuthContext(
               .where('userId', '=', sessionRes.user.id)
               .where('organizationId', '=', workspaceId)
               .executeTakeFirst()) as any;
-            role = (member?.role as NeoRole) ?? 'member';
+            role = member ? ((member.role as NeoRole) ?? null) : null;
           }
         }
 
@@ -355,11 +449,66 @@ export async function resolveAuthContext(
     }
   }
 
-  // 4. Desktop mode loopback fallback (for unauthenticated local calls)
-  const isDesktop = (options.mode ?? process.env.NEO_MODE ?? 'desktop') === 'desktop';
-  if (isDesktop && options.isLoopback && options.bootstrapContext) {
-    return options.bootstrapContext;
-  }
-
+  // No ambient authority. Unauthenticated requests have null identity.
   return { user: null, session: null, workspaceId: null, role: null };
+}
+
+export function requireViewer(context?: NeoAuthContext): void {
+  if (!context?.user) {
+    const error: any = new Error('Authentication required');
+    error.code = 'UNAUTHORIZED';
+    error.status = 401;
+    throw error;
+  }
+  if (!context.role) {
+    const error: any = new Error('Workspace membership required');
+    error.code = 'FORBIDDEN';
+    error.status = 403;
+    throw error;
+  }
+}
+
+export function requireMember(context?: NeoAuthContext): void {
+  if (!context?.user) {
+    const error: any = new Error('Authentication required');
+    error.code = 'UNAUTHORIZED';
+    error.status = 401;
+    throw error;
+  }
+  if (!context.role || context.role === 'viewer') {
+    const error: any = new Error('Member role required');
+    error.code = 'FORBIDDEN';
+    error.status = 403;
+    throw error;
+  }
+}
+
+export function requireAdminOrOwner(context?: NeoAuthContext): void {
+  if (!context?.user) {
+    const error: any = new Error('Authentication required');
+    error.code = 'UNAUTHORIZED';
+    error.status = 401;
+    throw error;
+  }
+  if (!context.role || (context.role !== 'owner' && context.role !== 'admin')) {
+    const error: any = new Error('Admin or owner role required');
+    error.code = 'FORBIDDEN';
+    error.status = 403;
+    throw error;
+  }
+}
+
+export function requireOwner(context?: NeoAuthContext): void {
+  if (!context?.user) {
+    const error: any = new Error('Authentication required');
+    error.code = 'UNAUTHORIZED';
+    error.status = 401;
+    throw error;
+  }
+  if (!context.role || context.role !== 'owner') {
+    const error: any = new Error('Owner role required');
+    error.code = 'FORBIDDEN';
+    error.status = 403;
+    throw error;
+  }
 }

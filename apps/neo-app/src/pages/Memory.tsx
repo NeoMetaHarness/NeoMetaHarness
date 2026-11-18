@@ -4,12 +4,18 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
 import { Button } from '@neometaharness/ui';
-import { gatewayUrl } from '../config';
+import { gatewayUrl, gatewayToken } from '../config';
 import './memory.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Entry = Awaited<ReturnType<Client['x']['memory-local']['list']>>[number];
-const rpc = createORPCClient<Client>(new RPCLink({ url: gatewayUrl() }));
+const rpc = createORPCClient<Client>(new RPCLink({
+  url: gatewayUrl(),
+  headers: () => {
+    const token = gatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  },
+}));
 const memory = rpc.x['memory-local'];
 const workspace = 'default';
 

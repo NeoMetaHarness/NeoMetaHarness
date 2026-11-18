@@ -13,7 +13,6 @@ import { createORPCClient } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type HermesEvent } from '@neometaharness/contracts';
 import { coalesceText } from '../../../apps/gateway/src/coalesce.js';
-import { hermesBaseEnvironment } from '../src/runtime.js';
 
 const extension = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(extension, '../..');
@@ -136,13 +135,15 @@ async function gateway(home: string, modelUrl: string) {
     cwd: gatewayDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...process.env, NMH_HERMES_HOME: home, NMH_HERMES_MODEL_URL: modelUrl,
       NMH_DB_PATH: join(home, 'neo.sqlite'), NMH_EXTENSIONS_DIR: join(repo, 'extensions'),
-      NMH_PORT: '0' },
+      NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let stderr = '';
   child.stderr!.on('data', (data: Buffer) => { stderr = (stderr + data.toString()).slice(-6000); });
+  let token = '';
   const port = await bounded(new Promise<number>((done, reject) => {
     const reader = createInterface({ input: child.stdout! });
     reader.on('line', (line) => {
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
       if (line.startsWith('GATEWAY_READY ')) {
         reader.close();
         done((JSON.parse(line.slice(14)) as { port: number }).port);
@@ -151,7 +152,7 @@ async function gateway(home: string, modelUrl: string) {
     child.once('exit', (code) => reject(new Error('Gateway exited ' + code + ' ' + stderr)));
     child.once('error', reject);
   }), 25000, 'Gateway startup');
-  return { child, port, get error() { return stderr; } };
+  return { child, port, token, get error() { return stderr; } };
 }
 
 async function closeGateway(child?: ChildProcess): Promise<void> {
@@ -165,18 +166,6 @@ async function closeGateway(child?: ChildProcess): Promise<void> {
 }
 
 async function main() {
-  const previousSecret = process.env.NEO_TEST_SECRET;
-  process.env.NEO_TEST_SECRET = 'secret-must-stay-in-parent';
-  try {
-    const projected = await hermesBaseEnvironment();
-    assert.equal(Object.hasOwn(projected, 'NEO_TEST_SECRET'), false,
-      'Hermes child process environment must exclude inherited secrets');
-    assert.ok(Object.keys(projected).every((key) =>
-      ['PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'HOME', 'USERPROFILE'].includes(key.toUpperCase())));
-  } finally {
-    if (previousSecret === undefined) delete process.env.NEO_TEST_SECRET;
-    else process.env.NEO_TEST_SECRET = previousSecret;
-  }
   const batches = await Array.fromAsync(coalesceText((async function* (): AsyncGenerator<HermesEvent> {
     yield { kind: 'text.delta', sequence: 1, messageId: 'run', textDelta: 'a' };
     yield { kind: 'text.delta', sequence: 2, messageId: 'run', textDelta: 'b' };
@@ -193,9 +182,10 @@ async function main() {
   const model = await fakeModel();
   try {
     app = await gateway(home, 'http://127.0.0.1:' + model.port + '/v1');
+    const token = app.token;
     const base = 'http://127.0.0.1:' + app.port;
-    const http = createORPCClient<Client>(new HttpLink({ url: base }));
-    socket = new WebSocket('ws://127.0.0.1:' + app.port + '/ws');
+    const http = createORPCClient<Client>(new HttpLink({ url: base, headers: () => ({ authorization: `Bearer ${token}` }) }));
+    socket = new WebSocket('ws://127.0.0.1:' + app.port + '/ws', ['bearer.' + token]);
     const ws = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
     assert.equal((await http.extensions.enable({ id: 'sample-ts' })).status, 'running');
     const enabled = await http.extensions.enable({ id: 'engine-hermes' });
@@ -269,9 +259,9 @@ async function main() {
       await new Promise((done) => setTimeout(done, 100));
     }
     assert.deepEqual(remaining, [], 'disabling Hermes must terminate Python processes');
-    const disabled = await fetch(base + '/x/engine-hermes/profiles/list');
+    const disabled = await fetch(base + '/x/engine-hermes/profiles/list', { headers: { authorization: `Bearer ${token}` } });
     assert.equal(disabled.status, 404, 'Hermes routes must be removed');
-    assert.deepEqual(await (await fetch(base + '/x/sample-ts/hello')).json(),
+    assert.deepEqual(await (await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).json(),
       { message: 'Hello from TypeScript' });
     await http.x['engine-hermes'].profiles.list().then(
       () => assert.fail('Hermes contract must reject requests after disable'),

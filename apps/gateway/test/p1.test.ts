@@ -16,21 +16,25 @@ const repo = resolve(directory, '../..');
 const cache = join(directory, '.cache');
 
 type Client = ContractRouterClient<typeof neoContract>;
-interface RunningGateway { port: number; child: ChildProcess; close(): Promise<void> }
+interface RunningGateway { port: number; token: string; child: ChildProcess; close(): Promise<void> }
 
 async function start(dbFile: string): Promise<RunningGateway> {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: directory,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
-    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0' },
+    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let stderr = '';
   child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+  let token = '';
   const port = await new Promise<number>((done, reject) => {
     const timer = setTimeout(() => reject(new Error(`Gateway startup timeout: ${stderr}`)), 15000);
     const reader = createInterface({ input: child.stdout! });
     reader.on('line', (line) => {
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) {
+        token = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
+      }
       if (line.startsWith('GATEWAY_READY ')) {
         clearTimeout(timer);
         reader.close();
@@ -42,6 +46,7 @@ async function start(dbFile: string): Promise<RunningGateway> {
   });
   return {
     port,
+    token,
     child,
     async close() {
       if (child.exitCode !== null) return;
@@ -53,14 +58,16 @@ async function start(dbFile: string): Promise<RunningGateway> {
   };
 }
 
-function connected(port: number) {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+function connected(port: number, token: string) {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, ['bearer.' + token]);
   const client = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
   return { socket, client };
 }
 
-async function route(port: number, id: string) {
-  return fetch(`http://127.0.0.1:${port}/x/${id}/hello`);
+async function route(port: number, id: string, token: string) {
+  return fetch(`http://127.0.0.1:${port}/x/${id}/hello`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
 }
 
 function alive(pid: number): boolean {
@@ -81,9 +88,12 @@ async function trial(index: number): Promise<void> {
   let gateway: RunningGateway | undefined;
   try {
     gateway = await start(db);
-    const { socket, client } = connected(gateway.port);
+    const { socket, client } = connected(gateway.port, gateway.token);
     try {
-      const http = createORPCClient<Client>(new HttpLink({ url: `http://127.0.0.1:${gateway.port}` }));
+      const http = createORPCClient<Client>(new HttpLink({
+        url: `http://127.0.0.1:${gateway.port}`,
+        headers: () => ({ authorization: `Bearer ${gateway!.token}` }),
+      }));
       const before = await http.extensions.list();
       assert.ok(before.some((extension) => extension.id === 'sample-ts'));
       assert.ok(before.some((extension) => extension.id === 'sample-py'));
@@ -102,18 +112,18 @@ async function trial(index: number): Promise<void> {
       assert.equal(py.status, 'running');
       const pid = py.health?.pid;
       assert.ok(pid && alive(pid), 'Python process is alive');
-      assert.equal((await route(gateway.port, 'sample-ts')).status, 200);
-      assert.deepEqual(await (await route(gateway.port, 'sample-ts')).json(), { message: 'Hello from TypeScript' });
-      assert.deepEqual(await (await route(gateway.port, 'sample-py')).json(), { message: 'Hello from Python' });
+      assert.equal((await route(gateway.port, 'sample-ts', gateway.token)).status, 200);
+      assert.deepEqual(await (await route(gateway.port, 'sample-ts', gateway.token)).json(), { message: 'Hello from TypeScript' });
+      assert.deepEqual(await (await route(gateway.port, 'sample-py', gateway.token)).json(), { message: 'Hello from Python' });
 
       await client.extensions.disable({ id: 'sample-ts' });
-      assert.equal((await route(gateway.port, 'sample-ts')).status, 404);
-      assert.equal((await route(gateway.port, 'sample-py')).status, 200);
+      assert.equal((await route(gateway.port, 'sample-ts', gateway.token)).status, 404);
+      assert.equal((await route(gateway.port, 'sample-py', gateway.token)).status, 200);
       assert.equal((await client.extensions.list()).find((row) => row.id === 'sample-py')?.health?.ok, true);
 
       await client.extensions.disable({ id: 'sample-py' });
       await eventually(() => !alive(pid), `Python process ${pid} exited`);
-      assert.equal((await route(gateway.port, 'sample-py')).status, 404);
+      assert.equal((await route(gateway.port, 'sample-py', gateway.token)).status, 404);
 
       await client.extensions.enable({ id: 'sample-ts' });
       await client.extensions.enable({ id: 'sample-py' });
@@ -129,12 +139,12 @@ async function trial(index: number): Promise<void> {
 
     await gateway.close();
     gateway = await start(db);
-    const connection = connected(gateway.port);
+    const connection = connected(gateway.port, gateway.token);
     try {
       const statuses = await connection.client.extensions.list();
       assert.deepEqual(statuses.filter((row) => row.id.startsWith('sample-')).map((row) => row.status), ['running', 'running']);
-      assert.deepEqual(await (await route(gateway.port, 'sample-ts')).json(), { message: 'Hello from TypeScript' });
-      assert.deepEqual(await (await route(gateway.port, 'sample-py')).json(), { message: 'Hello from Python' });
+      assert.deepEqual(await (await route(gateway.port, 'sample-ts', gateway.token)).json(), { message: 'Hello from TypeScript' });
+      assert.deepEqual(await (await route(gateway.port, 'sample-py', gateway.token)).json(), { message: 'Hello from Python' });
       console.log(`P1_PERSISTENCE PASS trial=${index} enabled=2`);
     } finally { connection.socket.close(); }
   } finally {

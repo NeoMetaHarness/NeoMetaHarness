@@ -82,14 +82,16 @@ async function gateway(state: string, url: string, session: string) {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: gatewayDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...process.env, NMH_DB_PATH: join(state, 'neo.sqlite'), NMH_EXTENSIONS_DIR: join(repo, 'extensions'),
-      NMH_PORT: '0', NMH_T3_URL: url, NMH_T3_SCOPED_SESSION: session },
+      NMH_PORT: '0', NMH_T3_URL: url, NMH_T3_SCOPED_SESSION: session, NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let stderr = '';
   child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString().slice(0, 3000); });
+  let token = '';
   const ready = await new Promise<number>((done, reject) => {
     const timer = setTimeout(() => reject(new Error(`Gateway start timeout: ${stderr}`)), 20000);
     const reader = createInterface({ input: child.stdout! });
     reader.on('line', (line) => {
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
       if (line.startsWith('GATEWAY_READY ')) {
         clearTimeout(timer);
         reader.close();
@@ -99,7 +101,7 @@ async function gateway(state: string, url: string, session: string) {
     child.once('error', reject);
     child.once('exit', (code) => reject(new Error(`Gateway exited ${code}: ${stderr}`)));
   });
-  return { child, ready, get error() { return stderr; } };
+  return { child, ready, token, get error() { return stderr; } };
 }
 
 async function within<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -198,9 +200,10 @@ async function main() {
     console.log(setupOutput);
 
     app = await gateway(temp, url, session);
+    const token = app.token;
     const base = `http://127.0.0.1:${app.ready}`;
-    const http = createORPCClient<Client>(new HttpLink({ url: base }));
-    socket = new WebSocket(`ws://127.0.0.1:${app.ready}/ws`);
+    const http = createORPCClient<Client>(new HttpLink({ url: base, headers: () => ({ authorization: `Bearer ${token}` }) }));
+    socket = new WebSocket(`ws://127.0.0.1:${app.ready}/ws`, ['bearer.' + token]);
     const ws = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
     assert.equal((await http.extensions.enable({ id: 'sample-ts' })).status, 'running');
     assert.equal((await http.extensions.enable({ id: 'engine-t3' })).status, 'running', app.error);
@@ -266,10 +269,10 @@ async function main() {
     }
     assert.ok(socketClosed, 'disabling the extension must close its T3 WebSocket');
     const disabled = await fetch(base + '/x/engine-t3/create', { method: 'POST',
-      headers: { 'content-type': 'application/json' }, body: '{}' });
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: '{}' });
     assert.equal(disabled.status, 404, 'disabled engine route must disappear');
     assert.equal((await http.extensions.list()).find((entry) => entry.id === 'engine-t3')?.status, 'disabled');
-    assert.deepEqual(await (await fetch(base + '/x/sample-ts/hello')).json(), { message: 'Hello from TypeScript' });
+    assert.deepEqual(await (await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).json(), { message: 'Hello from TypeScript' });
     console.log(`T3_GATEWAY_E2E PASS ordered=${sequences.length} chunks=${text.length} approvals=declined settled=true socket=closed disable=404 sample=healthy`);
   } finally {
     socket?.close();

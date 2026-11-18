@@ -5,19 +5,22 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
+    "test": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts test/vault-rpc.test.ts test/auth-gateway.test.ts && tsc --noEmit",
     "test:p1": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts test/vault-rpc.test.ts && tsc --noEmit"
   },
   "dependencies": {
+    "@neometaharness/agents": "workspace:*",
+    "@neometaharness/auth": "workspace:*",
     "@neometaharness/contracts": "workspace:*",
     "@neometaharness/db": "workspace:*",
     "@neometaharness/kernel": "workspace:*",
     "@neometaharness/computers": "workspace:*",
     "@neometaharness/vault": "workspace:*",
+    "@orpc/client": "1.16.2",
     "@orpc/contract": "1.16.2",
     "@orpc/server": "1.16.2",
-    "@orpc/client": "1.16.2",
-    "ws": "8.18.3",
-    "@neometaharness/agents": "workspace:*"
+    "better-auth": "1.7.25",
+    "ws": "8.18.3"
   },
   "devDependencies": {
     "@types/node": "22.18.13",

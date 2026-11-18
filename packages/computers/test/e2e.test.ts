@@ -104,10 +104,11 @@ async function main(): Promise<void> {
   let gateway: Awaited<ReturnType<typeof startGateway>> | undefined;
   let socket: WebSocket | undefined;
   try {
-    gateway = await startGateway({ databaseFile: join(temp, 'neo.sqlite'), extensionsDir: extensions });
+    gateway = await startGateway({ databaseFile: join(temp, 'neo.sqlite'), extensionsDir: extensions, mode: 'desktop' });
+    const token = gateway.desktopToken;
     const url = `http://127.0.0.1:${gateway.port}`;
-    const http = createORPCClient<Client>(new HttpLink({ url }));
-    socket = new WebSocket(`ws://127.0.0.1:${gateway.port}/ws`);
+    const http = createORPCClient<Client>(new HttpLink({ url, headers: { authorization: `Bearer ${token}` } }));
+    socket = new WebSocket(`ws://127.0.0.1:${gateway.port}/ws`, ['bearer.' + token]);
     const ws = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
 
     assert.equal((await http.extensions.enable({ id: 'sample-ts' })).status, 'running');
@@ -138,7 +139,7 @@ async function main(): Promise<void> {
     assert.deepEqual(await bounded(http.x['engine-dsh'].wait({ sessionId: dsh.sessionId }), 'DSH computer run'),
       { status: 'settled' });
 
-    const calls = await (await fetch(`${url}/x/computer-fake/calls`)).json() as { computerId: string; action: string }[];
+    const calls = await (await fetch(`${url}/x/computer-fake/calls`, { headers: { authorization: `Bearer ${token}` } })).json() as { computerId: string; action: string }[];
     assert.deepEqual(calls.map((call) => call.action), ['click', 'capture', 'click', 'capture']);
     assert.ok(calls.every((call) => call.computerId === 'shared-screen'));
     const notices: { type: string; engine?: string; action?: string; active?: boolean }[] = [];
@@ -175,7 +176,7 @@ async function main(): Promise<void> {
     assert.equal((await http.extensions.disable({ id: 'computer-fake' })).status, 'disabled');
     assert.deepEqual(await http.computers.list(), [], 'provider disable detaches computers');
     assert.equal((await action()).status, 403, 'detached computer revokes capability');
-    assert.deepEqual(await (await fetch(url + '/x/sample-ts/hello')).json(), { message: 'Hello from TypeScript' });
+    assert.deepEqual(await (await fetch(url + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).json(), { message: 'Hello from TypeScript' });
     await http.x['engine-dsh'].shutdown({ sessionId: dsh.sessionId });
     console.log('COMPUTERS_GATEWAY PASS hermes+DSH=one-computer ordered=4 events=8 kill=403 human=403 handback=200 disable=healthy');
   } finally {

@@ -45,22 +45,28 @@ async function startGateway(dbFile, hermesHome, modelUrl) {
     cwd: gatewayDir,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
-    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_HERMES_HOME: hermesHome, NMH_HERMES_MODEL_URL: modelUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0' },
+    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_HERMES_HOME: hermesHome, NMH_HERMES_MODEL_URL: modelUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let errors = '';
   child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
+  let token = '';
   const port = await new Promise((done, reject) => {
     const timer = setTimeout(() => reject(new Error(`Gateway startup timed out: ${errors}`)), 20000);
     const lines = createInterface({ input: child.stdout });
     const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
     const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
     lines.on('line', (line) => {
-      if (line.startsWith('GATEWAY_READY ')) success(JSON.parse(line.slice('GATEWAY_READY '.length)).port);
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
+      if (line.startsWith('GATEWAY_READY ')) {
+        const payload = JSON.parse(line.slice('GATEWAY_READY '.length));
+        if (payload.desktopToken) token = payload.desktopToken;
+        success(payload.port);
+      }
     });
     child.once('error', fail);
     child.once('exit', (code) => fail(new Error(`Gateway exited ${code}: ${errors}`)));
   });
-  return { port, child, errors: () => errors, async close() {
+  return { port, token, child, errors: () => errors, async close() {
     if (child.exitCode !== null) return;
     const exit = new Promise((done) => child.once('exit', done));
     child.send('shutdown');
@@ -256,11 +262,11 @@ async function trial(previewPort) {
     gateway = await startGateway(join(temporary, 'state.sqlite'),
       join(temporary, 'hermes-home'), 'http://127.0.0.1:' + model.port + '/v1');
     const base = 'http://127.0.0.1:' + gateway.port;
-    const rpc = createORPCClient(new RPCLink({ url: base }));
+    const rpc = createORPCClient(new RPCLink({ url: base, headers: { authorization: 'Bearer ' + gateway.token } }));
     assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
     const enabled = await rpc.extensions.enable({ id: 'engine-hermes' });
     assert.equal(enabled.status, 'running', enabled.reason);
-    const url = `http://127.0.0.1:${previewPort}/agents?gateway=${encodeURIComponent(base)}`;
+    const url = `http://127.0.0.1:${previewPort}/agents?gateway=${encodeURIComponent(base)}&token=${encodeURIComponent(gateway.token)}`;
     chrome = await startChrome(join(temporary, 'chrome'));
     const page = await pageSession(chrome, url);
     try {
@@ -309,8 +315,8 @@ async function trial(previewPort) {
       await page.eventually('!document.querySelector("[data-testid=bot-neo_ui]")', 'bot deleted');
       assert.ok(!(await rpc.x['engine-hermes'].profiles.list()).profiles.some((p) => p.name === 'neo_ui'));
       await rpc.extensions.disable({ id: 'engine-hermes' });
-      assert.equal((await fetch(base + '/x/engine-hermes/profiles/list')).status, 404);
-      assert.equal((await fetch(base + '/x/sample-ts/hello')).status, 200);
+      assert.equal((await fetch(base + '/x/engine-hermes/profiles/list', { headers: { authorization: 'Bearer ' + gateway.token } })).status, 404);
+      assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: 'Bearer ' + gateway.token } })).status, 200);
       console.log('P2-3_BROWSER PASS create=true streamed=true approval=deny completed=true stop=cancelled delete=true disabled=404 sample=healthy');
     } catch (error) {
       console.error('P2-3_BROWSER FAILURE', error, 'GATEWAY ERRORS', gateway?.errors());

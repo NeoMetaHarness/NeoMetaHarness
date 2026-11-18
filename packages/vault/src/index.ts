@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import type { VaultRecordStore, VaultScopeKind, VaultStoredSecret } from '@neometaharness/db';
 import type { Projector } from './projectors.js';
 
-export { KeyFileProvider, type KeyProvider } from './key.js';
+export { KeyFileProvider, restrictPrivatePath, type KeyProvider } from './key.js';
 export { HermesProjector, DshProjector, type Projector } from './projectors.js';
 import type { KeyProvider } from './key.js';
 

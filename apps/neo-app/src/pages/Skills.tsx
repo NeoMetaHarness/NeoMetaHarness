@@ -5,7 +5,7 @@ import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
 import { Button, StreamView, type StreamViewHandle } from '@neometaharness/ui';
-import { gatewayUrl } from '../config';
+import { gatewayUrl, gatewayToken } from '../config';
 import './skills.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -14,7 +14,13 @@ type HubSkill = { name: string; identifier?: string; category?: string; installe
 type Curator = { enabled: boolean; paused: boolean; last_run_at?: string | null };
 type Graph = { nodes: { id: string; label: string; kind: string }[]; edges: { source: string; target: string }[] };
 
-const http = createORPCClient<Client>(new HttpLink({ url: gatewayUrl() }));
+const http = createORPCClient<Client>(new HttpLink({
+  url: gatewayUrl(),
+  headers: () => {
+    const token = gatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  },
+}));
 const terminal = new Set(['run.completed', 'run.failed', 'run.cancelled', 'run.interrupted']);
 
 export default function Skills() {
@@ -125,7 +131,8 @@ export default function Skills() {
     const name = profile;
     try {
       const { run_id } = await http.x['engine-hermes'].skills.learn({ profile: name, description: description.trim() });
-      const wsSocket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws');
+      const token = gatewayToken();
+      const wsSocket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws', token ? ['bearer.' + token] : undefined);
       socket.current = wsSocket;
       const ws = createORPCClient<Client>(new WebSocketLink({ websocket: wsSocket }));
       for await (const message of await ws.x['engine-hermes'].runs.events({ profile: name, runId: run_id })) {

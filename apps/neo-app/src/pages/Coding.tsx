@@ -8,7 +8,7 @@ import {
   Button, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList,
   StreamView, type StreamViewHandle,
 } from '@neometaharness/ui';
-import { gatewayUrl } from '../config';
+import { gatewayUrl, gatewayToken } from '../config';
 import './coding.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -16,7 +16,13 @@ type Catalog = Awaited<ReturnType<Client['x']['engine-t3']['threads']['list']>>;
 type Thread = Catalog['threads'][number];
 type Message = { id: number; role: 'user' | 'assistant'; text?: string };
 type Approval = { id: string; kind: string; busy: boolean };
-const http = createORPCClient<Client>(new HttpLink({ url: gatewayUrl() }));
+const http = createORPCClient<Client>(new HttpLink({
+  url: gatewayUrl(),
+  headers: () => {
+    const token = gatewayToken();
+    return token ? { authorization: `Bearer ${token}` } : {};
+  },
+}));
 
 function isDisabled(error: unknown) {
   const response = error as { code?: string; status?: number } | null;
@@ -165,7 +171,8 @@ export default function Coding() {
     messageIds.current.clear();
     queued.current.clear();
     views.current.clear();
-    const socket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws');
+    const token = gatewayToken();
+    const socket = new WebSocket(gatewayUrl().replace(/^http/, 'ws') + '/ws', token ? ['bearer.' + token] : undefined);
     connection.current = { socket, threadId: id };
     const client = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
     void (async () => {

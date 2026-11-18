@@ -88,10 +88,12 @@ async function run() {
   const gateway = await startGateway({
     databaseFile: join(temp, 'state/neo.sqlite'),
     extensionsDir: join(repo, 'extensions'),
+    mode: 'desktop',
   });
+  const token = gateway.desktopToken!;
   const url = `http://127.0.0.1:${gateway.port}`;
-  const http = createORPCClient<Client>(new HttpLink({ url }));
-  const socket = new WebSocket(`ws://127.0.0.1:${gateway.port}/ws`);
+  const http = createORPCClient<Client>(new HttpLink({ url, headers: () => ({ authorization: `Bearer ${token}` }) }));
+  const socket = new WebSocket(`ws://127.0.0.1:${gateway.port}/ws`, ['bearer.' + token]);
   const ws = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
   const launched: number[] = [];
   try {
@@ -155,8 +157,8 @@ async function run() {
     assert.equal((await http.extensions.disable({ id: 'engine-dsh' })).status, 'disabled');
     await stopped(allPids);
     assert.equal((await fetch(url + '/x/engine-dsh/create', { method: 'POST',
-      headers: { 'content-type': 'application/json' }, body: '{}' })).status, 404);
-    assert.deepEqual(await (await fetch(url + '/x/sample-ts/hello')).json(), { message: 'Hello from TypeScript' });
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: '{}' })).status, 404);
+    assert.deepEqual(await (await fetch(url + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).json(), { message: 'Hello from TypeScript' });
     console.log(`DSH_GATEWAY PASS sessions=2 coalesced=true ordered=true isolated=true cancel=true disable=404 tree=${allPids.length} sample=healthy`);
   } finally {
     socket.close();

@@ -187,9 +187,10 @@ async function main() {
   const provider = new HeadlessChromeProvider();
   const viewerProvider = new HeadlessChromeProvider();
   try {
-    gateway = await startGateway({ databaseFile: join(temp, 'state.sqlite'), extensionsDir: join(repo, 'extensions') });
+    gateway = await startGateway({ databaseFile: join(temp, 'state.sqlite'), extensionsDir: join(repo, 'extensions'), mode: 'desktop', dataDir: temp });
+    const token = gateway.desktopToken;
     const base = `http://127.0.0.1:${gateway.port}`;
-    const rpc = createORPCClient(new HttpLink({ url: base }));
+    const rpc = createORPCClient(new HttpLink({ url: base, headers: { authorization: `Bearer ${token}` } }));
     const extension = await rpc.extensions.enable({ id: 'computer-headless-chrome' });
     assert.equal(extension.status, 'running', JSON.stringify(extension));
     assert.equal((await rpc.extensions.enable({ id: 'engine-hermes' })).status, 'running');
@@ -220,14 +221,14 @@ async function main() {
       { cwd: app, stdio: 'ignore', windowsHide: true });
     await eventually(async () => (await fetch(`http://127.0.0.1:${port}/computers`)).ok, 'Vite preview');
     await viewerProvider.attach('viewer');
-    viewer = await browserView(viewerProvider, 'viewer', `http://127.0.0.1:${port}/computers?gateway=${encodeURIComponent(base)}`);
+    viewer = await browserView(viewerProvider, 'viewer', `http://127.0.0.1:${port}/computers?gateway=${encodeURIComponent(base)}&token=${encodeURIComponent(token)}`);
     await eventually(() => viewer.evaluate('!!document.querySelector("[data-testid=computers-page]")'), 'lazy Computers route');
     await eventually(() => viewer.evaluate('document.querySelector("[data-testid=computer-frame]")?.naturalWidth > 0'), 'live screenshot');
     const visibleInitial = await viewer.evaluate('document.querySelector("[data-testid=computer-frame]").src');
     assert.ok(visibleInitial.startsWith('data:image/png;base64,'));
 
     const run = await rpc.x['engine-hermes'].runs.start({ profile: 'chrome_bot', input: 'trigger_chrome' });
-    const socket = new WebSocket(base.replace('http:', 'ws:') + '/ws');
+    const socket = new WebSocket(base.replace('http:', 'ws:') + '/ws', ['bearer.' + token]);
     const stream = createORPCClient(new WebSocketLink({ websocket: socket }));
     const events = [];
     let runTimeout;
@@ -266,8 +267,10 @@ async function main() {
     await eventually(async () => (await rpc.computers.list())[0]?.holder === 'human', 'human takeover');
     assert.equal((await agentAction()).status, 403, 'human lease blocks agent clicks');
     await eventually(() => viewer.evaluate('document.querySelector("[data-testid=computer-lease]")?.textContent?.includes("Hand back") && !document.querySelector("[data-testid=computer-lease]").disabled'), 'handback control ready');
-    await viewer.evaluate('document.querySelector("[data-testid=computer-lease]").click()');
-    await eventually(async () => (await rpc.computers.list())[0]?.holder === 'agent', 'hand back');
+    await eventually(async () => {
+      await viewer.evaluate('document.querySelector("[data-testid=computer-lease]")?.click()');
+      return (await rpc.computers.list())[0]?.holder === 'agent';
+    }, 'hand back');
     assert.equal((await agentAction()).status, 200, 'handback restores input');
     await eventually(() => viewer.evaluate('!document.querySelector("[data-testid=stop-all-agents]")?.disabled'), 'stop control ready');
     await viewer.evaluate('document.querySelector("[data-testid=stop-all-agents]").click()');
@@ -275,10 +278,12 @@ async function main() {
     assert.equal((await agentAction()).status, 403, 'kill switch blocks input');
     assert.ok(events.some((event) => event.type === 'run.completed'));
     await eventually(() => viewer.evaluate('document.querySelector("[data-testid=stop-all-agents]")?.textContent?.includes("Resume agents") && !!document.querySelector("[data-testid=computer-release]") && !document.querySelector("[data-testid=computer-release]").disabled'), 'release control ready');
-    await viewer.evaluate('document.querySelector("[data-testid=computer-release]").click()');
-    await eventually(async () => !(await rpc.computers.list()).some((computer) => computer.id === 'shared-chrome'), 'release');
+    await eventually(async () => {
+      await viewer.evaluate('document.querySelector("[data-testid=computer-release]")?.click()');
+      return !(await rpc.computers.list()).some((computer) => computer.id === 'shared-chrome');
+    }, 'release');
     await eventually(() => !isAlive(pid), 'Chrome PID exits', 15000);
-    assert.equal((await fetch(base + '/x/sample-ts/hello')).status, 200);
+    assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).status, 200);
     await unregister();
     target.close();
     console.log('P3-2_GATEWAY_UI PASS chrome=true Hermes=navigate+click frames=changed lease=403 handback=200 kill=403 pid=gone sample=healthy');

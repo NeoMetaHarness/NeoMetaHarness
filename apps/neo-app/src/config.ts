@@ -6,3 +6,13 @@ export function gatewayUrl(): string {
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Gateway must be an HTTP(S) URL');
   return url.href.replace(/\/$/, '');
 }
+
+export function gatewayToken(): string | null {
+  const query = new URLSearchParams(window.location.search).get('token');
+  if (query) return query;
+  try {
+    return localStorage.getItem('neo_desktop_token');
+  } catch {
+    return null;
+  }
+}

@@ -45,22 +45,28 @@ async function startGateway(dbFile, hermesHome, modelUrl) {
     cwd: gatewayDir,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
-    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_HERMES_HOME: hermesHome, NMH_HERMES_MODEL_URL: modelUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0' },
+    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_HERMES_HOME: hermesHome, NMH_HERMES_MODEL_URL: modelUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let errors = '';
   child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
+  let token;
   const port = await new Promise((done, reject) => {
     const timer = setTimeout(() => reject(new Error(`Gateway startup timed out: ${errors}`)), 20000);
     const lines = createInterface({ input: child.stdout });
     const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
     const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
     lines.on('line', (line) => {
-      if (line.startsWith('GATEWAY_READY ')) success(JSON.parse(line.slice('GATEWAY_READY '.length)).port);
+      if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
+      if (line.startsWith('GATEWAY_READY ')) {
+        const payload = JSON.parse(line.slice('GATEWAY_READY '.length));
+        if (payload.token) token = payload.token;
+        success(payload.port);
+      }
     });
     child.once('error', fail);
     child.once('exit', (code) => fail(new Error(`Gateway exited ${code}: ${errors}`)));
   });
-  return { port, child, errors: () => errors, async close() {
+  return { port, token, child, errors: () => errors, async close() {
     if (child.exitCode !== null) return;
     const exit = new Promise((done) => child.once('exit', done));
     child.send('shutdown');
@@ -269,14 +275,15 @@ async function trial(previewPort) {
     gateway = await startGateway(join(temporary, 'state.sqlite'),
       join(temporary, 'hermes-home'), 'http://127.0.0.1:' + model.port + '/v1');
     const base = 'http://127.0.0.1:' + gateway.port;
-    const rpc = createORPCClient(new RPCLink({ url: base }));
+    const token = gateway.token;
+    const rpc = createORPCClient(new RPCLink({ url: base, headers: { authorization: `Bearer ${token}` } }));
     assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
     assert.equal((await rpc.extensions.enable({ id: 'memory-local' })).status, 'running');
     const hermes = await rpc.extensions.enable({ id: 'engine-hermes' });
     assert.equal(hermes.status, 'running', hermes.reason);
 
     chrome = await startChrome(join(temporary, 'chrome'));
-    const url = 'http://127.0.0.1:' + previewPort + '/memory?gateway=' + encodeURIComponent(base);
+    const url = 'http://127.0.0.1:' + previewPort + '/memory?gateway=' + encodeURIComponent(base) + '&token=' + encodeURIComponent(token);
     const page = await pageSession(chrome, url);
     try {
       await page.eventually('!!document.querySelector("[data-testid=memory-page]")', 'Memory lazy route');
@@ -295,7 +302,7 @@ async function trial(previewPort) {
 
       const run = await rpc.x['engine-hermes'].runs.start({ profile: 'default',
         input: 'Explain the papaya protocol for the next project review.' });
-      const runWs = new WebSocket(base.replace(/^http/, 'ws') + '/ws');
+      const runWs = new WebSocket(base.replace(/^http/, 'ws') + '/ws', ['bearer.' + token]);
       await new Promise((done, reject) => { runWs.onopen = done; runWs.onerror = reject; });
       const { RPCLink: WsLink } = await import('@orpc/client/websocket');
       const stream = createORPCClient(new WsLink({ websocket: runWs }));
@@ -353,10 +360,10 @@ async function trial(previewPort) {
       console.log('P4-2_STORE PASS fts_search=true profile_scope=true ui_edit=true ui_delete=true markdown_export=true');
 
       await rpc.extensions.disable({ id: 'memory-local' });
-      assert.equal((await fetch(base + '/x/memory-local/list')).status, 404);
+      assert.equal((await fetch(base + '/x/memory-local/list', { headers: { authorization: `Bearer ${token}` } })).status, 404);
       const before = model.calls.length;
       const fallback = await rpc.x['engine-hermes'].runs.start({ profile: 'default', input: 'Continue with the next step.' });
-      const wsNext = new WebSocket(base.replace(/^http/, 'ws') + '/ws');
+      const wsNext = new WebSocket(base.replace(/^http/, 'ws') + '/ws', ['bearer.' + token]);
       await new Promise((done, reject) => { wsNext.onopen = done; wsNext.onerror = reject; });
       const nextStream = createORPCClient(new WsLink({ websocket: wsNext }));
       const last = [];
@@ -368,7 +375,7 @@ async function trial(previewPort) {
       assert.ok(last.some((event) => event.type === 'run.completed'), JSON.stringify(last.slice(-8)));
       assert.ok(!model.calls.slice(before).map(JSON.stringify).join('\n').includes('papaya protocol'),
         'Disabled memory provider should not prefetch remembered context');
-      assert.equal((await fetch(base + '/x/sample-ts/hello')).status, 200);
+      assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).status, 200);
       console.log('P4-2_BROWSER PASS ui_add=true memory_context=true writeback=true disabled_404=true hermes_healthy=true sample_healthy=true');
     } catch (error) {
       console.error('P4-2_BROWSER FAILURE', error, 'GATEWAY ERRORS', gateway?.errors());
@@ -379,7 +386,7 @@ async function trial(previewPort) {
     if (gateway) await gateway.close();
     model.server.closeAllConnections();
     await new Promise((done) => model.server.close(done));
-    await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    try { await rm(temporary, { recursive: true, force: true, maxRetries: 15, retryDelay: 500 }); } catch (rmErr) { console.error("RM cleanup error (ignored):", rmErr.message); }
   }
 }
 await verifyBuild();

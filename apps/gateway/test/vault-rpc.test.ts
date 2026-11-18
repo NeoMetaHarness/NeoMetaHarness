@@ -12,8 +12,11 @@ import { startGateway } from '../src/server.js';
 const scope = { kind: 'engine' as const, workspaceId: 'tenant-a', subjectId: 'hermes-a' };
 type VaultClient = ContractRouterClient<typeof neoContract>;
 
-function client(port: number): VaultClient {
-  return createORPCClient<VaultClient>(new RPCLink({ url: 'http://127.0.0.1:' + port }));
+function client(port: number, token?: string): VaultClient {
+  return createORPCClient<VaultClient>(new RPCLink({
+    url: 'http://127.0.0.1:' + port,
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  }));
 }
 
 test('vault oRPC denies access by default and enforces scoped authorization', async () => {
@@ -31,12 +34,12 @@ test('vault oRPC denies access by default and enforces scoped authorization', as
     }
 
     const gateway = await startGateway({
-      databaseFile, extensionsDir,
+      databaseFile, extensionsDir, mode: 'desktop', dataDir: root,
       authorizeVault: (operation, requested) => requested.workspaceId === scope.workspaceId
         && requested.kind === scope.kind && requested.subjectId === scope.subjectId,
     });
     try {
-      const rpc = client(gateway.port);
+      const rpc = client(gateway.port, gateway.desktopToken);
       const value = 'rpc-sensitive-secret-value';
       const created = await rpc.vault.put({ scope, name: 'API_SERVER_KEY', value });
       assert.equal(created.version, 1);
