@@ -237,9 +237,10 @@
     },
     "P2-5": {
       "title": "channels first slice: Telegram via Hermes platforms, vault-projected token, Channels UI",
-      "status": "in_progress",
+      "status": "done",
       "owner": "sol-a",
-      "note": "delivered pre-auth; Sol-A rebasing onto auth with guards"
+      "evidence": "PM rerun 2x + regression 30/30 on main: CHANNELS_GATEWAY_E2E PASS platforms=dynamic projected=encrypted rotate=updated telegram=roundtrip disconnect=clean disabled=404; P2-5_EXIT PASS; channels connect/disconnect admin in policy.ts",
+      "follow_up": "WhatsApp not done; live Telegram unverified (fake Bot API)"
     },
     "P2-6": {
       "title": "Models hub: providers in vault, route roles, projections into Hermes + DSH, Panda router stub",
@@ -251,8 +252,9 @@
     },
     "P2-7": {
       "title": "Routines (Hermes cron) + Tasks (Hermes kanban) UI; P2 exit",
-      "status": "in_progress",
-      "owner": "sol-a"
+      "status": "done",
+      "owner": "sol-a",
+      "evidence": "PM rerun 2x + regression 30/30: P2-7_EXIT PASS (routine fires + history + pause; kanban board, assign to bot, done after turn); Hermes seams plugins/kanban/dashboard/plugin_api.py:1267,1409, tools/kanban_tools.py:744"
     }
   },
   "known_risks": [
@@ -318,6 +320,11 @@
       "owner": "sol-a",
       "evidence": "PM rerun 2x from clean build: P3-2_GATEWAY_UI PASS chrome=true Hermes=navigate+click frames=changed lease=403 handback=200 kill=403 pid=gone sample=healthy; isolated Chrome profile, loopback CDP random port; PM fixed test to build before preview",
       "follow_up": "needs installed Chrome (NMH_CHROME override)"
+    },
+    "P3-3": {
+      "title": "Second computer provider + bot swaps computers without restart (P3 exit, no Docker here)",
+      "status": "in_progress",
+      "owner": "sol-a"
     }
   },
   "p5_tasks": {
@@ -341,6 +348,11 @@
       "owner": "codex",
       "evidence": "PM rerun on authenticated main: P5-3_BROWSER PASS act=ready observe=ready blocked=reason disabled=visible other_extension=healthy hermes_requests=6 dsh_worker=6 (2x pre-auth, 1x post-auth in 23/23 regression); SUPERAGENT_MODEL PASS vault=true auth=true; injectable LlmAdapter, scripted models only in test/; MCP bridge authenticated with superagent-minted scoped API key",
       "follow_up": "pinned DSH 0.2.2-rc.1 SDK lacks standalone preset-scoped MCP (packages/sdk/server/src/server.ts:564-591) -> worker on testkit host behind WorkerHost; live model unverified"
+    },
+    "P5-4": {
+      "title": "Coding depth: history on reopen, per-turn diff, checkpoints, provider choice",
+      "status": "in_progress",
+      "owner": "sol-b"
     }
   },
   "p7_tasks": {
@@ -360,6 +372,11 @@
     },
     "P6-2": {
       "title": "Decision log (Panda-compatible traces) + ticket post-mortems -> skill proposals",
+      "status": "in_progress",
+      "owner": "codex"
+    },
+    "P6-3": {
+      "title": "neo/upstream self-maintenance source (read-only) + Inbox question/approval/failure items",
       "status": "in_progress",
       "owner": "codex"
     }
