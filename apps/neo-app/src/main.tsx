@@ -8,6 +8,7 @@ const Extensions = lazy(() => import('./pages/Extensions'));
 const Agents = lazy(() => import('./pages/Agents'));
 const Skills = lazy(() => import('./pages/Skills'));
 const Computers = lazy(() => import('./pages/Computers'));
+const Coding = lazy(() => import('./pages/Coding'));
 const Placeholder = lazy(() => import('./pages/Placeholder'));
 const pages = [
   { label: 'Inbox', path: '/inbox', icon: 'inbox' },
@@ -59,7 +60,7 @@ function NeoApp() {
     }>
       <div className="neo-page">
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
-          {path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/computers' ? <Computers /> : <Placeholder name={current.label} />}
+          {path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : <Placeholder name={current.label} />}
         </Suspense>
       </div>
     </AppShell>
