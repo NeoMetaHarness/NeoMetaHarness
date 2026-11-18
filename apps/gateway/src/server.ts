@@ -25,6 +25,7 @@ import {
 import {
   VaultService,
   KeyFileProvider,
+  restrictPrivatePath,
   type KeyProvider,
   type VaultScope,
 } from '@neometaharness/vault';
@@ -81,6 +82,12 @@ export interface GatewayOptions {
   vaultKeyFile?: string;
   vaultKeyProvider?: KeyProvider;
   authorizeVault?: (operation: VaultOperation, scope: VaultScope) => boolean | Promise<boolean>;
+  /**
+   * Server-mode HTTP sign-up. 'invite' (default; NEO_SIGNUP overrides): the first
+   * account needs the one-time setup token, later ones a pending invitation.
+   * 'open': anyone may register (roleless until invited).
+   */
+  signup?: 'invite' | 'open';
 }
 
 export interface GatewayInstance {
@@ -89,6 +96,8 @@ export interface GatewayInstance {
   vault: VaultService;
   computers: ComputerRegistry;
   desktopToken?: string;
+  /** Present in invite-mode server instances until the first account exists. */
+  setupToken?: string;
   auth: NeoAuth;
   db: SqliteDatabaseProvider;
   router?: any;
@@ -148,12 +157,39 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     options.secret ?? process.env.BETTER_AUTH_SECRET ?? process.env.NEO_AUTH_SECRET,
   );
 
+  const signupMode = options.signup ?? (process.env.NEO_SIGNUP === 'open' ? 'open' : 'invite');
+  let setupToken: string | undefined;
+  const setupTokenFile = join(dataDir, 'setup.token');
+  const kyselyDb = db.kysely as any;
   const auth = createNeoAuth({
     db: db.kysely,
     baseURL: 'http://127.0.0.1:0',
     secret: authSecret,
+    signUpGate: mode === 'server' && signupMode === 'invite' ? async ({ email, headers }) => {
+      const anyUser = await kyselyDb.selectFrom('user').select('id').executeTakeFirst();
+      if (!anyUser) {
+        const provided = headers.get('x-neo-setup-token') ?? '';
+        return Boolean(setupToken && /^[0-9a-f]{64}$/.test(provided)
+          && timingSafeEqual(Buffer.from(provided, 'hex'), Buffer.from(setupToken, 'hex')));
+      }
+      if (setupToken) {
+        setupToken = undefined;
+        try { unlinkSync(setupTokenFile); } catch { /* already gone */ }
+      }
+      const invitation = await kyselyDb.selectFrom('invitation').select(['id', 'expiresAt'])
+        .where('email', '=', email).where('status', '=', 'pending').execute() as { expiresAt: string | Date }[];
+      return invitation.some((row) => new Date(row.expiresAt).getTime() > Date.now());
+    } : undefined,
   });
   await migrateAuthSchema(auth);
+  if (mode === 'server' && signupMode === 'invite'
+    && !(await kyselyDb.selectFrom('user').select('id').executeTakeFirst())) {
+    // A one-time token closes the "first caller becomes instance owner" race.
+    setupToken = randomBytes(32).toString('hex');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(setupTokenFile, setupToken, { encoding: 'utf8', mode: 0o600 });
+    await restrictPrivatePath(setupTokenFile);
+  }
 
   let desktopToken: string | undefined;
   if (mode === 'desktop') {
@@ -1159,6 +1195,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     vault,
     computers,
     desktopToken,
+    get setupToken() { return setupToken; },
     auth,
     db,
     router,

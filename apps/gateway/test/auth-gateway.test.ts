@@ -31,6 +31,7 @@ test('10 core auth & RBAC checks through real gateway HTTP/oRPC', async () => {
   const gateway = await startGateway({
     databaseFile,
     mode: 'server',
+    signup: 'open', // these suites predate SEC-08 and register users freely
   });
 
   const base = `http://127.0.0.1:${gateway.port}`;

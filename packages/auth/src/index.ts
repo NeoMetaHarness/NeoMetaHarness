@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Kysely } from 'kysely';
 import { betterAuth } from 'better-auth';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { organization, bearer } from 'better-auth/plugins';
 import { defaultAc, defaultRoles } from 'better-auth/plugins/organization/access';
 import { apiKey } from '@better-auth/api-key';
@@ -41,6 +42,11 @@ export interface CreateNeoAuthOptions {
   basePath?: string;
   secret?: string;
   trustedOrigins?: string[];
+  /**
+   * Decides whether an HTTP sign-up may proceed. Server-side `auth.api` calls
+   * (bootstrap, tests) are trusted and bypass it. Omitted means open sign-up.
+   */
+  signUpGate?: (request: { email: string; headers: Headers }) => boolean | Promise<boolean>;
 }
 
 export function createNeoAuth(options: CreateNeoAuthOptions = {}): any {
@@ -67,6 +73,16 @@ export function createNeoAuth(options: CreateNeoAuthOptions = {}): any {
     ],
     advanced: {
       disableCSRFCheck: true,
+    },
+    hooks: {
+      before: createAuthMiddleware(async (ctx: any) => {
+        const gate = options.signUpGate;
+        if (!gate || !ctx.path?.startsWith('/sign-up') || !ctx.request) return;
+        const email = typeof ctx.body?.email === 'string' ? ctx.body.email.trim().toLowerCase() : '';
+        if (!email || !(await gate({ email, headers: ctx.request.headers ?? ctx.headers ?? new Headers() }))) {
+          throw new APIError('FORBIDDEN', { message: 'Sign-up requires an invitation or the setup token' });
+        }
+      }),
     },
     database: {
       db: kysely,

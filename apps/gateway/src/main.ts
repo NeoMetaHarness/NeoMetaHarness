@@ -13,6 +13,10 @@ const gateway = await startGateway({
 if (gateway.desktopToken && process.env.NEO_PRINT_DESKTOP_TOKEN === '1') {
   console.log('NEO_DESKTOP_TOKEN ' + gateway.desktopToken);
 }
+if (gateway.setupToken) {
+  // Invite-only server mode: the operator creates the first account with this token.
+  console.log('NEO_SETUP_TOKEN ' + gateway.setupToken);
+}
 console.log('GATEWAY_READY ' + JSON.stringify({ port: gateway.port }));
 let closing = false;
 async function close(): Promise<void> {

@@ -10,11 +10,13 @@ import { startGateway } from '../src/server.js';
 
 type Gateway = Awaited<ReturnType<typeof startGateway>>;
 
-async function withGateway(mode: 'desktop' | 'server', run: (gateway: Gateway, base: string) => Promise<void>) {
+async function withGateway(mode: 'desktop' | 'server', run: (gateway: Gateway, base: string) => Promise<void>,
+  // Tests that predate SEC-08 sign up freely, so they opt into open sign-up explicitly.
+  options: Partial<Parameters<typeof startGateway>[0]> = { signup: 'open' }) {
   const root = await mkdtemp(join(tmpdir(), 'nmh-sec-p7-'));
   const extensionsDir = join(root, 'extensions');
   await mkdir(extensionsDir, { recursive: true });
-  const gateway = await startGateway({ databaseFile: join(root, 'state/gateway.db'), extensionsDir, mode });
+  const gateway = await startGateway({ databaseFile: join(root, 'state/gateway.db'), extensionsDir, mode, ...options });
   try {
     await run(gateway, `http://127.0.0.1:${gateway.port}`);
   } finally {
@@ -196,4 +198,27 @@ test('SEC-07: owning one workspace grants no vault access to another workspace o
     assert.equal((await vaultCall(base, 'put', { scope: legacy, name: 'HONCHO_URL', value: 'http://x' }, owner.token!)).status, 200,
       'the instance owner keeps the legacy default scope');
   });
+});
+
+test('SEC-08: server mode is invite-only by default; the first account needs the one-time setup token', async () => {
+  await withGateway('server', async (gateway, base) => {
+    const setupToken = (gateway as Gateway & { setupToken?: string }).setupToken;
+    const body = (email: string) => JSON.stringify({ email, password: 'Attacker!Pass123', name: 'x' });
+    const post = (email: string, headers: Record<string, string> = {}) => fetch(`${base}/auth/sign-up/email`,
+      { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: body(email) });
+    assert.equal((await post('race@evil.test')).status, 403, 'first-come caller without the setup token must not bootstrap the instance');
+    assert.equal((await post('race@evil.test', { 'x-neo-setup-token': 'f'.repeat(64) })).status, 403, 'a wrong setup token is refused');
+    assert.ok(setupToken && /^[0-9a-f]{64}$/.test(setupToken), 'gateway exposes a 64-hex setup token while no account exists');
+    const first = await post('owner@corp.test', { 'x-neo-setup-token': setupToken! });
+    assert.equal(first.status, 200, 'the operator bootstraps with the setup token');
+    assert.equal((await post('late@evil.test', { 'x-neo-setup-token': setupToken! })).status, 403, 'the setup token is single-use');
+    const { token: ownerToken } = await first.json() as { token: string };
+    const org = await (await fetch(`${base}/auth/organization/create`,
+      json({ name: 'Corp', slug: 'corp' }, { authorization: `Bearer ${ownerToken}` }))).json() as { id: string };
+    assert.equal((await post('stranger@evil.test')).status, 403, 'uninvited sign-up is refused');
+    const invite = await fetch(`${base}/auth/organization/invite-member`, json(
+      { organizationId: org.id, email: 'new@corp.test', role: 'member' }, { authorization: `Bearer ${ownerToken}` }));
+    assert.equal(invite.status, 200);
+    assert.equal((await post('new@corp.test')).status, 200, 'an invited email may sign up');
+  }, { signup: undefined });
 });

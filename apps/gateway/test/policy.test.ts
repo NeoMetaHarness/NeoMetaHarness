@@ -124,6 +124,7 @@ test('Behaviour test across all contract procedures: 401 for unauth, 403 for non
   const gateway = await startGateway({
     databaseFile,
     mode: 'server',
+    signup: 'open', // these suites predate SEC-08 and register users freely
   });
 
   try {
@@ -220,6 +221,7 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
   const gateway = await startGateway({
     databaseFile,
     mode: 'server',
+    signup: 'open', // these suites predate SEC-08 and register users freely
   });
 
   const base = `http://127.0.0.1:${gateway.port}`;
