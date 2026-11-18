@@ -1,0 +1,7 @@
+{
+  "id": "memory-local",
+  "version": "0.1.0",
+  "displayName": "Neo local memory",
+  "kind": ["memory"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}

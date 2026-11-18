@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -37,9 +38,26 @@ export async function startGateway(options: GatewayOptions) {
     },
     (notice) => kernel.events.publishComputer(notice),
   );
+  const memoryScope = (profile: string) => ({
+    kind: 'engine' as const, workspaceId: 'default', subjectId: `engine-hermes/${profile}`,
+  });
+  const memoryBridge = {
+    async binding(profile: string) {
+      if (!gatewayPort || !kernel.hasRoute('/x/memory-local/list')) return undefined;
+      const scope = memoryScope(profile);
+      let token = await vault.get(scope, 'NEO_MEMORY_TOKEN');
+      if (!token) {
+        token = randomBytes(32).toString('hex');
+        await vault.put(scope, 'NEO_MEMORY_TOKEN', token);
+      }
+      return { endpoint: `http://127.0.0.1:${gatewayPort}/internal/memory`, token, profile };
+    },
+  };
   const kernel = new NeoKernel(db, {
     computers,
     vault,
+    memoryRecords: db.memories,
+    memoryBridge,
     extensionDataDir: join(dirname(resolve(options.databaseFile)), 'extensions'),
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
   });
@@ -79,6 +97,11 @@ export async function startGateway(options: GatewayOptions) {
     }
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const invokeMemory = async (route: string, body: unknown) => {
+    const path = `/x/memory-local/${route}`;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Local memory extension is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   const withHealth = async (id: string) => {
     const health = await kernel.health(id).catch(() => ({ ok: false }));
     return { ...kernel.status(id), ...(health ? { health } : {}) };
@@ -94,7 +117,13 @@ export async function startGateway(options: GatewayOptions) {
         yield* stream;
       }),
     },
-    x: { 'engine-dsh': {
+    x: { 'memory-local': {
+      list: os.x['memory-local'].list.handler(async ({ input }) => invokeMemory('list', input) as ReturnType<typeof db.memories.list>),
+      add: os.x['memory-local'].add.handler(async ({ input }) => invokeMemory('add', input) as ReturnType<typeof db.memories.add>),
+      update: os.x['memory-local'].update.handler(async ({ input }) => (await invokeMemory('update', input) as Awaited<ReturnType<typeof db.memories.update>>) ?? null),
+      delete: os.x['memory-local'].delete.handler(async ({ input }) => invokeMemory('delete', input) as Promise<{ deleted: boolean }>),
+      export: os.x['memory-local'].export.handler(async ({ input }) => invokeMemory('export', input) as ReturnType<typeof db.memories.export>),
+    }, 'engine-dsh': {
       create: os.x['engine-dsh'].create.handler(async ({ input }) => invokeDsh('create', input) as Promise<{ sessionId: string; pid: number }>),
       prompt: os.x['engine-dsh'].prompt.handler(async ({ input }) => invokeDsh('prompt', input) as Promise<{ messageId: string }>),
       events: os.x['engine-dsh'].events.handler(async function* ({ input, signal }) {
@@ -209,7 +238,55 @@ export async function startGateway(options: GatewayOptions) {
         }
       }
       if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
-      const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      const path = url.pathname;
+      if (path === '/internal/memory/context' || path === '/internal/memory/write') {
+        if (!kernel.hasRoute('/x/memory-local/list')) { res.writeHead(404).end(); return; }
+        const writing = path.endsWith('/write');
+        if (req.method !== (writing ? 'POST' : 'GET')) { res.writeHead(405).end(); return; }
+        const profile = writing ? undefined : url.searchParams.get('profile');
+        let payload: Record<string, unknown> = {};
+        if (writing) {
+          const chunks: Buffer[] = [];
+          let size = 0;
+          for await (const chunk of req) {
+            size += (chunk as Buffer).length;
+            if (size > 65_536) { res.writeHead(413).end(); return; }
+            chunks.push(chunk as Buffer);
+          }
+          try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>; }
+          catch { res.writeHead(400).end(); return; }
+        }
+        const name = writing ? payload.profile : profile;
+        if (typeof name !== 'string' || !/^(default|[a-z][a-z0-9_-]{0,47})$/.test(name)) {
+          res.writeHead(400).end(); return;
+        }
+        const provided = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.authorization ?? '')?.[1];
+        const expected = await vault.get(memoryScope(name), 'NEO_MEMORY_TOKEN');
+        if (!provided || !expected || !timingSafeEqual(Buffer.from(provided, 'hex'), Buffer.from(expected, 'hex'))) {
+          res.writeHead(401).end(); return;
+        }
+        if (!writing) {
+          const query = (url.searchParams.get('q') ?? '').slice(0, 500);
+          const results = await invokeMemory('list', { workspace: 'default', subjectId: name, query, limit: 15 }) as Array<{ text: string; source: string; trust: string }>;
+          const entries = results.length ? results : await invokeMemory('list', { workspace: 'default', subjectId: name, limit: 15 }) as Array<{ text: string; source: string; trust: string }>;
+          const context = entries.map((entry) => `- ${entry.text} [${entry.source}; ${entry.trust}]`).join('\n');
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ context }));
+        } else {
+          const assistant = payload.assistant;
+          const user = payload.user;
+          const session = payload.session_id;
+          if (payload.type !== 'turn' || typeof assistant !== 'string' || !assistant.trim() || assistant.length > 16000
+            || typeof user !== 'string' || user.length > 16000 || typeof session !== 'string' || session.length > 200) {
+            res.writeHead(400).end(); return;
+          }
+          const entry = await invokeMemory('add', { workspace: 'default', subject: 'bot', subjectId: name,
+            text: assistant.trim(), source: 'hermes.turn', provenance: `profile=${name}; session=${session}`,
+            trust: 'observed' }) as { id: string };
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ id: entry.id }));
+        }
+        return;
+      }
       if (path === '/internal/computers/action') {
         if (req.method !== 'POST') { res.writeHead(405).end(); return; }
         const match = /^Bearer ([a-f0-9]{64})$/.exec(req.headers.authorization ?? '');
@@ -239,7 +316,7 @@ export async function startGateway(options: GatewayOptions) {
         }
         return;
       }
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/')) {
+      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/memory-local/')) {
         if (!kernel.hasRoute(path)) { res.writeHead(404).end(); return; }
         const matched = await httpRPC.handle(req, res);
         if (!matched.matched) res.writeHead(404).end();
