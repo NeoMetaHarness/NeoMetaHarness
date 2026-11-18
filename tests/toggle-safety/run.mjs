@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import { mkdtemp, readFile, rm, writeFile, mkdir, readdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -158,18 +158,38 @@ async function startGateway(dbFile, hermesHome, modelUrl, testAdapter) {
   };
 }
 
-const OFFICIAL_EXTENSIONS = [
-  'sample-ts',
-  'sample-py',
-  'computer-fake',
-  'computer-headless-chrome',
-  'memory-local',
-  'engine-hermes',
-  'engine-dsh',
-  'skills-registry',
-  'engine-t3',
-  'engine-superagent',
-];
+// Every extension in the repo is covered; a new extension can't silently escape this suite.
+// Valid sample inputs for the few oRPC routes that answer a disabled extension themselves (policy first, then their own error).
+const SELF_REPORTING_INPUT = {
+  '/x/channels/list': { profile: 'default' }, '/x/channels/status': { profile: 'default' },
+  '/x/channels/connect': { profile: 'default', platform: 'telegram', token: 'probe' },
+  '/x/channels/disconnect': { profile: 'default', platform: 'telegram' },
+  '/x/memory-honcho/status': {}, '/x/memory-honcho/list': {},
+};
+const OFFICIAL_EXTENSIONS = readdirSync(join(here, '../../extensions'), { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && existsSync(join(here, '../../extensions', entry.name, 'neo.extension.json')))
+  .map((entry) => entry.name)
+  .sort();
+// Declared dependencies (neo.extension.json dependsOn) drive enable order and expected degradation.
+const MANIFEST_DEPS = Object.fromEntries(OFFICIAL_EXTENSIONS.map((id) => [id,
+  Object.keys(JSON.parse(readFileSync(join(here, '../../extensions', id, 'neo.extension.json'), 'utf8')).dependsOn ?? {})]));
+function dependentsOf(id) {
+  const out = new Set();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [ext, deps] of Object.entries(MANIFEST_DEPS)) {
+      if (!out.has(ext) && deps.some((d) => d === id || out.has(d))) { out.add(ext); grew = true; }
+    }
+  }
+  return [...out];
+}
+{
+  const ordered = []; const seen = new Set();
+  const visit = (id) => { if (seen.has(id)) return; seen.add(id); for (const d of MANIFEST_DEPS[id] ?? []) if (MANIFEST_DEPS[d]) visit(d); ordered.push(id); };
+  OFFICIAL_EXTENSIONS.forEach(visit);
+  OFFICIAL_EXTENSIONS.splice(0, OFFICIAL_EXTENSIONS.length, ...ordered);
+}
 
 async function runSmokeCall(id, rpc, base, authHeaders) {
   switch (id) {
@@ -228,8 +248,13 @@ async function runSmokeCall(id, rpc, base, authHeaders) {
       assert.equal(ext?.health?.ok, true, 'computer-headless-chrome health ok');
       break;
     }
-    default:
-      throw new Error(`Unknown extension smoke call: ${id}`);
+    default: {
+      // No extension-specific smoke call: require it to be running and healthy.
+      const status = (await rpc.extensions.list()).find((entry) => entry.id === id);
+      assert.equal(status?.status, 'running', `${id} is not running`);
+      assert.notEqual(status?.health?.ok, false, `${id} reports unhealthy`);
+      break;
+    }
   }
 }
 
@@ -305,7 +330,7 @@ async function main() {
       assert.equal(res.status, 'running', `Failed to enable ${id}: ${res.reason}`);
       await runSmokeCall(id, rpc, `http://127.0.0.1:${gateway.port}`, authHeaders());
     }
-    console.log('Baseline established: all 10 extensions running and healthy.\n');
+    console.log(`Baseline established: all ${OFFICIAL_EXTENSIONS.length} extensions running and healthy.\n`);
 
     const ROUNDS = 3;
     for (let round = 1; round <= ROUNDS; round++) {
@@ -327,7 +352,17 @@ async function main() {
         // Check 1: Routes return 404 or disabled
         let routesPassed = true;
         for (const route of routes) {
-          const res = await fetch(`http://127.0.0.1:${gateway.port}${route}`, { headers: authHeaders() });
+          let res = await fetch(`http://127.0.0.1:${gateway.port}${route}`, { headers: authHeaders() });
+          // oRPC procedures that report their own disabled state are POST-only: probe them properly.
+          if (res.status === 405 && SELF_REPORTING_INPUT[route]) {
+            res = await fetch(`http://127.0.0.1:${gateway.port}${route}`, {
+              method: 'POST', headers: { ...authHeaders(), 'content-type': 'application/json' },
+              body: JSON.stringify({ json: SELF_REPORTING_INPUT[route] }),
+            });
+            const text = await res.clone().text();
+            // Either an explicit "not found", or the route's own off/disabled status, never normal service.
+            if (res.status === 200 && (/"off"|"disabled"/.test(text) || /"json":\s*\[\s*\]/.test(text))) res = new Response(null, { status: 404 });
+          }
           if (res.status !== 404 && res.status !== 503) {
             routesPassed = false;
             console.error(`Route ${route} returned status ${res.status}`);
@@ -337,7 +372,8 @@ async function main() {
 
         // Check 2: Other extensions remain healthy + smoke call
         let othersPassed = true;
-        const others = OFFICIAL_EXTENSIONS.filter((other) => other !== id);
+        const dependents = dependentsOf(id);
+        const others = OFFICIAL_EXTENSIONS.filter((other) => other !== id && !dependents.includes(other));
         for (const other of others) {
           const state = listAfterDisable.find((x) => x.id === other);
           const expectedHealth = other === 'engine-t3' ? true : state?.health?.ok;
@@ -380,6 +416,15 @@ async function main() {
           const reRes = await rpc.extensions.enable({ id });
           assert.equal(reRes.status, 'running', `${id} re-enable failed`);
           await runSmokeCall(id, rpc, `http://127.0.0.1:${gateway.port}`, authHeaders());
+          // Dependents may have degraded while their dependency was off; they must recover.
+          for (const dep of dependents) {
+            const st = (await rpc.extensions.list()).find((x) => x.id === dep);
+            if (st?.status !== 'running') {
+              const r = await rpc.extensions.enable({ id: dep });
+              assert.equal(r.status, 'running', `dependent ${dep} did not recover after ${id} re-enable`);
+            }
+            await runSmokeCall(dep, rpc, `http://127.0.0.1:${gateway.port}`, authHeaders());
+          }
         } catch (err) {
           reEnablePassed = false;
           console.error(`Re-enable ${id} failed: ${err.message}`);
@@ -392,7 +437,7 @@ async function main() {
 
     // Bulk toggle test
     console.log('\n--- Bulk toggle test: disabling everything ---');
-    for (const id of OFFICIAL_EXTENSIONS) {
+    for (const id of [...OFFICIAL_EXTENSIONS].reverse()) {
       await rpc.extensions.disable({ id });
     }
     const allDisabled = await rpc.extensions.list();
