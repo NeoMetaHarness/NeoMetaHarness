@@ -1,0 +1,7 @@
+{
+  "id": "models",
+  "version": "0.1.0",
+  "displayName": "Model Hub",
+  "kind": ["tool"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}
