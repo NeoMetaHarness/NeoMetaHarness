@@ -240,6 +240,11 @@
       "owner": "sol-b",
       "evidence": "PM rerun 2x on main: P4-1_BROWSER PASS ordinary=true learning=true provenance=true graph=true curator=true disabled=404 sample=healthy; Hermes child env allowlisted (NEO_TEST_SECRET excluded), credentials via vault; full regression 14/14",
       "follow_up": "real-model learning quality unverified (fake model); Skills Hub install disabled until P4-2 eval gate"
+    },
+    "P4-2": {
+      "title": "memory-local L1: store + oRPC + single `neo` Hermes memory provider + Memory page",
+      "status": "in_progress",
+      "owner": "sol-b"
     }
   },
   "p3_tasks": {
@@ -264,6 +269,11 @@
       "title": "engine-superagent first slice: neo/app Source -> Eval -> Ticket -> worker delegates to a Hermes bot via Neo MCP -> report -> Inbox RPC",
       "status": "in_progress",
       "owner": "codex"
+    },
+    "P5-2": {
+      "title": "Coding page first slice over engine-t3 (threads, composer, stream, approvals, settle)",
+      "status": "in_progress",
+      "owner": "sol-a"
     }
   }
 }
