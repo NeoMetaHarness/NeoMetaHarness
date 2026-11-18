@@ -441,7 +441,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
         status: os.inbox.github.status.handler(async ({ context }) => {
           authorize('inbox.github.status', context);
-          return invokeInbox('github/status', {});
+          return invokeInbox('github/status', {}) as Promise<{
+            repositories: { name: string; ref: string }[];
+            mode: 'observe' | 'act'; botId?: string; hasToken: boolean;
+            pausedUntil: number | null; stopped: boolean;
+          }>;
         }),
         poll: os.inbox.github.poll.handler(async ({ context }) => {
           authorize('inbox.github.poll', context);

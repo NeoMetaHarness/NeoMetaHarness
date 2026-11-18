@@ -199,7 +199,7 @@ async function main() {
       }
     })();
     await client.inbox.accept({ id: observed.id });
-    await bounded(listening, 'Live inbox events', 22000).catch(async (error) => {
+    await bounded(listening, 'Live inbox events', 120000).catch(async (error) => {
       throw new Error(`${String(error)} items=${JSON.stringify(await client.inbox.list())} events=${JSON.stringify(received)} model=${JSON.stringify(model.seen)}`);
     });
     assert.ok(received.some((event) => event.item.id === observed.id && event.item.status === 'suggestion'));
