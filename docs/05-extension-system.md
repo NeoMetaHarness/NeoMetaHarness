@@ -104,23 +104,25 @@ discover → install → verify → (review permissions) → enable → running 
 
 ## 9. Adding a route
 
-Every route exposed by Neo—whether an oRPC contract procedure in @neometaharness/contracts or a plain HTTP extension route—**must** be registered in the centralized policy table (pps/gateway/src/policy.ts) with an explicit role level (iewer, member, dmin, owner, or internal).
+Every route exposed by Neo, whether an oRPC contract procedure in `@neometaharness/contracts` or a plain HTTP extension route, must have an explicit policy in [the centralized policy table](../apps/gateway/src/policy.ts). Policy levels are `viewer`, `member`, `admin`, `owner`, and `internal`.
 
-1. **Contract routes:** When adding a new leaf procedure to 
-eoContract (e.g., x.new-engine.action or gents.features.do), add a corresponding entry in CONTRACT_POLICY:
-   `	s
+1. **Contract routes:** When adding a new leaf procedure to `neoContract` (for example, `x.new-engine.action` or `agents.features.do`), add a corresponding entry in `CONTRACT_POLICY`:
+
+   ```ts
    'x.new-engine.action': 'member',
-   `
-   The contract-coverage test (pps/gateway/test/policy.test.ts) walks 
-eoContract and asserts a strict 1:1 bi-directional mapping. Omitting a policy entry or adding a dangling entry fails pnpm --dir apps/gateway test.
+   ```
 
-2. **Route authorization in handlers:** All procedure handlers must invoke uthorize(path, context) as their first action before validation or engine delegation:
-   `	s
+   The [contract-coverage test](../apps/gateway/test/policy.test.ts) walks `neoContract` and asserts a strict 1:1 mapping in both directions. Omitting a policy entry or adding a dangling entry fails `pnpm --dir apps/gateway test`.
+
+2. **Route authorization in handlers:** All procedure handlers must invoke `authorize(path, context)` before accessing extension state or delegating to an engine:
+
+   ```ts
    action: os.x['new-engine'].action.handler(async ({ input, context }) => {
      authorize('x.new-engine.action', context);
      return invokeEngine('action', input);
    }),
-   `
-   This guarantees that unauthenticated callers (401) and unauthorized callers (403) are rejected even if the underlying extension is disabled or degraded (never returning 404 or 503 to unauthorized users).
+   ```
 
-3. **Plain HTTP extension routes:** Extension endpoints registered on the kernel (kernel.hasRoute(path)) and internal endpoints must be documented in HTTP_ROUTE_POLICY and ROUTE_POLICY (defaulting to 'viewer' for extension GET routes or 'internal' for token-protected endpoints).
+   This rejects unauthenticated callers (401) and unauthorized callers (403) before checking whether the extension is disabled or degraded. Input schemas still validate at the oRPC boundary.
+
+3. **Plain HTTP extension routes:** Document the policy in `HTTP_ROUTE_POLICY`, which is included in `ROUTE_POLICY`. The current `/x/*` fallback requires `viewer` access; routes that perform actions need an appropriate stronger check. Token-protected internal endpoints verify their own scoped credentials; `authorize()` rejects user RPC calls to an `internal` policy.
