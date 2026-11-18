@@ -12,6 +12,7 @@ import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './ch
 import { blockedReason } from './ask-policy.js';
 import { DecisionLog } from './decision-log.js';
 import { BridgeKey, BRIDGE_KEY_ROTATE_MS, writeTokenFile, type BridgeKeyHandle } from './bridge-key.js';
+import { checkUpstreams } from './upstream-source.js';
 
 type Report = NonNullable<InboxItem['report']>;
 type Postmortem = NonNullable<Report['postmortem']>;
@@ -64,6 +65,7 @@ class SuperagentService {
   private unsubscribeChannel?: () => void;
   private readonly channelReplies = new Map<string, { channelId: string; inReplyTo: string }>();
   private readonly inflight = new Set<Promise<void>>();
+  private readonly upstreamItems = new Map<string, string>();
   private workerReady?: Promise<void>;
   private workerHome = '';
   private gatewayUrl!: () => string;
@@ -76,7 +78,7 @@ class SuperagentService {
     this.token = tokenFile;
     const upstream = await loadPinnedSuperagent();
     const repo = new upstream.MemoryRepositories();
-    const kinds = ['neo/app', 'neo/cron', 'neo/channel'];
+    const kinds = ['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream'];
     const sourceKinds = kinds.map((kind) => ({
       kind, title: { en: kind, zh: kind },
       description: { en: `Neo source ${kind}`, zh: `Neo source ${kind}` },
@@ -140,10 +142,18 @@ class SuperagentService {
       this.sources.set(kind.kind, new NeoSourceAdapter(context, kind.kind));
     }
     this.cron = new NeoCronSource(join(home, '..', 'cron.json'), async (job) => {
+      if (job.botId === 'neo-system' && job.text === '@neo/upstream check') {
+        await this.checkUpstream();
+        return;
+      }
       await this.ask({ text: job.text, botId: job.botId, mode: job.mode,
         requesterRole: job.requesterRole ?? 'member' }, 'neo/cron');
     });
     await this.cron.start();
+    if (!this.cron.list().some((job) => job.botId === 'neo-system' && job.text === '@neo/upstream check')) {
+      await this.cron.create({ botId: 'neo-system', text: '@neo/upstream check', mode: 'observe',
+        schedule: '0 9 * * 1', requesterRole: 'owner' });
+    }
     if (channel) {
       this.channel = channel;
       this.unsubscribeChannel = channel.subscribe((message) => this.fromChannel(message));
@@ -291,6 +301,7 @@ class SuperagentService {
   async accept(input: { id: string }): Promise<InboxItem> {
     const item = this.items.get(input.id);
     if (!item) throw new Error('Suggestion not found');
+    if (item.source === 'neo/upstream') throw new Error('Upstream source is observe-only');
     if (item.status !== 'suggestion') throw new Error(`Cannot accept ${item.status} ticket`);
     const reason = blockedReason(item.requesterRole ?? 'member', 'act', item.text);
     if (reason) {
@@ -304,6 +315,29 @@ class SuperagentService {
   }
 
   list(): InboxItem[] { return [...this.items.values()].map((item) => structuredClone(item)); }
+  async checkUpstream(): Promise<{ checked: number; drift: number }> {
+    if (this.closed) throw new Error('Superagent is stopped');
+    const entries = await checkUpstreams();
+    for (const entry of entries) {
+      const upstream = { name: entry.name, pinned: entry.pinned, latest: entry.latest,
+        changelog: entry.changelog };
+      const summary = `Proposed bump ${entry.name} from ${entry.pinned} to ${entry.latest} and run the suites.`;
+      const report: Report = { status: 'ready', summary, changes: [], tests: [], risks: [], options: [] };
+      const previousId = this.upstreamItems.get(entry.name);
+      const previous = previousId && this.items.get(previousId);
+      if (previous) {
+        this.update(previous, { upstream, report, status: 'suggestion' });
+        continue;
+      }
+      const now = Date.now();
+      const item: InboxItem = { id: randomUUID(), botId: 'neo-system', mode: 'observe',
+        source: 'neo/upstream', requesterRole: 'owner', text: `Upstream drift in ${entry.name}`,
+        upstream, status: 'suggestion', report, createdAt: now, updatedAt: now };
+      this.upstreamItems.set(entry.name, item.id);
+      this.update(item, {});
+    }
+    return { checked: entries.length, drift: entries.length };
+  }
   listDecisions(input: { ticketId?: string; limit?: number }) { return this.decisions.list(input); }
 
   cronList(): ScheduledAsk[] { return this.cron!.list(); }
@@ -432,6 +466,7 @@ export default defineExtension({
     ctx.route('list', () => service.list());
     ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number }));
     ctx.route('accept', ({ body }) => service.accept(body as { id: string }));
+    ctx.route('upstream/check', () => service.checkUpstream());
     ctx.route('cron/list', () => service.cronList());
     ctx.route('cron/create', ({ body }) => service.cronCreate(body));
     ctx.route('cron/delete', ({ body }) => service.cronDelete(body as { id: string }));

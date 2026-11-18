@@ -176,6 +176,7 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'inbox.list': 'viewer',
   'inbox.decisions.list': 'viewer',
   'inbox.accept': 'member',
+  'inbox.upstream.check': 'admin',
   'inbox.events': 'viewer',
   'inbox.cron.create': 'member',
   'inbox.cron.list': 'viewer',

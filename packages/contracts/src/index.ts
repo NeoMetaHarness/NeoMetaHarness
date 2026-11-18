@@ -498,7 +498,9 @@ export const inboxReportSchema = z.object({
 });
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
-  source: z.enum(['neo/app', 'neo/cron', 'neo/channel']).optional(),
+  source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream']).optional(),
+  upstream: z.object({ name: z.string(), pinned: z.string(), latest: z.string(),
+    changelog: z.string().url().nullable() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).optional(),
   mode: z.enum(['observe', 'act']),
   status: z.enum(['suggestion', 'running', 'ready', 'question', 'blocked', 'failed']),
@@ -523,6 +525,7 @@ export const inboxContract = {
   decisions: { list: oc.input(z.object({ ticketId: z.string().optional(),
     limit: z.number().int().min(1).max(500).default(100) })).output(z.array(inboxDecisionSchema)) },
   accept: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
+  upstream: { check: oc.output(z.object({ checked: z.number().int(), drift: z.number().int() })) },
   events: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))
     .output(eventIterator(inboxEventSchema)),
   cron: {

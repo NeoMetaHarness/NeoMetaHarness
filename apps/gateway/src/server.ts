@@ -386,6 +386,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('inbox.accept', context);
         return invokeInbox('accept', input) as Promise<InboxItem>;
       }),
+      upstream: { check: os.inbox.upstream.check.handler(async ({ context }) => {
+        authorize('inbox.upstream.check', context);
+        return invokeInbox('upstream/check', {}) as Promise<{ checked: number; drift: number }>;
+      }) },
       events: os.inbox.events.handler(async function* ({ input, signal, context }) {
         authorize('inbox.events', context);
         const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;
