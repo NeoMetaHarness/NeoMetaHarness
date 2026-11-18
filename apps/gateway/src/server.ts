@@ -519,6 +519,12 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           authorize('x.skills-registry.assignments', context);
           return invokeSkills('assignments', {}) as Promise<{ name: string; engine: 'hermes' | 'dsh'; targetId: string }[]>;
         }),
+        checks: {
+          set: os.x['skills-registry'].checks.set.handler(async ({ input, context }) => {
+            authorize('x.skills-registry.checks.set', context);
+            return invokeSkills('checks/set', { ...input, actor: context.user!.id }) as Promise<SkillRecord>;
+          }),
+        },
         evaluate: os.x['skills-registry'].evaluate.handler(async ({ input, context }) => {
           authorize('x.skills-registry.evaluate', context);
           return invokeSkills('evaluate', input) as Promise<{ status: 'passed' | 'failed' | 'unevaluated' | 'overridden'; version: number }>;

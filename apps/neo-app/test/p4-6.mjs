@@ -146,6 +146,7 @@ async function run() {
     await assert.rejects(registry.assign({ name: passing.name, ...target, assigned: true }));
     assert.ok(!(await registry.assignments()).some((item) => item.name === passing.name),
       'Unevaluated skill must remain unassigned');
+    await registry.checks.set({ name: passing.name, checks: [{ prompt: 'CHECK_PASS', expected: ['PASS_OK'] }] });
     const passed = await registry.evaluate({ name: passing.name });
     assert.equal(passed.status, 'passed', JSON.stringify(passed));
     assert.ok(fixture.calls.some((call) => call.messages?.at(-1)?.content === 'CHECK_PASS'));
@@ -159,6 +160,7 @@ async function run() {
       name: 'failing', sourceProfile: 'skillbot', sourcePath: 'test/failing',
       content: skill('failing', 'suggest', 'CHECK_FAIL', 'EXPECTED_MISSING'),
     });
+    await registry.checks.set({ name: failing.name, checks: [{ prompt: 'CHECK_FAIL', expected: ['EXPECTED_MISSING'] }] });
     const failed = await registry.evaluate({ name: failing.name });
     assert.equal(failed.status, 'failed');
     await assert.rejects(registry.assign({ name: failing.name, ...target, assigned: true }));
@@ -175,6 +177,7 @@ async function run() {
       name: 'high', sourceProfile: 'skillbot', sourcePath: 'test/high',
       content: skill('high', 'auto', 'CHECK_PASS', 'PASS_OK'),
     });
+    await registry.checks.set({ name: high.name, checks: [{ prompt: 'CHECK_PASS', expected: ['PASS_OK'] }] });
     assert.equal((await registry.evaluate({ name: high.name })).status, 'passed');
     await registry.assign({ name: high.name, ...target, assigned: true });
     const highPath = join(temp, 'hermes-home', 'profiles', 'skillbot', 'skills', 'high', 'SKILL.md');

@@ -289,8 +289,7 @@ export const skillsRegistryContract = {
   get: oc.input(z.object({ name: skillId })).output(z.object({ metadata: registrySkillSchema, content: z.string() })),
   import: oc.input(z.object({
     name: skillInput, content: z.string().min(1).max(200000), sourceProfile: skillName,
-    sourcePath: z.string(), trust: skillTrust.optional(),
-    provenance: z.string().optional(), autonomy: z.literal('suggest').optional(),
+    sourcePath: z.string().optional(),
   })).output(registrySkillSchema),
   sync: oc.input(z.object({ profile: skillName })).output(z.array(registrySkillSchema)),
   versions: oc.input(z.object({ name: skillId })).output(z.array(z.object({
@@ -301,6 +300,11 @@ export const skillsRegistryContract = {
   rollback: oc.input(z.object({ name: skillId, version: z.number().int().positive() })).output(registrySkillSchema),
   assign: oc.input(skillTarget.extend({ assigned: z.boolean() })).output(z.object({ assigned: z.boolean() })),
   assignments: oc.output(z.array(skillTarget)),
+  checks: {
+    set: oc.input(z.object({ name: skillId, checks: z.array(z.object({
+      prompt: z.string().trim().min(1).max(4000), expected: z.array(z.string().min(1).max(500)).min(1).max(10),
+    })).min(1).max(20) })).output(registrySkillSchema),
+  },
   evaluate: oc.input(z.object({ name: skillId })).output(skillEval),
   override: oc.input(z.object({ name: skillId, reason: z.string().trim().min(1).max(1000) })).output(skillEval),
   ceiling: {
