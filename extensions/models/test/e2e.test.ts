@@ -155,13 +155,29 @@ async function main() {
     }
     assert.ok(a.hits.length > 0 && b.hits.length > 0, 'both fake servers handled real Hermes runs');
 
+    await http.x.models.roles.set({ role: 'coding', providerId: 'fake-b', model: 'fake-model' });
+    const dshEnabled = await http.extensions.enable({ id: 'engine-dsh' });
+    assert.equal(dshEnabled.status, 'running', dshEnabled.reason + ' ' + app.logs().slice(-1000));
+    const dsh = await bounded(http.x['engine-dsh'].create({
+      workspaceId: 'models-e2e', cwd: temp, role: 'coding',
+    }), 60_000, 'DSH session create');
+    const dshHits = b.hits.length;
+    try {
+      await bounded(http.x['engine-dsh'].prompt({ sessionId: dsh.sessionId, text: 'Confirm coding model B.' }),
+        60_000, 'DSH prompt');
+      await bounded(http.x['engine-dsh'].wait({ sessionId: dsh.sessionId }), 60_000, 'DSH wait');
+      assert.ok(b.hits.length > dshHits, 'DSH coding role must call fake provider B');
+    } finally {
+      await http.x['engine-dsh'].shutdown({ sessionId: dsh.sessionId });
+    }
+
     assert.equal((await http.extensions.disable({ id: 'models' })).status, 'disabled');
     assert.equal((await http.extensions.list()).find((item) => item.id === 'engine-hermes')?.status, 'running');
     assert.deepEqual(await (await fetch(base + '/x/sample-ts/hello', { headers: auth })).json(),
       { message: 'Hello from TypeScript' });
     assert.equal((await fetch(base + '/x/models/providers/list', { headers: auth })).status, 404);
     assert.ok(!app.logs().includes(keyA) && !app.logs().includes(keyB), 'keys leaked in gateway logs');
-    console.log('MODELS_E2E PASS authenticated=true bot1=A bot2=B keys=vault logs=clean disable=models-only others=healthy');
+    console.log('MODELS_E2E PASS authenticated=true bot1=A bot2=B dsh-coding=B keys=vault logs=clean disable=models-only others=healthy');
   } finally {
     socket?.close();
     if (app?.child.connected) app.child.send('shutdown');

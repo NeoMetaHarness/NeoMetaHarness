@@ -13,6 +13,12 @@ import type { DshMemoryBridge } from './memory.js';
 const extensionRoot = fileURLToPath(new URL('../', import.meta.url));
 const cli = join(extensionRoot, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
 const credentialKeys = ['DEEPSEEK_API_KEY', 'DSH_CONFIG_PATH'] as const;
+const modelKeys = ['NEO_MODEL_BASE_URL', 'NEO_MODEL_NAME', 'NEO_MODEL_API_KEY'] as const;
+type ModelRole = 'default' | 'fast' | 'reasoning' | 'coding' | 'eval';
+export interface ModelResolver {
+  active: boolean;
+  resolve(role: ModelRole, profile?: string): Promise<{ model: string; baseUrl: string; apiKey?: string }>;
+}
 
 interface PendingCall {
   resolve(value: any): void;
@@ -50,7 +56,8 @@ class Session {
   private lastMessageId = '';
   private stopPromise?: Promise<void>;
 
-  constructor(id: string, readonly stateDir: string, private readonly cwd: string, env: Record<string, string>, patch: string) {
+  constructor(id: string, readonly stateDir: string, private readonly cwd: string, env: Record<string, string>, patch: string,
+    private readonly model?: string) {
     this.id = id;
     this.child = spawn(process.execPath, [cli, '--profile', 'sdk', '--patch', patch], {
       cwd: extensionRoot,
@@ -136,7 +143,8 @@ class Session {
   }
 
   async initialize(): Promise<void> {
-    const response = await this.rpc('initialize', { cwd: this.cwd, provider: 'neo-scripted', model: 'scripted' });
+    const response = await this.rpc('initialize', { cwd: this.cwd,
+      provider: this.model ? 'neo-model-hub' : 'neo-scripted', model: this.model ?? 'scripted' });
     if (response?.serverInfo?.name !== 'deepseek-harness-sdk-runtime') {
       throw new Error('Unexpected DSH SDK initialize response');
     }
@@ -205,9 +213,10 @@ export class DshAgentRuntime {
 
   constructor(private readonly vault: VaultService, private readonly dataDir: string,
     private readonly computers?: ComputerRegistry, private readonly skills?: SkillsBridge,
-    private readonly memory?: DshMemoryBridge) {}
+    private readonly memory?: DshMemoryBridge,
+    private readonly modelHub?: () => ModelResolver | undefined) {}
 
-  async create(input: { workspaceId: string; cwd: string; computerId?: string }): Promise<{ sessionId: string; pid: number }> {
+  async create(input: { workspaceId: string; cwd: string; computerId?: string; role?: ModelRole; profile?: string }): Promise<{ sessionId: string; pid: number }> {
     if (this.closing) throw new Error('DSH runtime is stopped');
     if (!isAbsolute(input.cwd)) throw new Error('DSH workspace cwd must be absolute');
     const scope = { kind: 'engine' as const, workspaceId: input.workspaceId, subjectId: 'engine-dsh' };
@@ -216,7 +225,20 @@ export class DshAgentRuntime {
       const secret = await this.vault.get(scope, name);
       if (secret !== undefined) secrets.set(name, secret);
     }
-    const env = await new DshProjector(credentialKeys).project(secrets);
+    let model: string | undefined;
+    const hub = this.modelHub?.();
+    if (hub?.active) {
+      try {
+        const resolved = await hub.resolve(input.role ?? 'coding', input.profile);
+        model = resolved.model;
+        secrets.set('NEO_MODEL_BASE_URL', resolved.baseUrl);
+        secrets.set('NEO_MODEL_NAME', resolved.model);
+        if (resolved.apiKey) secrets.set('NEO_MODEL_API_KEY', resolved.apiKey);
+      } catch (error) {
+        if (!(error instanceof Error && error.message.includes('is unconfigured'))) throw error;
+      }
+    }
+    const env = await new DshProjector([...credentialKeys, ...modelKeys]).project(secrets);
     const sessionId = randomUUID();
     if (input.computerId && !this.computers) throw new Error('Computer registry unavailable');
     await mkdir(this.dataDir, { recursive: true });
@@ -263,7 +285,7 @@ export class DshAgentRuntime {
       DSH_AGENTS_HOME: join(stateDir, 'agents'),
       DSH_TELEMETRY_DISABLED: '1',
       TMUX: '', TMUX_PANE: '',
-    }, patchFile);
+    }, patchFile, model);
     try {
       await session.initialize();
       if (this.closing) throw new Error('DSH runtime is stopped');

@@ -43,10 +43,58 @@ const scriptedAdapter = {
   },
 };
 
+const hubAdapter = {
+  providerInfo(provider) { return { id: provider, name: provider }; },
+  providerRetryPolicy() { return undefined; },
+  async resolveModel(provider, model) { return { provider, id: model, name: model }; },
+  async prepareCall(provider, model) {
+    return { model: await this.resolveModel(provider, model), stream: (options) => this.stream(options) };
+  },
+  async *stream({ signal, messages }) {
+    const baseUrl = process.env.NEO_MODEL_BASE_URL;
+    if (!baseUrl || !process.env.NEO_MODEL_NAME) throw new Error('DSH Model Hub selection unavailable');
+    const body = {
+      model: process.env.NEO_MODEL_NAME,
+      stream: false,
+      messages: messages.map((message) => ({
+        role: ['system', 'assistant', 'tool'].includes(message.role) ? message.role : 'user',
+        content: typeof message.content === 'string' ? message.content
+          : JSON.stringify(message.content ?? message.contentBlocks ?? message),
+      })),
+    };
+    const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+    const response = await fetch(endpoint, {
+      method: 'POST', signal,
+      headers: { 'content-type': 'application/json',
+        ...(process.env.NEO_MODEL_API_KEY ? { authorization: `Bearer ${process.env.NEO_MODEL_API_KEY}` } : {}) },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(`DSH model request failed with HTTP ${response.status}`);
+    const result = await response.json();
+    const choice = result.choices?.[0];
+    const content = typeof choice?.message?.content === 'string' ? choice.message.content : '';
+    if (content) {
+      yield { type: 'block-start', index: 0, blockType: 'text' };
+      yield { type: 'text-delta', index: 0, text: content };
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: content } };
+    }
+    for (const [index, tool] of (choice?.message?.tool_calls ?? []).entries()) {
+      yield { type: 'block-start', index: index + 1, blockType: 'tool-call' };
+      yield { type: 'tool-call-delta', index: index + 1, id: tool.id,
+        name: tool.function.name, argumentsDelta: tool.function.arguments };
+    }
+    if (result.usage) yield { type: 'usage', usage: {
+      inputTokens: result.usage.prompt_tokens ?? 0, outputTokens: result.usage.completion_tokens ?? 0,
+    } };
+    yield { type: 'finish', reason: { kind: choice?.finish_reason === 'tool_calls' ? 'tool-calls' : 'stop' } };
+  },
+};
+
 export function apply(ctx) {
   if (process.env.NEO_TEST_SECRET !== undefined) throw new Error('DSH inherited a parent-only secret');
   ctx.effect(() => ctx.computerUse.register(
     process.env.NEO_COMPUTER_ENDPOINT ? 'neo-gateway' : 'neo-computer-stub'));
   ctx.effect(() => ctx.browserUse.register('neo-browser-stub'));
   ctx.effect(() => ctx.llm.registerAdapter(['neo-scripted'], scriptedAdapter));
+  ctx.effect(() => ctx.llm.registerAdapter(['neo-model-hub'], hubAdapter));
 }

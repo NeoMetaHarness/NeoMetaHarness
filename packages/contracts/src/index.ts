@@ -89,7 +89,8 @@ export const t3Contract = {
 export const dshEventSchema = t3EventSchema;
 export type DshEvent = z.infer<typeof dshEventSchema>;
 export const dshContract = {
-  create: oc.input(z.object({ workspaceId: z.string().min(1), cwd: z.string().min(1), computerId: z.string().min(1).optional() }))
+  create: oc.input(z.object({ workspaceId: z.string().min(1), cwd: z.string().min(1), computerId: z.string().min(1).optional(),
+    role: z.enum(['default', 'fast', 'reasoning', 'coding', 'eval']).optional(), profile: z.string().min(1).optional() }))
     .output(z.object({ sessionId: z.string(), pid: z.number().int().positive() })),
   prompt: oc.input(z.object({ sessionId: z.string(), text: z.string().min(1) }))
     .output(z.object({ messageId: z.string() })),

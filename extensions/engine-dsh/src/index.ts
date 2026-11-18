@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DshAgentRuntime } from './runtime.js';
 import type { SkillsBridge } from '@neometaharness/kernel';
 import type { DshMemoryBridge } from './memory.js';
+import type { ModelResolver } from './runtime.js';
 
 export default defineExtension({
   activate(ctx) {
@@ -14,7 +15,8 @@ export default defineExtension({
     if (!vault || !dataDir) throw new Error('DSH requires Gateway vault and extension storage');
     const bridge = ctx.inject<SkillsBridge>('skillsBridge');
     const memory = ctx.inject<DshMemoryBridge>('dshMemoryBridge');
-    const runtime = new DshAgentRuntime(vault, join(dataDir, 'engine-dsh'), computers, bridge, memory);
+    const runtime = new DshAgentRuntime(vault, join(dataDir, 'engine-dsh'), computers, bridge, memory,
+      () => ctx.inject<ModelResolver>('modelHub'));
     ctx.provide('dshAgentRuntime', runtime);
     ctx.effect(() => () => runtime.stop());
     ctx.health(() => ({ ok: true }));
