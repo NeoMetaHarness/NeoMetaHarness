@@ -201,6 +201,14 @@ export const memoryContract = {
   })),
 };
 
+export const honchoContract = {
+  status: oc.input(z.object({ workspace: memoryWorkspace.default('default') }))
+    .output(z.enum(['ok', 'degraded', 'off'])),
+  list: oc.input(z.object({ workspace: memoryWorkspace.default('default'),
+    subjectId: z.string().max(100).optional(), query: z.string().max(500).default('') }))
+    .output(z.array(memoryEntrySchema)),
+};
+
 const skillName = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);
 const skillId = z.string().regex(/^[a-z][a-z0-9_-]{0,79}\/[a-z][a-z0-9_-]{0,79}$/);
 const skillInput = z.union([skillName, skillId]);
@@ -266,7 +274,7 @@ export const modelsContract = {
 };
 
 const baseNeoContract = {
-  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'skills-registry': skillsRegistryContract, models: modelsContract },
+  x: { 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),

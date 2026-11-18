@@ -248,6 +248,22 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Local memory extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const invokeHoncho = async (route: string, body: unknown) => {
+    const path = '/x/memory-honcho/' + route;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Honcho extension disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
+  const writeHonchoWithRetry = async (input: {
+    workspace: string; subjectId: string; session: string; user: string; assistant: string;
+  }) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!kernel.hasRoute('/x/memory-honcho/turn')) return;
+      try { await invokeHoncho('turn', input); return; }
+      catch {
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+      }
+    }
+  };
   const invokeSkills = async (route: string, body: unknown) => {
     const path = `/x/skills-registry/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Skill registry extension is disabled' });
@@ -354,6 +370,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         assignments: os.x['skills-registry'].assignments.handler(async ({ context }) => {
           authorize('x.skills-registry.assignments', context);
           return invokeSkills('assignments', {}) as Promise<{ name: string; engine: 'hermes' | 'dsh'; targetId: string }[]>;
+        }),
+      },
+      'memory-honcho': {
+        status: os.x['memory-honcho'].status.handler(async ({ input, context }) => {
+          authorize('x.memory-honcho.status', context);
+          if (!kernel.hasRoute('/x/memory-honcho/status')) return 'off';
+          return invokeHoncho('status', input) as Promise<'ok' | 'degraded' | 'off'>;
+        }),
+        list: os.x['memory-honcho'].list.handler(async ({ input, context }) => {
+          authorize('x.memory-honcho.list', context);
+          if (!kernel.hasRoute('/x/memory-honcho/list')) return [];
+          return invokeHoncho('list', input) as ReturnType<typeof db.memories.list>;
         }),
       },
       'memory-local': {
@@ -660,7 +688,20 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             text: string; source: string; trust: string; subject: 'user' | 'bot'; subject_id: string;
           }>;
           const entries = scoped.filter((entry) => entry.subject_id === 'global' || entry.subject_id === name);
-          const context = entries.slice(0, 15).map((entry) => `- ${entry.text} [${entry.source}; ${entry.trust}]`).join('\n');
+          const localContext = entries.slice(0, 15)
+            .map((entry) => '- ' + entry.text + ' [' + entry.source + '; ' + entry.trust + ']')
+            .join('\n').slice(0, 2800);
+          let honchoContext = '';
+          if (kernel.hasRoute('/x/memory-honcho/context')) {
+            try {
+              const lines = await invokeHoncho('context', {
+                workspace: consumer.workspace, subjectId: engine + '/' + name,
+              }) as string[];
+              honchoContext = lines.slice(-8).map((line) =>
+                '- honcho: ' + line.replace(/\s+/g, ' ').slice(0, 350)).join('\n');
+            } catch { /* L2 outage cannot stop the turn */ }
+          }
+          const context = [localContext, honchoContext].filter(Boolean).join('\n').slice(0, 6000);
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ context }));
         } else {
           const assistant = payload.assistant;
@@ -675,6 +716,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             text: assistant.trim(), source: `${engine}.turn`,
             provenance: engine === 'dsh' ? `dsh:${session}` : `profile=${name}; session=${session}`,
             trust: 'observed' }) as { id: string };
+          // Retain the L1 acknowledgement path. The bounded L2 retry runs independently.
+          void writeHonchoWithRetry({
+            workspace: consumer.workspace, subjectId: engine + '/' + name,
+            session, user, assistant: assistant.trim(),
+          });
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ id: entry.id }));
         }
         return;

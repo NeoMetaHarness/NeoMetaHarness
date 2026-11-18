@@ -54,6 +54,10 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.memory-local.delete': 'member',
   'x.memory-local.export': 'viewer',
 
+  // x.memory-honcho
+  'x.memory-honcho.status': 'viewer',
+  'x.memory-honcho.list': 'viewer',
+
   // x.skills-registry
   'x.skills-registry.list': 'viewer',
   'x.skills-registry.get': 'viewer',
