@@ -218,9 +218,23 @@
       "title": "agents service in gateway + Hermes AgentRuntime adapter",
       "status": "in_progress",
       "owner": "codex"
+    },
+    "P2-3": {
+      "title": "Agents page (Astryx chat over engine-hermes: bots, streaming, approvals, stop)",
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "pnpm --dir apps/neo-app test:p2-3",
+      "verified_by_pm": "2026-11-18 x2 headless Chrome: create bot, streamed via StreamView handle (no per-delta state), approval deny -> completed, stop -> cancelled, delete, disable -> 404; startup JS 254 KB; regressions green. Also fixed Hermes profile-delete bridge race (Windows file lock)."
     }
   },
   "known_risks": [
     "2026-11-18: main gateway has no auth yet (P1-6 pending); it binds 127.0.0.1 but WS has no Origin check, so a local web page could drive it. Dev-only; P1-6 must land before any release build."
-  ]
+  ],
+  "p4_tasks": {
+    "P4-1": {
+      "title": "Skills page over Hermes learned skills + engine-hermes vault env",
+      "status": "in_progress",
+      "owner": "sol-b"
+    }
+  }
 }
