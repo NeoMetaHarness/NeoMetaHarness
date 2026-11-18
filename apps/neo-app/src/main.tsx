@@ -2,6 +2,7 @@ import '@neometaharness/ui/styles.css';
 import { StrictMode, Suspense, lazy, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppShell, NeoTheme, SideNav, SideNavItem, SideNavSection } from '@neometaharness/ui/shell';
+import { Button } from '@neometaharness/ui';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -21,6 +22,7 @@ const Channels = lazy(() => import('./pages/Channels'));
 const Routines = lazy(() => import('./pages/Routines'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 const Settings = lazy(() => import('./pages/Settings'));
+const Onboarding = lazy(() => import('./pages/Onboarding'));
 const Placeholder = lazy(() => import('./pages/Placeholder'));
 const pages = [
   { label: 'Inbox', path: '/inbox', icon: 'inbox' },
@@ -58,12 +60,13 @@ export function parseDeepLink(raw: string): { path: '/inbox' | '/coding'; id: st
 
 function activePath() {
   const candidate = window.location.pathname;
-  return candidate.startsWith('/settings/') || pages.some(({ path }) => path === candidate) ? candidate : '/extensions';
+  return candidate === '/onboarding' || candidate.startsWith('/settings/') || pages.some(({ path }) => path === candidate) ? candidate : '/extensions';
 }
 
 function NeoApp() {
   const [path, setPath] = useState(activePath);
   const [shellError, setShellError] = useState('');
+  const [setupIncomplete, setSetupIncomplete] = useState(false);
   useEffect(() => {
     const onPop = () => setPath(activePath());
     window.addEventListener('popstate', onPop);
@@ -73,6 +76,26 @@ function NeoApp() {
   const navigate = (destination: string) => {
     if (destination !== path) window.history.pushState({}, '', destination + window.location.search);
     setPath(destination);
+  };
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (!inTauri && !query.has('onboarding') && window.location.pathname !== '/onboarding') return;
+    void gateway.onboarding.get().then((status) => {
+      setSetupIncomplete(!status.completed);
+      if (!status.completed && !query.has('deep_link') && !sessionStorage.getItem('neo_onboarding_skipped')) {
+        window.history.replaceState({}, '', '/onboarding' + window.location.search);
+        setPath('/onboarding');
+      }
+    }).catch((error) => setShellError(`Cannot load onboarding: ${String(error)}`));
+  }, []);
+  const skipSetup = () => {
+    sessionStorage.setItem('neo_onboarding_skipped', '1');
+    navigate('/extensions');
+  };
+  const completeSetup = () => {
+    sessionStorage.removeItem('neo_onboarding_skipped');
+    setSetupIncomplete(false);
+    navigate('/extensions');
   };
   useEffect(() => {
     const route = (raw: string) => {
@@ -125,8 +148,12 @@ function NeoApp() {
     }>
       <div className="neo-page">
         {shellError && <p role="alert">{shellError}</p>}
+        {setupIncomplete && path !== '/onboarding' && <div className="neo-setup-reminder" data-testid="onboarding-reminder">
+          <span>Finish setting up your workspace when you are ready.</span>
+          <Button label="Resume setup" onClick={() => navigate('/onboarding')}>Resume setup</Button>
+        </div>}
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
-          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings' ? <Settings onOpen={navigate} /> : <Placeholder name={current.label} />}
+          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/onboarding' ? <Onboarding onOpen={navigate} onSkip={skipSetup} onCompleted={completeSetup} /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings' ? <Settings onOpen={navigate} /> : <Placeholder name={current.label} />}
         </Suspense>
       </div>
     </AppShell>

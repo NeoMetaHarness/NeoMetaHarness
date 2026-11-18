@@ -1,7 +1,7 @@
 import { codingWorkflowRouter } from './coding-workflow.js';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync, linkSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, linkSync, unlinkSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -201,6 +201,25 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     desktopToken = desktop.token;
   }
 
+  const onboardingFile = join(dataDir, 'onboarding.json');
+  const readOnboardingCompletion = (): string | null => {
+    try {
+      const state: unknown = JSON.parse(readFileSync(onboardingFile, 'utf8'));
+      if (state && typeof state === 'object' && 'completedAt' in state &&
+          typeof state.completedAt === 'string' && Number.isFinite(Date.parse(state.completedAt))) {
+        return state.completedAt;
+      }
+      throw new Error('Invalid onboarding state');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+  const onboardingStatus = (context: GatewayAuthContext) => {
+    const completedAt = readOnboardingCompletion();
+    return { completed: completedAt !== null, completedAt, ownerName: context.user?.name ?? context.user?.email ?? 'Workspace owner', mode };
+  };
+
   const authNodeHandler = toNodeHandler(auth);
 
   const vault = new VaultService(db, options.vaultKeyProvider ?? new KeyFileProvider(
@@ -391,6 +410,26 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         try {
           return await kernel.invokeRoute('/x/backup/backup', 'RPC', input) as { out: string; files: number; format: number };
         } catch (error) { throw new ORPCError('BAD_REQUEST', { message: error instanceof Error ? error.message : 'Backup failed' }); }
+      }),
+    },
+    onboarding: {
+      get: os.onboarding.get.handler(async ({ context }) => {
+        authorize('onboarding.get', context);
+        return onboardingStatus(context);
+      }),
+      complete: os.onboarding.complete.handler(async ({ context }) => {
+        authorize('onboarding.complete', context);
+        if (!readOnboardingCompletion()) {
+          mkdirSync(dataDir, { recursive: true });
+          const temporary = `${onboardingFile}.${randomUUID()}.tmp`;
+          try {
+            writeFileSync(temporary, JSON.stringify({ completedAt: new Date().toISOString() }), { mode: 0o600 });
+            renameSync(temporary, onboardingFile);
+          } finally {
+            if (existsSync(temporary)) unlinkSync(temporary);
+          }
+        }
+        return onboardingStatus(context);
       }),
     },
     agents: agentApi.router,

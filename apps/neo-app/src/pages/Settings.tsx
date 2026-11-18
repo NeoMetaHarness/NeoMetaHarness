@@ -1,7 +1,7 @@
 import { Button } from '@neometaharness/ui';
 import { useState } from 'react';
 
-export default function Settings({ onOpen }: { onOpen: (path: '/settings/channels' | '/settings/models') => void }) {
+export default function Settings({ onOpen }: { onOpen: (path: '/settings/channels' | '/settings/models' | '/onboarding') => void }) {
   const [updateStatus, setUpdateStatus] = useState('');
   const native = (window as unknown as { __TAURI_INTERNALS__?: {
     invoke: (name: string) => Promise<string | null>;
@@ -17,6 +17,11 @@ export default function Settings({ onOpen }: { onOpen: (path: '/settings/channel
   }
   return <section aria-label="Settings">
     <h1>Settings</h1>
+    <h2>Workspace setup</h2>
+    <p>Review your owner account, model, first bot, and channels.</p>
+    <Button label="Open workspace setup" data-testid="settings-onboarding-open" onClick={() => onOpen('/onboarding')}>
+      Open setup
+    </Button>
     <h2>Channels</h2>
     <p>Manage messaging connections for your bots.</p>
     <Button label="Manage channels" data-testid="settings-channels-open" onClick={() => onOpen('/settings/channels')}>

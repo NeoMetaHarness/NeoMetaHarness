@@ -25,6 +25,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.coding-workflow.terminal.output': 'viewer',
   'x.coding-workflow.terminal.run': 'member',
   'x.coding-workflow.prepare': 'member',
+  'onboarding.get': 'admin',
+  'onboarding.complete': 'admin',
   // x.engine-t3
   'x.engine-t3.create': 'member',
   'x.engine-t3.send': 'member',

@@ -16,3 +16,13 @@
 .extension-reason { margin-top: 8px !important; }
 .page-error { padding: 12px; border: 1px solid currentColor; margin-bottom: 16px; }
 @media (max-width: 580px) { .extension-row { align-items: flex-start; } .page-header { flex-direction: column; } }
+.neo-setup-reminder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  border: 1px solid currentColor;
+}

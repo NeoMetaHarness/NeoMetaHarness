@@ -391,6 +391,10 @@ const baseNeoContract = {
       .output(z.object({ out: z.string(), files: z.number().int(), format: z.number().int() })),
   },
   x: { 'coding-workflow': codingWorkflowContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract },
+  onboarding: {
+    get: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), mode: z.enum(['desktop', 'server']) })),
+    complete: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), mode: z.enum(['desktop', 'server']) })),
+  },
   extensions: {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
