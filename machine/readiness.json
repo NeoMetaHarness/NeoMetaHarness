@@ -191,8 +191,9 @@
     },
     "P1-7": {
       "title": "Route policy table + contract-coverage auth test",
-      "status": "in_progress",
-      "owner": "antigravity"
+      "status": "done",
+      "owner": "antigravity",
+      "evidence": "PM rerun on main: gateway 13/13 x2 incl. policy.test (85 procedures 1:1 with CONTRACT_POLICY; unauth 401, non-member 403, viewer 403 above viewer; auth before engine: disabled ext -> 401/403 never 404); PM proved coverage bites (deleting one entry fails 3/3 policy tests); authorize() fails closed on unknown routes; full regression 23/23; docs/05 'Adding a route'"
     }
   },
   "p2_tasks": {
@@ -325,6 +326,13 @@
       "owner": "codex",
       "evidence": "PM rerun on authenticated main: P5-3_BROWSER PASS act=ready observe=ready blocked=reason disabled=visible other_extension=healthy hermes_requests=6 dsh_worker=6 (2x pre-auth, 1x post-auth in 23/23 regression); SUPERAGENT_MODEL PASS vault=true auth=true; injectable LlmAdapter, scripted models only in test/; MCP bridge authenticated with superagent-minted scoped API key",
       "follow_up": "pinned DSH 0.2.2-rc.1 SDK lacks standalone preset-scoped MCP (packages/sdk/server/src/server.ts:564-591) -> worker on testkit host behind WorkerHost; live model unverified"
+    }
+  },
+  "p7_tasks": {
+    "P7-1": {
+      "title": "Extension toggle-safety suite (routes, health, processes, projections)",
+      "status": "in_progress",
+      "owner": "antigravity"
     }
   }
 }
