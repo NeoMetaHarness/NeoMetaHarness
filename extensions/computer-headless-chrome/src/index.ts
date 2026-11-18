@@ -226,6 +226,11 @@ export class HeadlessChromeProvider implements ComputerProvider {
     this.instances.delete(id);
     await instance?.stop();
   }
+
+  async dispose(): Promise<void> {
+    const ids = [...this.instances.keys()];
+    await Promise.all(ids.map((id) => this.release(id)));
+  }
 }
 
 export default defineExtension({
@@ -233,7 +238,11 @@ export default defineExtension({
     const computers = ctx.inject<ComputerRegistry>('computers');
     if (!computers) throw new Error('Missing computer registry');
     const provider = new HeadlessChromeProvider();
-    ctx.effect(() => computers.registerProvider('computer-headless-chrome', provider));
+    const unregister = computers.registerProvider('computer-headless-chrome', provider);
+    ctx.effect(() => async () => {
+      await unregister();
+      await provider.dispose();
+    });
     ctx.health(() => ({ ok: true }));
   },
 });
