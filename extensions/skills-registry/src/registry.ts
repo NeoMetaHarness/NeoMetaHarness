@@ -213,8 +213,8 @@ export class SkillRegistry implements SkillProjection {
     return { metadata: await this.record(name), content: await readFile(join(this.skillDir(name), 'SKILL.md'), 'utf8') };
   }
 
-  async import(input: { name: string; content: string; sourceProfile: string; sourcePath: string;
-    trust?: Trust; provenance?: string; autonomy?: 'suggest' }): Promise<SkillRecord> {
+  async import(input: { name: string; content: string; sourceProfile: string },
+    origin: { kind: 'manual' | 'sync' | 'hub'; path?: string; reportId?: string } = { kind: 'manual' }): Promise<SkillRecord> {
     return this.serialize(async () => {
       safeName(input.sourceProfile);
       const name = input.name.includes('/') ? safeIdentity(input.name) : identity(input.sourceProfile, input.name);
@@ -223,19 +223,26 @@ export class SkillRegistry implements SkillProjection {
       if (content.length > 200_000 || !/^---\s*\n[\s\S]*?\n---\s*\n/.test(content)) {
         throw new Error('Skill requires SKILL.md frontmatter (max 200 KB)');
       }
+      const preview = { name: baseName(name), identifier: name, skill_md: content, files: ['SKILL.md'] };
+      const scan = inspectHub(input.sourceProfile, name, preview, { policy: 'allow' });
+      const approval = origin.kind === 'hub' && origin.reportId ? this.hubReports[origin.reportId] : undefined;
+      if (scan.blocked && !(origin.kind === 'hub' && approval?.approved)) {
+        throw new Error(`Skill security scan blocked import: ${scan.findings.map((finding) => finding.category).join(', ')}`);
+      }
+      const sourcePath = origin.kind === 'hub' ? `hub:${origin.path}`
+        : origin.kind === 'sync' ? `sync:${origin.path}` : `manual:${name}`;
+      const trust: Trust = origin.kind === 'hub' ? 'untrusted' : 'observed';
       const folder = this.skillDir(name);
       const previous = existsSync(join(folder, 'metadata.json')) ? await this.get(name) : undefined;
       if (previous?.content === content && previous.metadata.sourceProfile === input.sourceProfile
-        && previous.metadata.trust === (input.trust ?? 'observed')
-        && previous.metadata.sourcePath === input.sourcePath
-        && previous.metadata.provenance === input.provenance
-        && previous.metadata.autonomy === (input.autonomy ?? declaredAutonomy(content))) return previous.metadata;
+        && previous.metadata.trust === trust
+        && previous.metadata.sourcePath === sourcePath) return previous.metadata;
       const next: SkillRecord = {
         name, version: (previous?.metadata.version ?? 0) + 1,
-        sourceProfile: input.sourceProfile, sourcePath: input.sourcePath,
-        trust: input.trust ?? 'observed', updatedAt: Date.now(), checks: declaredChecks(content),
-        autonomy: input.autonomy ?? declaredAutonomy(content),
-        ...(input.provenance ? { provenance: input.provenance } : {}),
+        sourceProfile: input.sourceProfile, sourcePath,
+        trust, updatedAt: Date.now(), checks: declaredChecks(content),
+        autonomy: declaredAutonomy(content),
+        ...(origin.reportId ? { provenance: origin.reportId } : {}),
       };
       await mkdir(folder, { recursive: true });
       await writeFile(join(folder, 'SKILL.md'), content, 'utf8');
@@ -363,7 +370,7 @@ export class SkillRegistry implements SkillProjection {
       throw new Error('Hub bundle cannot be represented safely by the registry');
     }
     return this.import({ name: report.name, content: input.preview.skill_md,
-      sourceProfile: input.profile, sourcePath: `hub:${input.identifier}`, trust: 'untrusted' });
+      sourceProfile: input.profile }, { kind: 'hub', path: input.identifier, reportId: input.reportId });
   }
 
   private async versionContent(revision: { hash: string; path: string }): Promise<string> {
@@ -395,7 +402,6 @@ export class SkillRegistry implements SkillProjection {
     if (!target) throw new Error('Unknown skill version');
     return this.import({
       name, content: await this.versionContent(target), sourceProfile: target.metadata.sourceProfile,
-      sourcePath: target.metadata.sourcePath, trust: target.metadata.trust,
     });
   }
 
@@ -433,7 +439,7 @@ export class SkillRegistry implements SkillProjection {
     for (const { name, source, content } of await this.candidates(home)) {
       const hash = this.fingerprint(content);
       if (seen.get(source) === hash) continue;
-      imported.push(await this.import({ name, content, sourceProfile: profile, sourcePath: source }));
+      imported.push(await this.import({ name, content, sourceProfile: profile }, { kind: 'sync', path: source }));
       seen.set(source, hash);
     }
     this.seen.set(profile, seen);

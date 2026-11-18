@@ -17,10 +17,13 @@
     "test:toggle": "node tests/toggle-safety/run.mjs",
     "test:p1": "pnpm --dir apps/gateway test:p1",
     "test:p1-2": "pnpm --dir apps/neo-app test:p1-2",
-    "test:p1-5": "pnpm --dir apps/neo-app test:p1-5"
+    "test:p1-5": "pnpm --dir apps/neo-app test:p1-5",
+    "test:p4-7": "pnpm --dir apps/neo-app test:p4-7"
   },
   "devDependencies": {
     "ajv": "8.17.1",
     "yaml": "^2.8.1"
   }
 }
+
+
