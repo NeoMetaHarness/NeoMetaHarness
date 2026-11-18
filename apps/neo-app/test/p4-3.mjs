@@ -328,7 +328,7 @@ async function trial(previewPort) {
         setter.call(input, 'botb');
         input.dispatchEvent(new Event('input', { bubbles: true }));
       })()`);
-      await page.eventually('!document.querySelector("[data-testid=registry-assign]").disabled', 'assign enabled');
+      await page.eventually('!(document.querySelector("[data-testid=registry-assign]")?.disabled || document.querySelector("[data-testid=registry-assign]")?.getAttribute("aria-disabled") === "true")', 'assign enabled');
       await page.evaluate('document.querySelector("[data-testid=registry-assign]").click()');
       await page.eventually('document.querySelector("[data-testid=registry-assign]")?.textContent === "Unassign"', 'bot B assigned');
       assert.ok((await registry.assignments()).some((item) => item.name === skill.name && item.targetId === 'botb'));
