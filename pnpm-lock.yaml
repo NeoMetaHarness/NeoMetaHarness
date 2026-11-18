@@ -265,6 +265,12 @@ importers:
         specifier: ^7.1.0
         version: 7.3.8(@types/node@22.18.13)(tsx@4.20.6)(yaml@2.9.1)
 
+  extensions/backup:
+    dependencies:
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+
   extensions/channels:
     dependencies:
       '@neometaharness/kernel':

@@ -13,6 +13,7 @@ import { blockedReason, isDestructive } from './ask-policy.js';
 import { DecisionLog } from './decision-log.js';
 import { BridgeKey, BRIDGE_KEY_ROTATE_MS, writeTokenFile, type BridgeKeyHandle } from './bridge-key.js';
 import { checkUpstreams } from './upstream-source.js';
+import { InboxStore } from './inbox-store.js';
 
 type Report = NonNullable<InboxItem['report']>;
 type Postmortem = NonNullable<Report['postmortem']>;
@@ -71,8 +72,11 @@ class SuperagentService {
   private gatewayUrl!: () => string;
   /** Path of the bridge API key file handed to the worker (SEC-11). */
   private token?: string;
+  private inboxStore?: InboxStore;
 
   async start(home: string, gatewayUrl: () => string, tokenFile?: string, channel?: ChannelSource): Promise<void> {
+    this.inboxStore = new InboxStore(join(home, '..', 'inbox.json'));
+    for (const item of this.inboxStore.load()) this.items.set(item.id, item);
     this.workerHome = home;
     this.gatewayUrl = gatewayUrl;
     this.token = tokenFile;
@@ -163,6 +167,7 @@ class SuperagentService {
   private update(item: InboxItem, patch: Partial<InboxItem>): InboxItem {
     const next = { ...item, ...patch, updatedAt: Date.now() };
     this.items.set(next.id, next);
+    this.inboxStore?.save([...this.items.values()]);
     const event: InboxEvent = { seq: ++this.sequence, item: structuredClone(next) };
     this.events.push(event);
     if (this.events.length > 1000) this.events.shift();
@@ -243,6 +248,7 @@ class SuperagentService {
       ...request, id: randomUUID(), source: source as InboxItem['source'], status: 'suggestion', createdAt: now, updatedAt: now,
     };
     this.items.set(item.id, item);
+    this.inboxStore?.save([...this.items.values()]);
     onCreated?.(item);
     const reason = blockedReason(request.requesterRole, request.mode, request.text);
     if (reason) {

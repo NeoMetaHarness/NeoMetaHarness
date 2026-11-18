@@ -1,0 +1,7 @@
+{
+  "name": "@neometaharness/backup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@neometaharness/kernel": "workspace:*" }
+}
