@@ -445,15 +445,24 @@ export class HermesRuntime {
   }> {
     if (!identifier || identifier.length > 500) throw new Error('Invalid Hub identifier');
     const path = `/api/skills/hub/preview?profile=${encodeURIComponent(profileName(profile))}&identifier=${encodeURIComponent(identifier)}`;
-    return this.request('dashboard', path).then(async (r) => await r.json() as {
-      name: string; identifier: string; skill_md: string; files: string[];
+    // Isolated acceptance tests use a local HTTP fixture for the pinned read-only Hub seam.
+    const fixture = process.env.NODE_ENV === 'test' ? process.env.NMH_HERMES_TEST_HUB_URL : undefined;
+    const response = fixture ? fetch(new URL(path, fixture)) : this.request('dashboard', path);
+    return response.then(async (r) => {
+      if (!r.ok) throw new Error(`Hub preview returned HTTP ${r.status}`);
+      return r.json() as Promise<{ name: string; identifier: string; skill_md: string; files: string[] }>;
     });
   }
 
   async scanHubSkill(profile: string, identifier: string): Promise<{ policy: string; findings: unknown[] }> {
     if (!identifier || identifier.length > 500) throw new Error('Invalid Hub identifier');
     const path = `/api/skills/hub/scan?profile=${encodeURIComponent(profileName(profile))}&identifier=${encodeURIComponent(identifier)}`;
-    return this.request('dashboard', path).then(async (r) => await r.json() as { policy: string; findings: unknown[] });
+    const fixture = process.env.NODE_ENV === 'test' ? process.env.NMH_HERMES_TEST_HUB_URL : undefined;
+    const response = fixture ? fetch(new URL(path, fixture)) : this.request('dashboard', path);
+    return response.then(async (r) => {
+      if (!r.ok) throw new Error(`Hub scan returned HTTP ${r.status}`);
+      return r.json() as Promise<{ policy: string; findings: unknown[] }>;
+    });
   }
 
   async curatorStatus(profile: string): Promise<Record<string, unknown>> {

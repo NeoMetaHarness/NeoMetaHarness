@@ -12,7 +12,7 @@ export type HubReport = {
 const patterns: { category: string; pattern: RegExp; description: string }[] = [
   { category: 'network', pattern: /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|fetch\s*\(|axios\.|requests\.|urllib\.|https?:\/\/)/i,
     description: 'Network access or remote download pattern' },
-  { category: 'shell-exec', pattern: /(?:\b(?:bash|sh|powershell|pwsh|cmd\.exe)\s+-[ce]|\b(?:os\.system|subprocess\.|child_process|exec\s*\(|spawn\s*\(|Popen\s*\(|eval\s*\(|\|\s*(?:ba)?sh\b))/i,
+  { category: 'shell-exec', pattern: /(?:\b(?:bash|sh|powershell|pwsh|cmd\.exe)\s+-[ce]|\b(?:os\.system|subprocess\.|child_process|exec\s*\(|spawn\s*\(|Popen\s*\(|eval\s*\()|\|\s*(?:ba)?sh\b)/i,
     description: 'Shell or code execution pattern' },
   { category: 'credential-read', pattern: /(?:~[\\/]\.ssh|\.ssh[\\/]|\.aws[\\/]credentials|\.env\b|\b(?:process\.env|os\.environ|API_KEY|SECRET_KEY|credentials\.json|\/etc\/shadow)\b)/i,
     description: 'Credential or private configuration access pattern' },

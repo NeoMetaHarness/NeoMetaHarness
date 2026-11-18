@@ -212,7 +212,7 @@ async function fakeModel() {
         id: 'call_approval', type: 'function',
         function: { name: 'terminal', arguments: JSON.stringify({ command: 'rm -rf /tmp/danger_zone' }) },
       };
-      const learnedSkill = `---\nname: neo-learned-workflow\ndescription: Reuse a verified fake agent workflow\n---\n\n# Neo workflow\n\n1. Check the inputs.\n2. Verify the output.\n`;
+      const learnedSkill = `---\nname: neo-learned-workflow\ndescription: Reuse a verified fake agent workflow\nchecks:\n  - prompt: CHECK_PASS\n    expected: PASS_OK\n---\n\n# Neo workflow\n\n1. Check the inputs.\n2. Verify the output.\n`;
       const learnTool = {
         id: 'call_skill_manage', type: 'function',
         function: { name: 'skill_manage', arguments: JSON.stringify({
@@ -223,7 +223,8 @@ async function fakeModel() {
       const requestedTool = learning ? learnTool : approval ? tool : undefined;
       const message = requestedTool
         ? { role: 'assistant', content: learning ? 'Saving a learned skill.' : 'Requesting permission', tool_calls: [requestedTool] }
-        : { role: 'assistant', content: toolDone ? 'Skill or approval action finished.' : 'Hermes fake answer complete.' };
+        : { role: 'assistant', content: !input.stream && text.includes('CHECK_PASS') ? 'PASS_OK'
+          : toolDone ? 'Skill or approval action finished.' : 'Hermes fake answer complete.' };
       if (!input.stream) {
         if (slow) await sleep(20000);
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -327,10 +328,14 @@ async function trial(previewPort) {
       `http://127.0.0.1:${model.port}/v1`);
     const base = `http://127.0.0.1:${gateway.port}`;
     const rpc = createORPCClient(new RPCLink({ url: base, headers: authHeaders }));
-    for (const id of ['sample-ts', 'memory-local', 'engine-hermes', 'engine-dsh', 'skills-registry']) {
+    for (const id of ['models', 'sample-ts', 'memory-local', 'engine-hermes', 'engine-dsh', 'skills-registry']) {
       const response = await rpc.extensions.enable({ id });
       assert.equal(response.status, 'running', `${id}: ${response.reason}`);
     }
+    await rpc.x.models.providers.put({
+      id: 'scripted', kind: 'openai-compatible', baseUrl: `http://127.0.0.1:${model.port}/v1`,
+    });
+    await rpc.x.models.roles.set({ role: 'eval', providerId: 'scripted', model: 'fake-model' });
     const profiles = rpc.x['engine-hermes'].profiles;
     await profiles.create({ name: 'bota' });
     await profiles.create({ name: 'botc' });
@@ -359,6 +364,7 @@ async function trial(previewPort) {
     assert.equal(skill.sourceProfile, 'bota');
     assert.ok(skill.sourcePath.includes('bota') && skill.sourcePath.endsWith('SKILL.md'));
     assert.equal((await registry.versions({ name: skill.name })).length, 1);
+    assert.equal((await registry.evaluate({ name: skill.name })).status, 'passed');
     await registry.sync({ profile: 'botb' });
     const botBSkill = (await registry.list()).find((item) => item.name === 'botb/neo-learned-workflow');
     assert.ok(botBSkill, 'Bot B learned the same skill name into its independent registry identity');

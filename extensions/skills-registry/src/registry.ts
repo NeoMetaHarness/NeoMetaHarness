@@ -255,7 +255,11 @@ export class SkillRegistry implements SkillProjection {
       let path = current;
       let raw: string;
       try { raw = await this.git('show', `${hash}:${path}/metadata.json`); }
-      catch { path = legacy; raw = await this.git('show', `${hash}:${path}/metadata.json`); }
+      catch {
+        path = legacy;
+        try { raw = await this.git('show', `${hash}:${path}/metadata.json`); }
+        catch { continue; } // Git rename tracking may include an unrelated skill with a similar metadata file.
+      }
       const metadata = JSON.parse(raw) as SkillRecord;
       revisions.set(metadata.version, { version: metadata.version, hash, metadata: { ...metadata, name }, path });
     }
