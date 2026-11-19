@@ -48,10 +48,12 @@ export default defineExtension({
       const { name, actor, reason } = body as { name: string; actor: string; reason: string };
       return registry.override(name, actor, reason);
     });
-    ctx.route('ceiling', ({ body }) => {
+    const readCeiling: Parameters<typeof ctx.route>[1] = ({ body }) => {
       const { engine, targetId } = body as { engine: 'hermes' | 'dsh' | 'superagent'; targetId: string };
       return registry.ceiling(engine, targetId);
-    });
+    };
+    ctx.route('ceiling', readCeiling);
+    ctx.route('ceiling/get', readCeiling);
     ctx.route('ceiling/set', ({ body }) => {
       const { engine, targetId, ceiling } = body as { engine: 'hermes' | 'dsh' | 'superagent'; targetId: string; ceiling: 'suggest' | 'auto-low' | 'auto' };
       return registry.setCeiling(engine, targetId, ceiling);
