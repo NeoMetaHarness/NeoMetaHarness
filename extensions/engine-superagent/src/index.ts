@@ -8,6 +8,7 @@ import type { InboxEvent, InboxItem } from '@neometaharness/contracts';
 import type { VaultService } from '@neometaharness/vault';
 import { loadPinnedSuperagent } from './pinned.js';
 import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './model.js';
+import { ModelRouteRejected } from '../../models/src/hub.js';
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
 import { NeoCronSource, type ScheduledAsk } from './cron-source.js';
 import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './channel-source.js';
@@ -324,21 +325,44 @@ class SuperagentService {
     const started = Date.now();
     let outcome = 'failed';
     let modelId: string | undefined;
+    let escalated = false;
     try {
-      const { adapter, provider, model } = await this.models('eval', item);
-      modelId = model;
+      const initial = await this.models('eval', item);
+      modelId = initial.model;
       const request = createUserMessage({ content: [{ type: 'text', text: JSON.stringify({
         evalId: candidate.evalId, triggerIds: candidate.triggers.map((trigger) => trigger.id),
         botId: item.botId, text: item.text, mode: item.mode,
       }) }], source: { kind: 'user' } });
-      let result = '';
-      for await (const chunk of adapter.stream({ provider, model, messages: [request] })) {
-        if (chunk.type === 'block-end' && chunk.block.type === 'text') result += chunk.block.text;
+      const evaluateBinding = async (binding: typeof initial, signal?: AbortSignal) => {
+        let result = '';
+        for await (const chunk of binding.adapter.stream({ provider: binding.provider,
+          model: binding.model, messages: [request], signal })) {
+          if (chunk.type === 'block-end' && chunk.block.type === 'text') result += chunk.block.text;
+        }
+        if ((JSON.parse(result) as { decision: string }).decision !== 'accept') {
+          throw new ModelRouteRejected('Superagent Eval declined the proposed ticket');
+        }
+      };
+      if (initial.runEscalated) {
+        escalated = true;
+        await initial.runEscalated({ text: item.text, ticketId: item.id, source: item.source ?? 'neo/app' },
+          evaluateBinding, async (entry) => {
+            await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+              inputsSummary: item.text.slice(0, 240), candidates: candidate.triggers.map((trigger) => trigger.id),
+              chosenAction: entry.attempt === 1 ? 'eval' : 'escalate', modelRole: 'eval',
+              model_id: `${entry.selection.providerId}/${entry.selection.model}`,
+              latencyMs: entry.latencyMs, outcome: entry.outcome,
+              attempt: entry.attempt, tier: entry.tier });
+          });
+      } else {
+        await evaluateBinding(initial);
       }
-      outcome = (JSON.parse(result) as { decision: string }).decision === 'accept' ? 'accepted' : 'declined';
-      if (outcome !== 'accepted') throw new Error('Superagent Eval declined the proposed ticket');
+      outcome = 'accepted';
+    } catch (error) {
+      if (error instanceof ModelRouteRejected) outcome = 'declined';
+      throw error;
     } finally {
-      await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+      if (!escalated) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: candidate.triggers.map((trigger) => trigger.id),
         chosenAction: 'eval', modelRole: 'eval', model_id: modelId, latencyMs: Date.now() - started, outcome });
     }

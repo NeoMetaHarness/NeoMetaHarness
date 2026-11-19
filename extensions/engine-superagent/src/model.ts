@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { LlmAdapter, ToolCallId, attributionHeaders } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm';
+import type { RouteAttempt, RoutedTask, ResolvedModel, ModelRole as HubRole } from '../../models/src/hub.js';
 
 export type ModelRole = 'eval' | 'worker';
 export interface ModelBinding {
@@ -8,11 +9,17 @@ export interface ModelBinding {
   provider: string;
   model: string;
   configureTool?(tool: string): void;
+  runEscalated?<T>(task: RoutedTask,
+    execute: (binding: ModelBinding, signal: AbortSignal) => Promise<T>,
+    onAttempt: (entry: RouteAttempt) => Promise<void>): Promise<T>;
 }
 export type ModelFactory = (role: ModelRole, input: { botId: string; text: string; mode?: string }) => Promise<ModelBinding>;
 export interface ModelHubResolver {
   active: boolean;
   resolve(role: 'eval' | 'coding', profile?: string): Promise<{ baseUrl: string; model: string; apiKey?: string }>;
+  runRoutedTurn?<T>(role: 'eval' | 'coding', profile: string | undefined, task: RoutedTask,
+    execute: (binding: ResolvedModel, context: { attempt: number; tier: HubRole; signal: AbortSignal }) => Promise<T>,
+    onAttempt?: (entry: RouteAttempt) => Promise<void>): Promise<T>;
 }
 
 /** OpenAI-compatible model endpoint chosen through Neo configuration and scoped vault credentials. */
@@ -85,10 +92,18 @@ export function modelHubFactory(getHub: () => ModelHubResolver | undefined): Mod
     const hub = getHub();
     if (!hub?.active) throw new Error('Superagent requires the enabled Model Hub extension');
     const selection = await hub.resolve(role === 'eval' ? 'eval' : 'coding', input.botId);
-    const url = new URL(selection.baseUrl);
-    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Superagent model endpoint requires HTTP(S)');
-    // DSH registers adapters by provider name. Each worker turn owns its registration.
-    return { adapter: new GatewayModelAdapter(url.href, selection.apiKey, role),
-      provider: `neo-superagent-${randomUUID()}`, model: selection.model };
+    const create = (chosen: { baseUrl: string; apiKey?: string; model: string }): ModelBinding => {
+      const url = new URL(chosen.baseUrl);
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Superagent model endpoint requires HTTP(S)');
+      return { adapter: new GatewayModelAdapter(url.href, chosen.apiKey, role),
+        provider: `neo-superagent-${randomUUID()}`, model: chosen.model };
+    };
+    const binding = create(selection);
+    if (role === 'eval' && hub.runRoutedTurn) {
+      const run = hub.runRoutedTurn.bind(hub);
+      binding.runEscalated = (task, execute, onAttempt) =>
+        run('eval', input.botId, task, (chosen, { signal }) => execute(create(chosen), signal), onAttempt);
+    }
+    return binding;
   };
 }
