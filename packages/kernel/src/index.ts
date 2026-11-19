@@ -350,7 +350,7 @@ export class NeoKernel {
   }
 
   getSettingsSchema(id: string): ExtensionSettingsSchema | undefined {
-    return this.discovered.get(id)?.manifest.settings;
+    return structuredClone(this.active.get(id)?.settingsSchema ?? this.discovered.get(id)?.manifest.settings);
   }
 
   async getSettings(id: string): Promise<{
@@ -358,7 +358,15 @@ export class NeoKernel {
     sanitized: Record<string, unknown>;
     schema?: ExtensionSettingsSchema;
   }> {
-    return this.readSettings(id, this.discovered.get(id)?.manifest.settings);
+    const active = this.active.get(id);
+    if (!active) return this.readSettings(id, this.discovered.get(id)?.manifest.settings);
+    const values = structuredClone(active.settings);
+    const schema = structuredClone(active.settingsSchema);
+    const sanitized = { ...values };
+    for (const [key, property] of Object.entries(schema?.properties ?? {})) {
+      if (property.secret) sanitized[key] = { set: typeof values[key] === 'string' && values[key].length > 0 };
+    }
+    return { values, sanitized, schema };
   }
 
   private async readSettings(id: string, schema?: ExtensionSettingsSchema): Promise<{
@@ -400,10 +408,19 @@ export class NeoKernel {
       }
     }
 
-    return { values, sanitized, schema };
+    return { values, sanitized, schema: structuredClone(schema) };
   }
 
-  async saveSettings(id: string, incomingValues: Record<string, unknown>): Promise<Record<string, unknown>> {
+  saveSettings(id: string, incomingValues: Record<string, unknown>): Promise<Record<string, unknown>> {
+    // Serialize configuration with activation/upgrade so a health-gated candidate
+    // cannot capture stale settings while a save mutates the serving generation.
+    const input = structuredClone(incomingValues);
+    const work = this.operation.then(() => this.writeSettings(id, input));
+    this.operation = work.catch(() => {});
+    return work;
+  }
+
+  private async writeSettings(id: string, incomingValues: Record<string, unknown>): Promise<Record<string, unknown>> {
     const discovered = this.discovered.get(id);
     const schema = discovered?.manifest.settings;
     const vault = this.services.vault as {
@@ -436,7 +453,7 @@ export class NeoKernel {
       await vault!.put(scope, secretName, secretVal);
     }
 
-    const { values, sanitized } = await this.getSettings(id);
+    const { values, sanitized } = await this.readSettings(id, schema);
 
     const runningSettings = this.active.get(id)?.settings;
     if (runningSettings) {
