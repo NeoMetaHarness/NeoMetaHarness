@@ -54,20 +54,29 @@ struct GatewaySidecar {
 }
 
 impl GatewaySidecar {
-    fn launch(data_dir: PathBuf) -> Result<(Self, u16), Box<dyn std::error::Error>> {
+    fn launch(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<(Self, u16), Box<dyn std::error::Error>> {
         fs::create_dir_all(&data_dir)?;
         let repo = std::env::var_os("NMH_DESKTOP_REPO_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."));
-        let gateway_dir = repo.join("apps/gateway");
-        let node = std::env::var_os("NMH_NODE").unwrap_or_else(|| "node".into());
+        let bundled = app.path().resource_dir()?.join("gateway");
+        let packaged = bundled.join("apps/gateway/src/main.ts").is_file();
+        let gateway_dir = if packaged { bundled.join("apps/gateway") } else { repo.join("apps/gateway") };
+        let extensions_dir = if packaged { bundled.join("extensions") } else { repo.join("extensions") };
+        let node = if packaged {
+            let filename = if cfg!(windows) { "neo-gateway.exe" } else { "neo-gateway" };
+            std::env::current_exe()?.with_file_name(filename).into_os_string()
+        } else {
+            std::env::var_os("NMH_NODE").unwrap_or_else(|| "node".into())
+        };
         let mut command = Command::new(node);
         command
             .args(["--import", "tsx", "src/main.ts"])
             .current_dir(gateway_dir)
             .env("NMH_PORT", "0")
             .env("NMH_DB_PATH", data_dir.join("neo.sqlite"))
-            .env("NMH_EXTENSIONS_DIR", repo.join("extensions"))
+            .env("NMH_EXTENSIONS_DIR", extensions_dir)
+            .env("NEO_MODE", "desktop")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
@@ -140,7 +149,7 @@ pub fn run() {
                 .map(PathBuf::from)
                 .map(Ok)
                 .unwrap_or_else(|| app.path().app_data_dir())?;
-            let (sidecar, port) = GatewaySidecar::launch(data_dir.clone())?;
+            let (sidecar, port) = GatewaySidecar::launch(app.handle(), data_dir.clone())?;
             let gateway_pid = sidecar.child.id();
             app.manage(GatewayState(Mutex::new(Some(sidecar))));
 

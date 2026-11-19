@@ -12,6 +12,8 @@
     "test:p3-6": "pnpm --dir apps/neo-app build && pnpm --dir extensions/computer-docker typecheck && pnpm --dir apps/gateway exec tsx test/p3-6.ts",
     "test:p3-8": "pnpm --dir apps/neo-app build && pnpm --dir extensions/computer-local typecheck && pnpm --dir extensions/computer-local test && pnpm --dir apps/gateway exec tsx ../../apps/neo-app/test/p3-8.mjs",
     "test:p3-4": "pnpm --dir apps/neo-app build && pnpm --dir extensions/computer-vnc typecheck && pnpm --dir extensions/computer-vnc test && pnpm --dir apps/gateway exec tsx ../../apps/neo-app/test/p3-4.mjs",
+    "installer:check": "node scripts/installer-check.mjs",
+    "installer:prepare": "node scripts/installer-prepare.mjs",
     "deploy:check": "node scripts/deploy-check.mjs && node --test scripts/test/deploy.test.mjs",
     "neo:backup": "pnpm --dir apps/gateway exec tsx src/backup-cli.ts",
     "neo:restore": "pnpm --dir apps/gateway exec tsx src/restore-cli.ts",
