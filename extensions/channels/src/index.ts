@@ -589,9 +589,11 @@ export class ChannelsRuntime {
     for (const { name } of profiles) {
       if (!profilePattern.test(name)) continue;
       await this.project(name);
+      const hasTelegram = !!(await this.vault.get(scope(name), telegramKey));
+      // Only profiles with stored credentials pay for a platform listing at startup.
+      if (!hasTelegram && !whatsapp[name]) continue;
       const enabled = new Set((await this.list(name)).platforms.filter((item) => item.enabled).map((item) => item.id));
-      const telegram = !!(await this.vault.get(scope(name), telegramKey)) && enabled.has('telegram');
-      if (telegram || (whatsapp[name] && enabled.has('whatsapp'))) await this.start(name);
+      if ((hasTelegram && enabled.has('telegram')) || (whatsapp[name] && enabled.has('whatsapp'))) await this.start(name);
     }
   }
 

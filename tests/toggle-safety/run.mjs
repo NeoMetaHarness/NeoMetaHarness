@@ -164,6 +164,10 @@ const SELF_REPORTING_INPUT = {
   '/x/channels/list': { profile: 'default' }, '/x/channels/status': { profile: 'default' },
   '/x/channels/connect': { profile: 'default', platform: 'telegram', token: 'probe' },
   '/x/channels/disconnect': { profile: 'default', platform: 'telegram' },
+  '/x/channels/senders': { profile: 'default', platform: 'whatsapp' },
+  '/x/channels/allow': { profile: 'default', platform: 'whatsapp', senderId: '15550001111', role: 'viewer' },
+  '/x/channels/revoke': { profile: 'default', platform: 'whatsapp', senderId: '15550001111' },
+  '/x/channels/approve': { profile: 'default', platform: 'whatsapp', code: 'ABCDEFGH', role: 'viewer' },
   '/x/memory-honcho/status': {}, '/x/memory-honcho/list': {},
 };
 const OFFICIAL_EXTENSIONS = readdirSync(join(here, '../../extensions'), { withFileTypes: true })
