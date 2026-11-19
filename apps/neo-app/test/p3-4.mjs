@@ -35,6 +35,16 @@ class Browser {
     });
   }
   static async open(details) {
+    // Since P7-5 (SEC-06) the headless Chrome provider speaks CDP over a pipe and hands
+    // out a { targetId, send } channel instead of a debugging WebSocket URL.
+    if (typeof details?.send === 'function') {
+      const browser = Object.create(Browser.prototype);
+      browser.pending = new Map();
+      browser.send = (method, params = {}) => details.send(method, params, browser.session);
+      browser.close = () => {};
+      browser.session = (await details.send('Target.attachToTarget', { targetId: details.targetId, flatten: true })).sessionId;
+      await browser.send('Page.enable'); return browser;
+    }
     const socket = new WebSocket(details.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
     const browser = new Browser(socket);
