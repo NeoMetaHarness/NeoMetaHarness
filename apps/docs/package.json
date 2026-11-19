@@ -8,7 +8,8 @@
     "build": "node scripts/build.mjs",
     "preview": "vite preview",
     "check": "node scripts/check.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node test/check.test.mjs"
   },
   "dependencies": {
     "@neometaharness/ui": "workspace:*",
