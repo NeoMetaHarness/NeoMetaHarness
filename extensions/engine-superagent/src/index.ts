@@ -16,10 +16,8 @@ import { checkUpstreams } from './upstream-source.js';
 
 type Report = NonNullable<InboxItem['report']>;
 type Postmortem = NonNullable<Report['postmortem']>;
-type SkillImporter = { import(input: {
-  name: string; content: string; sourceProfile: string; sourcePath: string;
-  provenance: string; autonomy: 'suggest'; trust: 'untrusted';
-}): Promise<{ name: string }> };
+type SkillImporter = { import(input: { name: string; content: string; sourceProfile: string },
+  origin: { kind: 'agent'; path: string }): Promise<{ name: string }> };
 type Candidate = { evalId: string; triggers: { id: string }[] };
 type Ticket = { id: string; origin: { triggerId: string }; inputs: { id: string }[] };
 type Assignment = { id: string };
@@ -211,8 +209,8 @@ class SuperagentService {
         const content = `---\nname: ${name}\ndescription: Reusable procedure from Neo ticket ${item.id}\nautonomy: suggest\nprovenance: ${provenance}\n---\n\n# Procedure\n\n${summary.procedure.trim()}\n`;
         const registry = this.registry();
         if (registry) {
-          const skill = await registry.import({ name, content, sourceProfile: 'superagent',
-            sourcePath: provenance, provenance, autonomy: 'suggest', trust: 'untrusted' });
+          const skill = await registry.import({ name, content, sourceProfile: 'superagent' },
+            { kind: 'agent', path: provenance });
           summary = { ...summary, skill: skill.name };
         }
       }

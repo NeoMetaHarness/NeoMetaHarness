@@ -199,7 +199,9 @@ export class SkillRegistry implements SkillProjection {
   }
 
   async import(input: { name: string; content: string; sourceProfile: string },
-    origin: { kind: 'manual' | 'sync' | 'hub'; path?: string; reportId?: string } = { kind: 'manual' }): Promise<SkillRecord> {
+    // 'agent' is for in-process extensions (via the injected skillRegistry service, never the HTTP
+    // route): it records the caller's provenance but can only lower trust to untrusted.
+    origin: { kind: 'manual' | 'sync' | 'hub' | 'agent'; path?: string; reportId?: string } = { kind: 'manual' }): Promise<SkillRecord> {
     return this.serialize(async () => {
       safeName(input.sourceProfile);
       const name = input.name.includes('/') ? safeIdentity(input.name) : identity(input.sourceProfile, input.name);
@@ -214,9 +216,11 @@ export class SkillRegistry implements SkillProjection {
       if (scan.blocked && !(origin.kind === 'hub' && approval?.approved)) {
         throw new Error(`Skill security scan blocked import: ${scan.findings.map((finding) => finding.category).join(', ')}`);
       }
+      if (origin.kind === 'agent' && !origin.path) throw new Error('Agent skill import requires provenance');
       const sourcePath = origin.kind === 'hub' ? `hub:${origin.path}`
-        : origin.kind === 'sync' ? `sync:${origin.path}` : `manual:${name}`;
-      const trust: Trust = origin.kind === 'hub' ? 'untrusted' : 'observed';
+        : origin.kind === 'sync' ? `sync:${origin.path}`
+        : origin.kind === 'agent' ? origin.path! : `manual:${name}`;
+      const trust: Trust = origin.kind === 'hub' || origin.kind === 'agent' ? 'untrusted' : 'observed';
       const folder = this.skillDir(name);
       const previous = existsSync(join(folder, 'metadata.json')) ? await this.get(name) : undefined;
       if (previous?.content === content && previous.metadata.sourceProfile === input.sourceProfile
@@ -227,7 +231,7 @@ export class SkillRegistry implements SkillProjection {
         sourceProfile: input.sourceProfile, sourcePath,
         trust, updatedAt: Date.now(), checks: [],
         autonomy: this.skillAutonomies[name] ?? 'suggest',
-        ...(origin.reportId ? { provenance: origin.reportId } : {}),
+        ...(origin.kind === 'agent' ? { provenance: origin.path! } : origin.reportId ? { provenance: origin.reportId } : {}),
       };
       await mkdir(folder, { recursive: true });
       await writeFile(join(folder, 'SKILL.md'), content, 'utf8');
