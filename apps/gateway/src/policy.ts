@@ -162,6 +162,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'computers.kill': 'admin',
   'computers.state': 'viewer',
   'computers.capture': 'admin',
+  'computers.local.status': 'viewer',
+  'computers.local.set': 'owner',
 
   // events
   'events.subscribe': 'viewer',
@@ -225,6 +227,7 @@ export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
   '/internal/computers-mcp/action': 'internal',
   '/x/computers-mcp/action': 'internal',
   '/internal/computers/action': 'internal',
+  '/x/computer-local/consent': 'owner',
   '/auth/ws-ticket': 'viewer',
   '/auth/*': 'internal',
   '/x/*': 'viewer',

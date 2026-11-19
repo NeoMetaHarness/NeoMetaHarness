@@ -88,6 +88,8 @@ export interface GatewayOptions {
   vaultKeyFile?: string;
   vaultKeyProvider?: KeyProvider;
   authorizeVault?: (operation: VaultOperation, scope: VaultScope) => boolean | Promise<boolean>;
+  /** Driver factory injection for isolated host implementations and fake-driver tests. */
+  computerLocalDriverFactory?: import('../../../extensions/computer-local/src/provider.js').LocalDriverFactory;
   /**
    * Server-mode HTTP sign-up. 'invite' (default; NEO_SIGNUP overrides): the first
    * account needs the one-time setup token, later ones a pending invitation.
@@ -283,6 +285,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     channelBus,
     computers,
     computerMcpBridge,
+    computerLocalDriverFactory: options.computerLocalDriverFactory,
     vault,
     auth,
     memoryRecords: (db as any).memories,
@@ -1081,6 +1084,21 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         try { return await computers.capture(input.id); }
         catch { throw new ORPCError('BAD_GATEWAY', { message: 'Computer capture failed; release and reattach the computer' }); }
       }),
+      local: {
+        status: os.computers.local.status.handler(async ({ context }) => {
+          authorize('computers.local.status', context);
+          if (!kernel.hasRoute('/x/computer-local/status')) return { available: false, enabled: false };
+          const status = await kernel.invokeRoute('/x/computer-local/status', 'GET') as { enabled: boolean };
+          return { available: true, enabled: status.enabled };
+        }),
+        set: os.computers.local.set.handler(async ({ input, context }) => {
+          authorize('computers.local.set', context);
+          if (!kernel.hasRoute('/x/computer-local/consent')) {
+            throw new ORPCError('NOT_FOUND', { message: 'Local desktop extension is disabled' });
+          }
+          return await kernel.invokeRoute('/x/computer-local/consent', 'POST', input) as { enabled: boolean };
+        }),
+      },
     },
     events: {
       subscribe: os.events.subscribe.handler(async function* ({ input, signal, context }) {

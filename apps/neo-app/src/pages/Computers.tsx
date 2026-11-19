@@ -23,6 +23,7 @@ export default function Computers() {
   const [computers, setComputers] = useState<Row[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [killEngaged, setKillEngaged] = useState(false);
+  const [local, setLocal] = useState({ available: false, enabled: false });
   const [acting, setActing] = useState<string | null>(null);
   const [target, setTarget] = useState('');
   const [engine, setEngine] = useState<'hermes' | 'dsh'>('hermes');
@@ -36,9 +37,10 @@ export default function Computers() {
   useEffect(() => { active.current = selected; }, [selected]);
 
   async function refresh() {
-    const [rows, state] = await Promise.all([http.computers.list(), http.computers.state()]);
+    const [rows, state, localStatus] = await Promise.all([http.computers.list(), http.computers.state(), http.computers.local.status()]);
     setComputers(rows);
     setKillEngaged(state.engaged);
+    setLocal(localStatus);
     setSelected((previous) => rows.some(({ id }) => id === previous) ? previous : rows[0]?.id ?? null);
   }
 
@@ -139,6 +141,18 @@ export default function Computers() {
     <div className="computers-layout">
       <aside className="computers-sidebar">
         <h2>Attached computers</h2>
+        <p data-testid="local-consent-status" role="status">Your desktop · {local.enabled ? 'Sharing enabled' : 'Off'}</p>
+        <Button label={local.enabled ? 'Stop sharing my desktop' : 'Allow my desktop'} data-testid="local-consent" isDisabled={busy}
+          onClick={() => void perform(async () => {
+            if (local.enabled) {
+              await http.computers.local.set({ enabled: false });
+              return;
+            }
+            if (!local.available) await http.extensions.enable({ id: 'computer-local' });
+            await http.computers.local.set({ enabled: true });
+            const added = await http.computers.attach({ providerId: 'computer-local', target: 'local-desktop' });
+            setSelected(added.id);
+          })}>{local.enabled ? 'Stop sharing my desktop' : 'Allow my desktop'}</Button>
         <Button label="Attach Chrome" data-testid="attach-chrome" isDisabled={busy} onClick={() => void perform(async () => {
           const available = await http.extensions.list();
           if (available.find(({ id }) => id === 'computer-headless-chrome')?.status !== 'running') {

@@ -504,6 +504,10 @@ const baseNeoContract = {
     capture: oc.input(z.object({ id: z.string().min(1) })).output(z.object({
       png: z.string(), width: z.number().int().positive(), height: z.number().int().positive(),
     })),
+    local: {
+      status: oc.output(z.object({ available: z.boolean(), enabled: z.boolean() })),
+      set: oc.input(z.object({ enabled: z.boolean() })).output(z.object({ enabled: z.boolean() })),
+    },
   },
   events: {
     subscribe: oc.input(z.object({ since: z.number().int().nonnegative().default(0) }))
