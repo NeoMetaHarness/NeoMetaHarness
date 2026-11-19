@@ -11,7 +11,7 @@ type Skill = { name: string; version: number; sourceProfile: string; sourcePath:
   autonomy?: 'suggest' | 'auto-low' | 'auto';
   evaluation?: { status: 'unevaluated' | 'passed' | 'failed' | 'overridden'; error?: string; overrideBy?: string } };
 type Version = { version: number; hash: string; metadata: Skill };
-type Assignment = { name: string; engine: 'hermes' | 'dsh'; targetId: string };
+type Assignment = { name: string; engine: 'hermes' | 'dsh' | 'superagent'; targetId: string };
 const api = createORPCClient<Client>(new RPCLink({
   url: gatewayUrl(),
   headers: () => {
