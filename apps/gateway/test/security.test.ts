@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { HermesProjector } from '@neometaharness/vault';
 import { startGateway } from '../src/server.js';
+import { HeadlessChromeProvider } from '../../../extensions/computer-headless-chrome/src/index.js';
 
 type Gateway = Awaited<ReturnType<typeof startGateway>>;
 
@@ -366,5 +367,52 @@ test('SEC-16: projected Hermes secrets reach python-dotenv byte-for-byte; unrepr
     assert.equal(parsed.DEEPSEEK_API_KEY, 'plain-key_1.2');
   } finally {
     await rm(home, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+/** TCP ports in LISTEN state owned by `pid` or any of its descendants (null: no tool on this OS). */
+function listeningPorts(pid: number): number[] | null {
+  if (process.platform === 'win32') {
+    const tree = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$all = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId; $ids = @(${pid}); ` +
+      `do { $n = $ids.Count; $ids = @($ids + ($all | Where-Object { $ids -contains $_.ParentProcessId } | ForEach-Object ProcessId)) | Sort-Object -Unique } while ($ids.Count -ne $n); $ids -join ','`,
+    ], { encoding: 'utf8', windowsHide: true }).trim().split(',').map(Number);
+    return execFileSync('netstat.exe', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true })
+      .split(/\r?\n/).map((line) => line.trim().split(/\s+/))
+      .filter((cols) => cols[3] === 'LISTENING' && tree.includes(Number(cols[4])))
+      .map((cols) => Number(cols[1]!.split(':').at(-1)));
+  }
+  try {
+    const out = execFileSync('ss', ['-Hltnp'], { encoding: 'utf8' });
+    const tree = new Set([pid, ...execFileSync('ps', ['-e', '-o', 'pid=,ppid='], { encoding: 'utf8' })
+      .trim().split('\n').map((l) => l.trim().split(/\s+/).map(Number))
+      .reduce<number[]>((acc, [child, parent]) => (acc.includes(parent!) || parent === pid ? [...acc, child!] : acc), [])]);
+    return out.split('\n').filter((l) => [...l.matchAll(/pid=(\d+)/g)].some((m) => tree.has(Number(m[1]))))
+      .map((l) => Number(l.trim().split(/\s+/)[3]!.split(':').at(-1)));
+  } catch { return null; }
+}
+
+test('SEC-06: headless Chrome exposes no CDP TCP endpoint; only the in-process pipe can drive it', async (t) => {
+  const chrome = process.env.NMH_CHROME ?? process.env.CHROME ??
+    (process.platform === 'win32' ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : '/usr/bin/google-chrome');
+  if (!existsSync(chrome)) { t.skip('Chrome not installed'); return; }
+  const provider = new HeadlessChromeProvider();
+  try {
+    await provider.attach('sec06');
+    const pid = provider.pid('sec06')!;
+    const details = provider.browser('sec06') as { targetId?: string; send?: (method: string, params?: object, sessionId?: string) => Promise<any> };
+    const ports = listeningPorts(pid);
+    if (ports === null) t.diagnostic('no socket listing tool; port check skipped');
+    else assert.deepEqual(ports, [], 'the Chrome process tree listens on no TCP port (no remote debugging port)');
+    assert.doesNotMatch(JSON.stringify(details ?? {}), /(ws|http):\/\//, 'no network CDP endpoint is handed out');
+    // The legitimate in-process channel still drives the browser.
+    assert.equal(typeof details.send, 'function');
+    const version = await details.send!('Browser.getVersion');
+    assert.match(version.product, /Chrome/);
+    const { sessionId } = await details.send!('Target.attachToTarget', { targetId: details.targetId, flatten: true });
+    const result = await details.send!('Runtime.evaluate', { expression: '6*7', returnByValue: true }, sessionId);
+    assert.equal(result.result.value, 42);
+  } finally {
+    await provider.dispose();
   }
 });

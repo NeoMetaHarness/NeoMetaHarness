@@ -102,44 +102,25 @@ async function scriptedModel() {
 }
 
 class CDP {
-  constructor(socket) {
-    this.socket = socket;
-    this.pending = new Map();
-    this.next = 0;
-    socket.addEventListener('message', (event) => {
-      const message = JSON.parse(event.data.toString());
-      if (!message.id) return;
-      const waiter = this.pending.get(message.id);
-      this.pending.delete(message.id);
-      if (waiter) message.error ? waiter.reject(new Error(message.error.message)) : waiter.resolve(message.result);
-    });
+  // The provider hands out an in-process CDP channel (pipe transport, SEC-06), not a URL.
+  constructor(channel) {
+    this.channel = channel;
   }
   static async open(details) {
-    const socket = new WebSocket(details.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => {
-      socket.addEventListener('open', resolve, { once: true });
-      socket.addEventListener('error', reject, { once: true });
-    });
-    const cdp = new CDP(socket);
+    const cdp = new CDP(details);
     cdp.session = (await cdp.send('Target.attachToTarget', { targetId: details.targetId, flatten: true })).sessionId;
     await cdp.send('Page.enable', {}, cdp.session);
     await cdp.send('Runtime.enable', {}, cdp.session);
     return cdp;
   }
-  send(method, params = {}, sessionId) {
-    const id = ++this.next;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
-    });
-  }
+  send(method, params = {}, sessionId) { return this.channel.send(method, params, sessionId); }
   async navigate(url) { await this.send('Page.navigate', { url }, this.session); }
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', { expression, returnByValue: true }, this.session);
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
     return result.result.value;
   }
-  close() { this.socket.close(); }
+  close() { /* the provider owns the pipe; release() closes it */ }
 }
 
 async function browserView(provider, id, url) {

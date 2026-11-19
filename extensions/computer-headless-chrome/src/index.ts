@@ -1,8 +1,8 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WebSocket } from 'ws';
+import type { Readable, Writable } from 'node:stream';
 import { defineExtension } from '@neometaharness/kernel';
 import type { Computer, ComputerInput, ComputerProvider, ComputerRegistry, Capture } from '@neometaharness/computers';
 
@@ -11,7 +11,6 @@ interface Pending {
   reject(error: Error): void;
   timer: NodeJS.Timeout;
 }
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const chromeBinary = () => process.env.NMH_CHROME ?? process.env.CHROME ??
   (process.platform === 'win32' ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : 'google-chrome');
 
@@ -25,34 +24,61 @@ function terminateTree(child: ChildProcess): void {
   }
 }
 
+/** In-process CDP channel handed to trusted callers through `browser()`. */
+export interface BrowserChannel {
+  targetId: string;
+  send(method: string, params?: object, sessionId?: string): Promise<any>;
+}
+
+/**
+ * CDP over `--remote-debugging-pipe` (SEC-06): Chrome reads NUL-terminated JSON
+ * on fd 3 and answers on fd 4, so no TCP debugging port exists for another
+ * local process, user or web origin to reach.
+ */
 class Cdp {
   private nextId = 0;
   private readonly pending = new Map<number, Pending>();
+  private open = true;
+  private buffer = '';
 
-  constructor(private readonly socket: WebSocket) {
-    socket.on('message', (data) => {
-      const message = JSON.parse(data.toString()) as { id?: number; result?: any; error?: { message: string } };
-      const pending = message.id === undefined ? undefined : this.pending.get(message.id);
-      if (message.id === undefined || !pending) return;
-      this.pending.delete(message.id);
-      clearTimeout(pending.timer);
-      if (message.error) pending.reject(new Error(message.error.message));
-      else pending.resolve(message.result ?? {});
+  constructor(private readonly output: Writable, input: Readable) {
+    input.setEncoding('utf8');
+    input.on('data', (chunk: string) => {
+      this.buffer += chunk;
+      let end: number;
+      while ((end = this.buffer.indexOf('\0')) >= 0) {
+        const frame = this.buffer.slice(0, end);
+        this.buffer = this.buffer.slice(end + 1);
+        this.receive(frame);
+      }
     });
-    socket.on('close', () => this.failAll(new Error('Chrome disconnected')));
-    socket.on('error', (error) => this.failAll(error));
+    const closed = () => { this.open = false; this.failAll(new Error('Chrome disconnected')); };
+    input.on('close', closed);
+    input.on('error', closed);
+    output.on('error', closed);
   }
 
-  send(method: string, params: object = {}, sessionId?: string): Promise<any> {
-    if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error('Chrome disconnected'));
+  private receive(frame: string): void {
+    let message: { id?: number; result?: any; error?: { message: string } };
+    try { message = JSON.parse(frame); } catch { return; }
+    const pending = message.id === undefined ? undefined : this.pending.get(message.id);
+    if (message.id === undefined || !pending) return;
+    this.pending.delete(message.id);
+    clearTimeout(pending.timer);
+    if (message.error) pending.reject(new Error(message.error.message));
+    else pending.resolve(message.result ?? {});
+  }
+
+  send(method: string, params: object = {}, sessionId?: string, timeoutMs = 10000): Promise<any> {
+    if (!this.open) return Promise.reject(new Error('Chrome disconnected'));
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error('CDP command timed out: ' + method));
-      }, 10000);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }), (error) => {
+      this.output.write(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }) + '\0', (error) => {
         if (error) {
           clearTimeout(timer);
           this.pending.delete(id);
@@ -71,7 +97,8 @@ class Cdp {
   }
 
   close(): void {
-    this.socket.close();
+    this.open = false;
+    this.output.end();
     this.failAll(new Error('Chrome disconnected'));
   }
 }
@@ -85,35 +112,29 @@ interface ChromeInstance {
 async function launchChrome(): Promise<ChromeInstance> {
   const profile = await mkdtemp(join(tmpdir(), 'nmh-chrome-'));
   const child = spawn(chromeBinary(), [
-    '--headless=new', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
+    '--headless=new', '--remote-debugging-pipe',
     '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-sync',
     '--disable-background-networking', '--no-proxy-server', '--window-size=1100,760',
     '--user-data-dir=' + profile, 'about:blank',
-  ], { stdio: 'ignore', windowsHide: true });
+  ], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], windowsHide: true });
   let launchError: Error | undefined;
   child.on('error', (error) => { launchError = error; });
   let cdp: Cdp | undefined;
   try {
-    let port = 0;
-    for (let attempt = 0; attempt < 120; attempt++) {
-      if (launchError) throw launchError;
-      if (child.exitCode !== null) throw new Error('Chrome exited before CDP startup');
-      try {
-        port = Number((await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split(/\r?\n/)[0]);
-        if (port) break;
-      } catch { /* Browser is starting. */ }
-      await pause(100);
-    }
-    if (!port) throw new Error('Chrome CDP startup timed out');
-    const endpoint = 'http://127.0.0.1:' + port;
-    const version = await (await fetch(endpoint + '/json/version')).json() as { webSocketDebuggerUrl: string };
-    const socket = new WebSocket(version.webSocketDebuggerUrl);
+    cdp = new Cdp(child.stdio[3] as Writable, child.stdio[4] as Readable);
+    const pipe = cdp;
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Chrome CDP socket timed out')), 10000);
-      socket.once('open', () => { clearTimeout(timeout); resolve(); });
-      socket.once('error', (error) => { clearTimeout(timeout); reject(error); });
+      const done = (error?: Error) => {
+        child.off('exit', onExit);
+        child.off('error', done);
+        if (error) reject(launchError ?? error); else resolve();
+      };
+      const onExit = () => done(new Error('Chrome exited before CDP startup'));
+      child.once('exit', onExit);
+      child.once('error', done);
+      // Chrome queues pipe input until it is up; allow a slow cold start.
+      pipe.send('Browser.getVersion', {}, undefined, 30000).then(() => done(), done);
     });
-    cdp = new Cdp(socket);
     const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
     const send = (method: string, params: object = {}) => cdp!.send(method, params, sessionId);
@@ -146,7 +167,8 @@ async function launchChrome(): Promise<ChromeInstance> {
     const computer: Computer = {
       screen: () => ({ protocol: 'png' }),
       lease: () => {},
-      browser: () => ({ endpoint, webSocketDebuggerUrl: version.webSocketDebuggerUrl, targetId }),
+      // A command channel, not a URL: only in-process code holding the provider can drive this browser.
+      browser: (): BrowserChannel => ({ targetId, send: (method, params, session) => cdp!.send(method, params, session) }),
       capture: async (): Promise<Capture> => {
         const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         const png = Buffer.from(data, 'base64');
