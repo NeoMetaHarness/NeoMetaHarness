@@ -15,13 +15,24 @@ import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './ch
 import { blockedReason, isDestructive } from './ask-policy.js';
 import { DecisionLog } from './decision-log.js';
 import { BridgeKey, BRIDGE_KEY_ROTATE_MS, writeTokenFile, type BridgeKeyHandle } from './bridge-key.js';
-import { checkUpstreams } from './upstream-source.js';
+import { checkUpstreams, UpstreamRoutineStore, type UpstreamChecker, type UpstreamDrift } from './upstream-source.js';
 import { InboxStore } from './inbox-store.js';
 import { PollingGitHubSource, type GitHubConfig, type GitHubEvent, type GitHubSource } from './github-source.js';
 import { AcceptModeStore } from './accept-mode.js';
 
 type Role = 'viewer' | 'member' | 'admin' | 'owner';
 const isAdmin = (role?: Role) => role === 'admin' || role === 'owner';
+
+// `neo upstream` (P6-8). Neo only proposes: a bump runs only when an admin approves it, and then as a
+// ticket for the configured bot. In the act modes a read-only review ticket runs as well.
+const reviewPrefix = 'Review upstream ';
+const isUpstreamReview = (item: InboxItem) => item.source === 'neo/upstream' && item.text.startsWith(reviewPrefix);
+const isUpstreamBump = (item: InboxItem) => item.source === 'neo/upstream' && !!item.upstream && !isUpstreamReview(item);
+const bumpText = (entry: { name: string; pinned: string; latest: string }) =>
+  `Bump ${entry.name} from ${entry.pinned} to ${entry.latest} in upstream.lock.json on a new branch, run pnpm upstream:check and the affected suites, and report the results. Do not merge.`;
+const reviewText = (entry: { name: string; pinned: string; latest: string; changelog: string | null }) =>
+  `${reviewPrefix}${entry.name} ${entry.pinned} -> ${entry.latest}. Read-only: do not edit files or apply the upgrade. `
+  + `Summarise the changelog (${entry.changelog ?? 'no changelog link'}) and which Neo seams in upstream/registry.yaml it may affect.`;
 
 type Report = NonNullable<InboxItem['report']>;
 type Postmortem = NonNullable<Report['postmortem']>;
@@ -99,12 +110,25 @@ class SuperagentService {
   private inboxStore?: InboxStore;
   private acceptModes!: AcceptModeStore;
   private acceptModeStored = false;
+  private routine!: UpstreamRoutineStore;
+  private upstreamChecker: UpstreamChecker = checkUpstreams;
+
+  /** Inject the `neo upstream` check runner (tests use a scripted fake; production runs upstream:check). */
+  useUpstreamChecker(checker: UpstreamChecker): void { this.upstreamChecker = checker; }
 
   async start(home: string, gatewayUrl: () => string, tokenFile?: string, channel?: ChannelSource): Promise<void> {
     this.inboxStore = new InboxStore(join(home, '..', 'inbox.json'));
     for (const item of this.inboxStore.load()) this.items.set(item.id, item);
     this.acceptModes = new AcceptModeStore(join(home, '..', 'accept-mode.json'));
     this.acceptModeStored = this.acceptModes.load();
+    this.routine = new UpstreamRoutineStore(join(home, '..', 'upstream.json'));
+    this.routine.load();
+    // The newest bump Suggestion per engine, so a restart neither duplicates nor forgets a dismissal.
+    for (const item of [...this.items.values()].sort((a, b) => a.createdAt - b.createdAt)) {
+      if (isUpstreamBump(item) && item.upstream) {
+        this.upstreamItems.set(item.upstream.name, item.id);
+      }
+    }
     this.workerHome = home;
     this.gatewayUrl = gatewayUrl;
     this.token = tokenFile;
@@ -525,8 +549,8 @@ class SuperagentService {
   async accept(input: { id: string }, role?: Role): Promise<InboxItem> {
     const item = this.items.get(input.id);
     if (!item) throw new Error('Suggestion not found');
-    if (item.source === 'neo/upstream') throw new Error('Upstream source is observe-only');
     if (item.status !== 'suggestion') throw new Error(`Cannot accept ${item.status} ticket`);
+    if (isUpstreamBump(item)) return this.acceptUpstream(item, role);
     if ((item.destructive ?? isDestructive(item.text)) && role && !isAdmin(role)) {
       throw new Error('Accepting destructive work requires admin or owner');
     }
@@ -624,30 +648,94 @@ class SuperagentService {
     if (!item || item.status !== 'failed') throw new Error('Only failed tickets can be retried');
     return this.resume(item, item.text);
   }
+  /**
+   * The `neo upstream` routine (weekly Neo cron job, or on demand). It runs the read-only check and turns
+   * each drifting engine into one bump Suggestion that needs an admin, plus a read-only review ticket when
+   * the workspace accept mode acts and a bot is configured. It never changes the lockfile or an engine.
+   */
   async checkUpstream(): Promise<{ checked: number; drift: number }> {
     if (this.closed) throw new Error('Superagent is stopped');
-    const { checked, drift: entries } = await checkUpstreams();
-    for (const entry of entries) {
+    let result: Awaited<ReturnType<UpstreamChecker>>;
+    try {
+      result = await this.upstreamChecker();
+    } catch (error) {
+      if (!this.closed) this.routine.save({ lastCheckedAt: Date.now(), lastError: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+    if (this.closed) throw new Error('Superagent is stopped');
+    const acceptMode = this.acceptModes.get();
+    const botId = this.routine.state.botId;
+    const reviews: UpstreamDrift[] = [];
+    for (const entry of result.drift) {
       const upstream = { name: entry.name, pinned: entry.pinned, latest: entry.latest,
         changelog: entry.changelog };
-      const summary = `Proposed bump ${entry.name} from ${entry.pinned} to ${entry.latest} and run the suites.`;
+      const summary = `Proposed bump ${entry.name} from ${entry.pinned} to ${entry.latest} and run the suites. An admin must approve it.`;
       const report: Report = { status: 'ready', summary, changes: [], tests: [], risks: [], options: [] };
       const previousId = this.upstreamItems.get(entry.name);
-      const previous = previousId && this.items.get(previousId);
-      if (previous) {
-        // A dismissed drift stays dismissed until upstream moves again.
-        if (previous.status === 'dismissed' && previous.upstream?.latest === entry.latest) continue;
-        this.update(previous, { upstream, report, status: 'suggestion' });
+      const previous = previousId ? this.items.get(previousId) : undefined;
+      const moved = !previous || previous.upstream?.latest !== entry.latest || previous.upstream?.pinned !== entry.pinned;
+      const proposal = { upstream, report, acceptMode, botId: botId ?? 'neo-system', destructive: true,
+        kind: 'suggestion' as const, status: 'suggestion' as const };
+      if (previous?.status === 'suggestion') {
+        this.update(previous, proposal);
+      } else if (previous && !moved && previous.status !== 'blocked' && previous.status !== 'failed') {
+        // Dismissed, or already approved and in progress or done, for this same version: nothing new.
         continue;
+      } else {
+        const now = Date.now();
+        const item: InboxItem = { id: randomUUID(), mode: 'observe', source: 'neo/upstream', requesterRole: 'owner',
+          text: `Upstream drift in ${entry.name}`, createdAt: now, updatedAt: now, ...proposal };
+        this.upstreamItems.set(entry.name, item.id);
+        this.update(item, {});
       }
-      const now = Date.now();
-      const item: InboxItem = { id: randomUUID(), botId: 'neo-system', mode: 'observe',
-        source: 'neo/upstream', requesterRole: 'owner', text: `Upstream drift in ${entry.name}`,
-        upstream, status: 'suggestion', report, createdAt: now, updatedAt: now };
-      this.upstreamItems.set(entry.name, item.id);
-      this.update(item, {});
+      if (moved && acceptMode !== 'observe' && botId) reviews.push(entry);
     }
-    return { checked, drift: entries.length };
+    this.routine.save({ lastCheckedAt: Date.now(), lastDrift: result.drift.length, lastError: null });
+    for (const entry of reviews) {
+      try {
+        await this.ask({ text: reviewText(entry), botId: botId!, mode: 'act', requesterRole: 'owner' }, 'neo/upstream',
+          (created) => { created.upstream = { name: entry.name, pinned: entry.pinned, latest: entry.latest,
+            changelog: entry.changelog }; created.acceptMode = acceptMode; });
+      } catch (error) {
+        if (!this.closed) this.routine.save({ lastError: `Review of ${entry.name} failed: ${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+    return { checked: result.checked, drift: result.drift.length };
+  }
+
+  upstreamConfigure(input: { botId: string | null }): { ok: boolean } {
+    this.routine.save({ botId: input.botId });
+    // Pending bump Suggestions show whether they can be approved (a bot must do the work).
+    for (const item of this.items.values()) {
+      if (isUpstreamBump(item) && item.status === 'suggestion') this.update(item, { botId: input.botId ?? 'neo-system' });
+    }
+    return { ok: true };
+  }
+  upstreamStatus() { return { ...this.routine.state }; }
+
+  /** An admin approves a bump: it becomes a ticket for the configured bot. Neo itself never applies it. */
+  private async acceptUpstream(item: InboxItem, role?: Role): Promise<InboxItem> {
+    if (!item.upstream) throw new Error('Upstream Suggestion has no drift record');
+    if (!isAdmin(role)) throw new Error('Approving an upstream bump requires admin or owner');
+    const botId = this.routine.state.botId;
+    if (!botId) throw new Error('Configure a bot for upstream work before approving a bump');
+    const before = item;
+    const accepted = this.update(item, { text: bumpText(item.upstream), botId, mode: 'act', kind: undefined,
+      requesterRole: role, report: undefined });
+    try {
+      await this.sources.get('neo/upstream')!.receive(accepted);
+      this.engine.evaluateDue();
+      const candidate = this.candidates.get(`neo/upstream:${item.id}`);
+      if (!candidate) throw new Error('Trigger was not evaluated by the pinned superagent');
+      await this.evaluate(accepted, candidate);
+      this.engine.candidateDelivered(candidate.evalId);
+      await this.acceptCandidate(accepted, candidate, 'neo/upstream');
+    } catch (error) {
+      const current = this.items.get(item.id);
+      if (current && current.status === 'suggestion') this.update(current, { ...before, updatedAt: Date.now() });
+      throw error;
+    }
+    return this.items.get(item.id)!;
   }
   listDecisions(input: { ticketId?: string; limit?: number }) { return this.decisions.list(input); }
 
@@ -797,6 +885,11 @@ export default defineExtension({
     service.attachGithub(github);
     const channel = ctx.inject<ChannelSource>('channelSource')
       ?? (process.env.NODE_ENV === 'test' ? new FakeChannelSource() : undefined);
+    // Tests inject a scripted upstream checker (no network, no gh/npm); production runs upstream:check.
+    if (process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_TEST_UPSTREAM) {
+      const fake = await import(process.env.NMH_SUPERAGENT_TEST_UPSTREAM) as { createUpstreamChecker(): UpstreamChecker };
+      service.useUpstreamChecker(fake.createUpstreamChecker());
+    }
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
     await github.start();
     ctx.provide('dshInboxSink', { report: (input: Parameters<typeof service.reportDsh>[0]) =>
@@ -823,6 +916,8 @@ export default defineExtension({
     }, (body as { role: 'viewer' | 'member' | 'admin' | 'owner' }).role));
     ctx.route('retry', ({ body }) => service.retry(body as { id: string }));
     ctx.route('upstream/check', () => service.checkUpstream());
+    ctx.route('upstream/configure', ({ body }) => service.upstreamConfigure(body as { botId: string | null }));
+    ctx.route('upstream/status', () => service.upstreamStatus());
     ctx.route('github/configure', async ({ body }) => { await service.githubConfigure(body as GitHubConfig & { token?: string }); return { ok: true }; });
     ctx.route('github/pull-request', ({ body }) => service.githubPullRequest(body as { repo: string; branch: string; commit: string }));
     ctx.route('github/status', () => service.githubStatus());
