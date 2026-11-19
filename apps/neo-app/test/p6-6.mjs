@@ -379,14 +379,17 @@ async function trial(previewPort) {
       && item.text === 'summarise the release thread' && item.status === 'suggestion', 'comment suggestion');
     assert.equal(commentSuggestion.kind, 'suggestion');
     assert.equal(commentSuggestion.acceptMode, 'observe');
+    assert.equal(commentSuggestion.episode, undefined, 'Pending Suggestions do not have completed episodes');
     assert.equal(commentSuggestion.destructive, false);
     assert.equal(commentSuggestion.github.issue, 3);
     const checkFailure = await find((item) => item.github?.kind === 'check' && item.kind === 'failure'
       && item.status === 'failed', 'failing check record');
     assert.match(checkFailure.report.summary, /CI.*failure/);
+    assert.equal(checkFailure.episode?.outcome, 'failed', 'Failed check is a completed episode');
     const checkSuggestion = await find((item) => item.github?.kind === 'check' && item.status === 'suggestion'
       && item.kind === 'suggestion', 'failing check suggestion');
     assert.match(checkSuggestion.text, /^Investigate failing check "CI" in test\/project/);
+    assert.equal(checkSuggestion.episode, undefined);
     await sleep(800);
     assert.equal(delegated('summarise the release thread'), false, 'observe must not start work');
     assert.equal(delegated('Investigate failing check'), false, 'observe must not start work');
@@ -420,11 +423,17 @@ async function trial(previewPort) {
     assert.equal(accepted.mode, 'act');
     const acceptedReport = await find((item) => item.id === commentSuggestion.id && item.status === 'approval'
       && item.report?.status === 'ready', 'accepted work report', 120000);
+    assert.equal(acceptedReport.episode, undefined, 'Awaiting approval is not a completed episode');
     assert.ok(delegated('summarise the release thread'), 'accepting starts the work');
     assert.equal(github.state.posts.length, 0, 'observe never posts without an admin');
     await assert.rejects(member.inbox.approval.decide({ id: acceptedReport.id, decision: 'approve', reason: 'member' }), forbidden);
     await rpc.inbox.approval.decide({ id: acceptedReport.id, decision: 'approve', reason: 'Approved P6-6 reply' });
-    await find((item) => item.id === acceptedReport.id && item.status === 'ready' && item.github.posted, 'posted reply');
+    const posted = await find((item) => item.id === acceptedReport.id && item.status === 'ready'
+      && item.github.posted, 'posted reply');
+    assert.equal(posted.episode?.outcome, 'ready');
+    assert.ok(posted.episode.traceId);
+    assert.equal((await rpc.inbox.decisions.list({ ticketId: posted.id }))
+      .filter((entry) => entry.chosenAction === 'ticket.complete').length, 1);
     assert.equal(github.state.posts.length, 1);
     assert.equal(github.state.posts[0].path, '/repos/test/project/issues/3/comments');
     console.log('P6-6_ACCEPT PASS member_accept=200 work_started=true reply=admin_approved');
@@ -458,13 +467,15 @@ async function trial(previewPort) {
     await rpc.inbox.github.poll();
     const gated = await find((item) => item.text === 'research release notes' && item.status === 'approval'
       && item.report?.status === 'ready', 'act-with-approval report', 120000);
+    assert.equal(gated.episode, undefined);
     assert.equal(gated.acceptMode, 'act-with-approval');
     assert.equal(github.state.posts.length, 1, 'act-with-approval holds the reply');
     const investigated = await find((item) => /^Investigate failing check "Lint"/.test(item.text)
       && item.status === 'ready', 'failing check investigated', 120000);
     assert.equal(investigated.mode, 'act');
     await rpc.inbox.approval.decide({ id: gated.id, decision: 'approve', reason: 'Approved' });
-    await find((item) => item.id === gated.id && item.github.posted, 'approved reply');
+    const approved = await find((item) => item.id === gated.id && item.github.posted, 'approved reply');
+    assert.equal(approved.episode?.outcome, 'ready');
     assert.equal(github.state.posts.length, 2);
     console.log('P6-6_ACT_WITH_APPROVAL PASS comment=ran+held check=investigated reply=after_approval');
 
@@ -475,6 +486,7 @@ async function trial(previewPort) {
     const acted = await find((item) => item.text === 'draft the changelog' && item.status === 'ready'
       && item.github?.posted, 'act reply', 120000);
     assert.equal(acted.acceptMode, 'act');
+    assert.equal(acted.episode?.outcome, 'ready');
     assert.equal(github.state.posts.length, 3);
     assert.equal(github.state.posts[2].path, '/repos/test/project/issues/5/comments');
     assert.equal(github.state.posts[2].body, acted.report.summary);

@@ -575,11 +575,9 @@ class SuperagentService {
         throw new Error('GitHub reply needs an unposted act report');
       }
       await this.github!.reply(item.github.repo, item.github.issue, item.report.summary);
-      const completed = this.update(item, { status: 'ready', kind: undefined,
+      return this.recordEpisode(item, item.report, { status: 'ready', kind: undefined,
         github: { ...item.github, posted: true },
         approval: { destructive: true, reason: input.reason.trim(), decision: 'approved' } });
-      if (completed.episode?.procedure) await this.proposePlaybook(completed);
-      return this.items.get(item.id) ?? completed;
     }
     const approval = { destructive: item.approval?.destructive ?? false, reason: input.reason.trim(),
       decision: (input.decision === 'approve' ? 'approved' : 'denied') as 'approved' | 'denied' };
