@@ -315,6 +315,11 @@ async function trial(previewPort) {
       const proposal = second.report.playbook;
       assert.deepEqual(proposal.tickets.sort(), [cronReport.id, second.id].sort());
       assert.equal(second.episode.procedure, cronReport.episode.procedure);
+      const stored = JSON.parse(await readFile(join(temporary, 'extensions', 'engine-superagent', 'inbox.json'), 'utf8'));
+      for (const item of [cronReport, second]) {
+        const saved = stored.find((entry) => entry.id === item.id);
+        assert.deepEqual(saved.episode, item.episode, 'Episode must survive Inbox persistence');
+      }
       const registryApi = rpc.x['skills-registry'];
       const playbook = await registryApi.get({ name: proposal.skill });
       assert.equal(playbook.metadata.trust, 'untrusted');
@@ -336,6 +341,16 @@ async function trial(previewPort) {
       assert.ok(assignments.some((entry) => entry.name === proposal.skill && entry.engine === 'hermes'));
       assert.ok(assignments.some((entry) => entry.name === proposal.skill && entry.engine === 'dsh'));
       console.log('P6-7_PROJECT PASS Hermes=projected DSH=projected superagent-worker=projected');
+
+      const beforeThird = (await registryApi.get({ name: proposal.skill })).metadata.version;
+      assert.deepEqual(await rpc.inbox.cron.fire({ id: job.id }), { ok: true });
+      const third = await eventually(async () => (await rpc.inbox.list()).find((entry) =>
+        ![cronReport.id, second.id].includes(entry.id) && entry.source === 'neo/cron'
+          && entry.text === job.text && entry.status === 'ready'), 'third episode');
+      assert.ok(third.episode.traceId);
+      assert.equal(third.report.playbook, undefined, 'Repeated episodes must not duplicate playbooks');
+      assert.equal((await registryApi.get({ name: proposal.skill })).metadata.version, beforeThird);
+      console.log('P6-7_DEDUP PASS third_episode=stored playbook=single_proposal');
     }
 
     const traces = await rpc.inbox.decisions.list({ ticketId: cronReport.id });
@@ -393,6 +408,11 @@ async function trial(previewPort) {
       .find((item) => item.source === 'neo/channel' && item.requesterRole === 'viewer' && item.status === 'blocked'), 'viewer blocked');
     assert.equal(blocked.mode, 'act');
     assert.match(blocked.report.summary, /Viewer role can observe.*cannot act/i);
+    if (process.env.NMH_P67 === '1') {
+      assert.equal(blocked.episode?.outcome, 'blocked');
+      assert.ok(blocked.episode.traceId);
+      console.log('P6-7_BLOCKED PASS episode=stored trace=linked');
+    }
     assert.match((await rpc.inbox.channel.replies()).find((reply) => reply.inReplyTo === 'viewer-1').text, /Viewer role/);
     const observe = await rpc.inbox.ask({ botId: bot.id, text: 'Review a safe proposal', mode: 'observe' });
     assert.equal(observe.status, 'suggestion');

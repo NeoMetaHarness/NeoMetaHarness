@@ -271,7 +271,8 @@ class SuperagentService {
       if (this.closed || !item.episode?.procedure) return;
       const normalize = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
       const procedure = normalize(item.episode.procedure);
-      const matches = [...this.items.values()].filter((entry) => entry.episode?.outcome === 'ready'
+      const matches = [...this.items.values()].filter((entry) => entry.status === 'ready'
+        && entry.episode?.outcome === 'ready'
         && entry.episode.procedure && normalize(entry.episode.procedure) === procedure);
       if (matches.length < 2) return;
       const digest = createHash('sha256').update(procedure).digest('hex').slice(0, 16);
@@ -574,9 +575,11 @@ class SuperagentService {
         throw new Error('GitHub reply needs an unposted act report');
       }
       await this.github!.reply(item.github.repo, item.github.issue, item.report.summary);
-      return this.update(item, { status: 'ready', kind: undefined,
+      const completed = this.update(item, { status: 'ready', kind: undefined,
         github: { ...item.github, posted: true },
         approval: { destructive: true, reason: input.reason.trim(), decision: 'approved' } });
+      if (completed.episode?.procedure) await this.proposePlaybook(completed);
+      return this.items.get(item.id) ?? completed;
     }
     const approval = { destructive: item.approval?.destructive ?? false, reason: input.reason.trim(),
       decision: (input.decision === 'approve' ? 'approved' : 'denied') as 'approved' | 'denied' };
