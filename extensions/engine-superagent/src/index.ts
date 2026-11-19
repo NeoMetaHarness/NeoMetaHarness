@@ -222,7 +222,7 @@ class SuperagentService {
     this.notifying.add(item.id);
     const delivery = (async () => {
       try {
-        await this.channel!.reply({ channelId: destination.channelId, inReplyTo: item.id, text: item.report!.summary });
+        await this.channel!.reply({ requireDelivery: true, channelId: destination.channelId, inReplyTo: item.id, text: item.report!.summary });
         this.update(this.items.get(item.id)!, { notification: { channelId: destination.channelId, deliveredAt: Date.now() } });
       } catch {
         this.update(this.items.get(item.id)!, { notification: { channelId: destination.channelId, error: 'WhatsApp delivery failed; retry after restarting Neo.' } });
@@ -824,7 +824,7 @@ export default defineExtension({
     ctx.route('retry', ({ body }) => service.retry(body as { id: string }));
     ctx.route('upstream/check', () => service.checkUpstream());
     ctx.route('github/configure', async ({ body }) => { await service.githubConfigure(body as GitHubConfig & { token?: string }); return { ok: true }; });
-    ctx.route('github/pullRequest', ({ body }) => service.githubPullRequest(body as { repo: string; branch: string; commit: string }));
+    ctx.route('github/pull-request', ({ body }) => service.githubPullRequest(body as { repo: string; branch: string; commit: string }));
     ctx.route('github/status', () => service.githubStatus());
     ctx.route('github/poll', () => service.githubPoll());
     ctx.route('cron/list', () => service.cronList());

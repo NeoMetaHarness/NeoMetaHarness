@@ -521,7 +521,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       github: {
         pullRequest: os.inbox.github.pullRequest.handler(async ({ input, context }) => {
           authorize('inbox.github.pullRequest', context);
-          return invokeInbox('github/pullRequest', input) as Promise<{ number: number; url: string; branch: string; commit: string } | null>;
+          return invokeInbox('github/pull-request', input) as Promise<{ number: number; url: string; branch: string; commit: string } | null>;
         }),
         configure: os.inbox.github.configure.handler(async ({ input, context }) => {
           authorize('inbox.github.configure', context);

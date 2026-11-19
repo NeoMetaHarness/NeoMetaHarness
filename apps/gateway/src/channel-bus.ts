@@ -13,6 +13,8 @@ export interface ChannelMessage {
 }
 
 export interface ChannelReply {
+  /** Durable notifications require an attached transport, not the test-only reply sink. */
+  requireDelivery?: boolean;
   channelId: string;
   inReplyTo: string;
   text: string;
@@ -54,6 +56,7 @@ export class ChannelBus {
   async reply(reply: ChannelReply): Promise<void> {
     const platform = this.platforms.get(reply.channelId.split(':', 1)[0]!);
     if (platform) { await platform.deliver(reply); return; }
+    if (reply.requireDelivery) throw new Error('Channel platform unavailable');
     this.replies.push({ ...reply });
     if (this.replies.length > 100) this.replies.shift();
   }

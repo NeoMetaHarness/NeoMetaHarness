@@ -11,6 +11,8 @@ export interface ChannelMessage {
 }
 
 export interface ChannelReply {
+  /** Durable notifications require an attached transport, not the test-only reply sink. */
+  requireDelivery?: boolean;
   channelId: string;
   inReplyTo: string;
   text: string;
