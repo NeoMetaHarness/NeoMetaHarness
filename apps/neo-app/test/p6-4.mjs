@@ -280,15 +280,16 @@ async function trial() {
     stage = 'GitHub initial poll';
     await rpc.inbox.github.poll();
 
-    stage = 'GitHub observe report';
+    // P6-6: observe means suggest only, so an observed @neo comment is a Suggestion, not a report.
+    stage = 'GitHub observe suggestion';
     const observed = await eventually(async () => (await rpc.inbox.list()).find((item) =>
       item.source === 'neo/github' && item.github?.kind === 'comment' && item.mode === 'observe'
-      && item.status === 'ready'), 'observe report');
+      && item.status === 'suggestion' && item.kind === 'suggestion'), 'observe suggestion');
     assert.equal(observed.github.issue, 3);
     assert.match(observed.github.url, /github.com\/test\/project\/issues\/3/);
-    assert.match(observed.report.summary, /summarise/);
+    assert.match(observed.text, /summarise/);
     assert.equal(github.state.posts.length, 0);
-    console.log('P6-4_OBSERVE PASS @neo=Inbox report link=true no_post=true');
+    console.log('P6-4_OBSERVE PASS @neo=Inbox suggestion link=true no_post=true');
 
     const failed = await eventually(async () => (await rpc.inbox.list()).find((item) =>
       item.source === 'neo/github' && item.github?.kind === 'check' && item.status === 'failed'
@@ -354,7 +355,7 @@ async function trial() {
 try {
   nodeTool(app, 'vite/bin/vite.js', ['build']);
   await trial();
-  console.log('P6-4 PASS authenticated=true build_first=true scripted_models=true fake_GitHub=true observe_report=true admin_approval=true failing_check=true rate_limit=true disable_isolation=true');
+  console.log('P6-4 PASS authenticated=true build_first=true scripted_models=true fake_GitHub=true observe_suggestion=true admin_approval=true failing_check=true rate_limit=true disable_isolation=true');
 } catch (error) {
   console.error('P6-4 FAIL', error instanceof Error ? error.stack : error);
   process.exitCode = 1;
