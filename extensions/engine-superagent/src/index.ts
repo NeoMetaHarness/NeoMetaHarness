@@ -33,6 +33,7 @@ type Assignment = { id: string };
 
 const askSchema = z.object({
   text: z.string().min(1), botId: z.string().min(1), mode: z.enum(['observe', 'act']).default('observe'),
+  notification: z.object({ channelId: z.string() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).default('member'),
 });
 
@@ -82,6 +83,7 @@ class SuperagentService {
   private cron?: NeoCronSource;
   private channel?: ChannelSource;
   private unsubscribeChannel?: () => void;
+  private readonly notifying = new Set<string>();
   private readonly channelReplies = new Map<string, { channelId: string; inReplyTo: string }>();
   private readonly inflight = new Set<Promise<void>>();
   private readonly assignments = new Map<string, string>();
@@ -187,6 +189,11 @@ class SuperagentService {
     if (channel) {
       this.channel = channel;
       this.unsubscribeChannel = channel.subscribe((message) => this.fromChannel(message));
+      for (const item of this.items.values()) {
+        if (item.notification && !item.notification.deliveredAt) this.update(item, {
+          notification: { channelId: item.notification.channelId },
+        });
+      }
     }
   }
 
@@ -204,7 +211,25 @@ class SuperagentService {
       const delivery = this.channel.reply({ ...destination, text: next.report.summary });
       void delivery.catch((error) => console.error('Neo channel report delivery failed:', error));
     }
+    this.notify(next);
     return next;
+  }
+
+  private notify(item: InboxItem): void {
+    const destination = item.notification;
+    if (this.closed || !this.channel || item.report?.status !== 'ready' || !destination
+      || destination.deliveredAt || destination.error || this.notifying.has(item.id)) return;
+    this.notifying.add(item.id);
+    const delivery = (async () => {
+      try {
+        await this.channel!.reply({ channelId: destination.channelId, inReplyTo: item.id, text: item.report!.summary });
+        this.update(this.items.get(item.id)!, { notification: { channelId: destination.channelId, deliveredAt: Date.now() } });
+      } catch {
+        this.update(this.items.get(item.id)!, { notification: { channelId: destination.channelId, error: 'WhatsApp delivery failed; retry after restarting Neo.' } });
+      } finally { this.notifying.delete(item.id); }
+    })();
+    this.inflight.add(delivery);
+    void delivery.then(() => this.inflight.delete(delivery), () => this.inflight.delete(delivery));
   }
 
   private async finish(item: InboxItem, report: Report): Promise<InboxItem> {

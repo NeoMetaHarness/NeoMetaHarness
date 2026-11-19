@@ -30,6 +30,9 @@ export default function Inbox() {
   const [botId, setBotId] = useState('');
   const [mode, setMode] = useState<'observe' | 'act'>('observe');
   const [draft, setDraft] = useState('');
+  const [notify, setNotify] = useState(false);
+  const [notifyProfile, setNotifyProfile] = useState('');
+  const [notifyNumber, setNotifyNumber] = useState('');
   const [busy, setBusy] = useState(false);
   const [enabled, setEnabled] = useState(false);
   const [connection, setConnection] = useState('Connecting');
@@ -182,6 +185,7 @@ export default function Inbox() {
       const report = document.createElement('section');
       report.className = 'inbox-report';
       report.dataset.testid = 'inbox-report';
+      if (item.notification) content.push(textNode('p', item.notification.deliveredAt ? 'WhatsApp notification sent' : item.notification.error ?? 'WhatsApp notification pending', 'inbox-notification'));
       report.append(textNode('h3', 'Report'), textNode('p', item.report.summary, 'inbox-summary'));
       if (item.report.postmortem) {
         const review = item.report.postmortem;
@@ -328,7 +332,7 @@ export default function Inbox() {
     setBusy(true);
     setError('');
     try {
-      renderItem(await http.inbox.ask({ text: draft.trim(), botId, mode }));
+      renderItem(await http.inbox.ask({ text: draft.trim(), botId, mode, ...(notify ? { notify: { profile: notifyProfile.trim(), senderId: notifyNumber.trim() } } : {}) }));
       setDraft('');
     } catch (reason) { setError(`Ask Neo failed: ${String(reason)}`); }
     finally { setBusy(false); }
@@ -353,6 +357,13 @@ export default function Inbox() {
       <label htmlFor="inbox-prompt">Ask Neo</label>
       <textarea id="inbox-prompt" rows={3} placeholder="What should Neo work on?" value={draft}
         onChange={(event) => setDraft(event.target.value)} disabled={!enabled || busy} />
+      <fieldset><legend>Completion notification</legend>
+        <label><input data-testid="inbox-notify" type="checkbox" checked={notify} onChange={event => setNotify(event.target.checked)} disabled={!enabled || busy} />Notify on WhatsApp</label>
+        {notify && <>
+          <label>WhatsApp connection <input data-testid="inbox-notify-profile" value={notifyProfile} onChange={event => setNotifyProfile(event.target.value)} required disabled={!enabled || busy} /></label>
+          <label>Recipient number <input data-testid="inbox-notify-number" value={notifyNumber} onChange={event => setNotifyNumber(event.target.value)} placeholder="International digits" pattern="[0-9]{6,20}" required disabled={!enabled || busy} /></label>
+        </>}
+      </fieldset>
       <div className="inbox-controls">
         <label>Agent <select aria-label="Agent" value={botId} onChange={(event) => setBotId(event.target.value)} disabled={!enabled || busy}>
           {!bots.length && <option value="">Create an agent first</option>}

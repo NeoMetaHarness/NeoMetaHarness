@@ -416,7 +416,10 @@ const channelSender = z.string().regex(/^\d{6,20}$/);
 /** Neo role a channel sender acts with in the Inbox; never owner. */
 const channelSenderRole = z.enum(['viewer', 'member', 'admin']);
 const channelSenders = z.object({ senders: z.array(z.object({ senderId: z.string(), role: channelSenderRole })) });
+const whatsappNotify = z.object({ profile: z.string().min(1).max(48), senderId: channelSender });
 export const channelsContract = {
+  notification: { resolve: oc.input(whatsappNotify.extend({ botId: z.string().min(1) }))
+    .output(z.object({ channelId: z.string() })) },
   list: oc.input(z.object({ profile: z.string().min(1) }))
     .output(z.object({ platforms: z.array(channelsPlatformSchema) })),
   connect: oc.input(z.discriminatedUnion('platform', [
@@ -608,6 +611,7 @@ export const inboxEpisodeSchema = z.object({
 });
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
+  notification: z.object({ channelId: z.string(), deliveredAt: z.number().optional(), error: z.string().optional() }).optional(),
   source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github', 'neo/dsh']).optional(),
   github: z.object({ repo: z.string(), issue: z.number().int().optional(),
     url: z.string(), kind: z.enum(['comment', 'check']), posted: z.boolean().optional() }).optional(),
@@ -640,7 +644,7 @@ export type InboxItem = z.infer<typeof inboxItemSchema>;
 export type InboxEvent = z.infer<typeof inboxEventSchema>;
 export const inboxContract = {
   ask: oc.input(z.object({ text: z.string().min(1), botId: z.string().min(1),
-    mode: z.enum(['observe', 'act']).default('observe') })).output(inboxItemSchema),
+    mode: z.enum(['observe', 'act']).default('observe'), notify: whatsappNotify.optional() })).output(inboxItemSchema),
   list: oc.output(z.array(inboxItemSchema)),
   decisions: { list: oc.input(z.object({ ticketId: z.string().optional(),
     limit: z.number().int().min(1).max(500).default(100) })).output(z.array(inboxDecisionSchema)) },

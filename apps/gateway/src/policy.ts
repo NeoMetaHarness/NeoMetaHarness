@@ -111,6 +111,7 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.skills-registry.hub.install': 'member',
 
   // x.channels (channel tokens are workspace config)
+  'x.channels.notification.resolve': 'member',
   'x.channels.list': 'viewer',
   'x.channels.status': 'viewer',
   'x.channels.connect': 'admin',

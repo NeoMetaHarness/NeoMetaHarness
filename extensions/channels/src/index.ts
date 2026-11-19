@@ -383,12 +383,24 @@ export class ChannelsRuntime {
     return { status: 200, body: { action: 'skip' } };
   }
 
+  async notificationDestination(input: { profile: string; senderId: string; botId: string }) {
+    const profile = canonical(input.profile);
+    const sender = normalizeSender(input.senderId);
+    const entry = (await this.whatsappProfiles())[profile];
+    if (this.closing || !sender || !entry || entry.botId !== input.botId || !entry.senders[sender]) {
+      throw new Error('WhatsApp notification needs a connected bot and an admitted recipient');
+    }
+    return { channelId: `whatsapp:${profile}:${sender}@s.whatsapp.net` };
+  }
+
   /** Inbox report back to the WhatsApp chat, through Hermes' send seam (hermes_cli/send_cmd.py:196-289). */
   async deliver(reply: { channelId: string; inReplyTo: string; text: string }) {
     const match = /^whatsapp:([a-z0-9_-]{1,48}):([0-9A-Za-z@._-]{3,120})$/.exec(reply.channelId);
     if (!match || !profilePattern.test(match[1]!)) throw new Error('Invalid WhatsApp channel');
     const [, profile, chatId] = match;
-    if (this.closing || !(await this.whatsappProfiles())[profile!]) throw new Error('WhatsApp channel is not connected');
+    const entry = (await this.whatsappProfiles())[profile!];
+    const sender = normalizeSender(chatId!);
+    if (this.closing || !entry || !sender || !entry.senders[sender]) throw new Error('WhatsApp channel or recipient is not connected');
     await this.hermesCli(profile!, ['send', '--to', `whatsapp:${chatId}`], reply.text.slice(0, 4000) || '(empty report)');
   }
 
@@ -627,6 +639,7 @@ export default defineExtension({
     ctx.route('status', ({ body }) => runtime.status((body as Body).profile));
     ctx.route('connect', ({ body }) => runtime.connect(body as Body as Parameters<ChannelsRuntime['connect']>[0]));
     ctx.route('disconnect', ({ body }) => runtime.disconnect((body as Body).profile, (body as Body).platform));
+    ctx.route('notification/resolve', ({ body }) => runtime.notificationDestination(body as Parameters<ChannelsRuntime['notificationDestination']>[0]));
     ctx.route('senders', ({ body }) => runtime.senders((body as Body).profile));
     ctx.route('allow', ({ body }) => runtime.allow((body as Body).profile, (body as Body).senderId, (body as Body).role));
     ctx.route('revoke', ({ body }) => runtime.revoke((body as Body).profile, (body as Body).senderId));

@@ -459,7 +459,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     inbox: {
       ask: os.inbox.ask.handler(async ({ input, context }) => {
         authorize('inbox.ask', context);
-        return invokeInbox('ask', { ...input, requesterRole: context.role, requesterId: context.user?.id }) as Promise<InboxItem>;
+        const notification = input.notify ? (authorize('x.channels.notification.resolve', context),
+          await invokeChannels('notification/resolve', { ...input.notify, botId: input.botId })) : undefined;
+        return invokeInbox('ask', { ...input, ...(notification ? { notification } : {}), requesterRole: context.role, requesterId: context.user?.id }) as Promise<InboxItem>;
       }),
       list: os.inbox.list.handler(async ({ context }) => {
         authorize('inbox.list', context);
@@ -633,6 +635,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         },
       },
       channels: {
+        notification: { resolve: os.x.channels.notification.resolve.handler(async ({ input, context }) => {
+          authorize('x.channels.notification.resolve', context);
+          return invokeChannels('notification/resolve', input) as Promise<{ channelId: string }>;
+        }) },
         list: os.x.channels.list.handler(async ({ input, context }) => {
           requireViewer(context);
           return invokeChannels('list', input) as Promise<any>;
