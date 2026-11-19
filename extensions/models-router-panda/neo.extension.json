@@ -1,0 +1,18 @@
+{
+  "id": "models-router-panda",
+  "version": "0.1.0",
+  "displayName": "Panda Model Router",
+  "kind": [
+    "tool"
+  ],
+  "runtime": {
+    "type": "cordis",
+    "entry": "./src/index.ts"
+  },
+  "dependsOn": {
+    "models": "*"
+  },
+  "contributes": {
+    "settings": "schema/settings.json"
+  }
+}

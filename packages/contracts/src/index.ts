@@ -366,6 +366,29 @@ export const modelsContract = {
   },
 };
 
+const pandaCandidate = modelSelection.extend({ modelId: z.string().trim().min(1).max(256) });
+export const pandaSettingsSchema = z.object({
+  endpoint: z.string().url().refine((value) => {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
+  }, 'Use an HTTP endpoint without embedded credentials or query parameters'),
+  vaultSecret: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/).optional(),
+  timeoutMs: z.number().int().min(50).max(10000).default(1500),
+  roles: z.object({
+    default: z.array(pandaCandidate).max(32).optional(), fast: z.array(pandaCandidate).max(32).optional(),
+    reasoning: z.array(pandaCandidate).max(32).optional(), coding: z.array(pandaCandidate).max(32).optional(),
+    eval: z.array(pandaCandidate).max(32).optional(),
+  }).strict(),
+}).strict();
+export type PandaSettings = z.infer<typeof pandaSettingsSchema>;
+export const pandaContract = {
+  settings: {
+    get: oc.output(pandaSettingsSchema.nullable()),
+    set: oc.input(pandaSettingsSchema).output(pandaSettingsSchema),
+  },
+  health: oc.output(z.object({ ok: z.boolean(), configured: z.boolean() })),
+};
+
 export const channelsPlatformSchema = z.object({
   id: z.string(), name: z.string(), description: z.string().optional(),
   enabled: z.boolean(), configured: z.boolean(), gatewayRunning: z.boolean(),
@@ -390,7 +413,7 @@ const baseNeoContract = {
     backup: oc.input(z.object({ out: z.string().min(1), passphrase: z.string().min(12) }))
       .output(z.object({ out: z.string(), files: z.number().int(), format: z.number().int() })),
   },
-  x: { 'coding-workflow': codingWorkflowContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract },
+  x: { 'coding-workflow': codingWorkflowContract, 'models-router-panda': pandaContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract },
   onboarding: {
     get: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), mode: z.enum(['desktop', 'server']) })),
     complete: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), mode: z.enum(['desktop', 'server']) })),

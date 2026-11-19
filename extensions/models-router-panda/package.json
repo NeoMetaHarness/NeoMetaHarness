@@ -1,0 +1,23 @@
+{
+  "name": "@neometaharness/models-router-panda",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/panda.test.ts"
+  },
+  "dependencies": {
+    "@neometaharness/contracts": "workspace:*",
+    "@neometaharness/kernel": "workspace:*",
+    "@neometaharness/models": "workspace:*",
+    "@neometaharness/vault": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.13",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "@orpc/client": "1.16.2",
+    "@orpc/contract": "1.16.2"
+  }
+}

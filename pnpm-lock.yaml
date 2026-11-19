@@ -655,6 +655,37 @@ importers:
         specifier: 8.18.3
         version: 8.18.3
 
+  extensions/models-router-panda:
+    dependencies:
+      '@neometaharness/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+      '@neometaharness/models':
+        specifier: workspace:*
+        version: link:../models
+      '@neometaharness/vault':
+        specifier: workspace:*
+        version: link:../../packages/vault
+    devDependencies:
+      '@orpc/client':
+        specifier: 1.16.2
+        version: 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/contract':
+        specifier: 1.16.2
+        version: 1.16.2(@opentelemetry/api@1.10.0)
+      '@types/node':
+        specifier: 22.18.13
+        version: 22.18.13
+      tsx:
+        specifier: 4.20.6
+        version: 4.20.6
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   extensions/sample-ts:
     dependencies:
       '@neometaharness/kernel':

@@ -117,6 +117,9 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.channels.disconnect': 'admin',
 
   // x.models
+  'x.models-router-panda.settings.get': 'admin',
+  'x.models-router-panda.settings.set': 'admin',
+  'x.models-router-panda.health': 'viewer',
   'x.models.providers.list': 'viewer',
   'x.models.providers.put': 'admin',
   'x.models.providers.delete': 'admin',
