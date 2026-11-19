@@ -213,7 +213,7 @@ dsh-superagent bundle on a DSH profile (`engine-superagent`), plus:
 - **Neo Sources:** `neo/channel` (any Hermes channel), `neo/cron`, `neo/coding` (T3 thread events), `neo/agents` (bot escalations), `neo/app` (requests from the App's "Ask Neo" bar). GitHub Source comes from upstream.
 - **Workers delegate** via MCP: T3 (coding), Neo agents service (bots and computers), L1 / Honcho (memory), Skill Registry (skills).
 - **Report and assessment contracts** (status ready / question / blocked / failed / dropped + summary, question, options, changes, tests actually run, risks) for every executor; they drive the Inbox lanes, verification and training labels.
-- **Accept modes** per source or project: `observe` (default; inferred work becomes a *Suggestion* a person starts) or `act`. Trust is earned per source.
+- **Accept modes** per workspace (P6-6), for inferred Source work (`@neo` comments, failing checks): `observe` (default; work becomes a *Suggestion* a member accepts or dismisses), `act-with-approval` (work starts; its outward result, such as a GitHub reply, waits for admin approval) or `act` (work starts and its result is delivered). Destructive work is always a Suggestion that only an admin can accept. Explicit requests (Ask Neo, cron, channels) keep their per-request `observe` / `act`. Per-source trust is a later refinement.
 - Extra Sources: `neo/code-comments` (`@neo` in code) and `neo/checks` (failing check commands).
 - **Honest autonomy matrix:** each executor's "careful" mode is mapped to what it can actually enforce, and the App says so.
 - **Router route** from the Model Hub (API model in v1). A **decision logger** records Eval inputs, the decision, the delegate and the outcome.
