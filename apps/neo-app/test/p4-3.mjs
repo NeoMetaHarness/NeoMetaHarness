@@ -320,6 +320,7 @@ async function trial(previewPort) {
     assert.equal(skill.sourceProfile, 'bota');
     assert.ok(skill.sourcePath.includes('bota') && skill.sourcePath.endsWith('SKILL.md'));
     assert.equal((await registry.versions({ name: skill.name })).length, 1);
+    await registry.checks.set({ name: skill.name, checks: [{ prompt: 'CHECK_PASS', expected: ['PASS_OK'] }] });
     assert.equal((await registry.evaluate({ name: skill.name })).status, 'passed');
     console.log('P4-3_STAGE learned and imported bot A skill at version 1 with provenance');
 
@@ -365,7 +366,7 @@ async function trial(previewPort) {
       const original = (await registry.get({ name: skill.name })).content;
       const changed = original.replace('Check the inputs.', 'Check the papaya checksum twice.');
       assert.notEqual(changed, original);
-      const v2 = await registry.import({ name: skill.name, content: changed, sourceProfile: 'bota', sourcePath: skill.sourcePath, trust: 'observed' });
+      const v2 = await registry.import({ name: skill.name, content: changed, sourceProfile: 'bota' });
       assert.equal(v2.version, 2);
       const diff = await registry.diff({ name: skill.name, from: 1, to: 2 });
       assert.ok(diff.diff.includes('papaya checksum twice'));
@@ -385,24 +386,29 @@ async function trial(previewPort) {
         name: skill.name, content: original, sourceProfile: 'bota',
         sourcePath: 'reviewed/by/bota', trust: 'confirmed',
       });
-      assert.equal(metadataOnly.version, 4);
-      assert.equal((await registry.versions({ name: skill.name })).length, 4,
-        'Metadata-only revisions must be included in the Git version history');
+      assert.equal(metadataOnly.version, 3, 'Caller-supplied metadata must not create a revision');
+      assert.equal(metadataOnly.sourcePath, `manual:${skill.name}`);
+      assert.equal(metadataOnly.trust, 'observed');
+      assert.equal((await registry.versions({ name: skill.name })).length, 3);
       const otherProfile = await registry.import({
         name: 'neo-learned-workflow', content: original, sourceProfile: 'botb',
         sourcePath: 'reviewed/by/botb', trust: 'confirmed',
       });
       assert.equal(otherProfile.name, 'botb/neo-learned-workflow');
       assert.equal(otherProfile.version, 1, 'Another profile owns an independent skill history');
+      assert.equal(otherProfile.sourcePath, `manual:${otherProfile.name}`);
+      assert.equal(otherProfile.trust, 'observed');
       assert.equal((await registry.versions({ name: otherProfile.name })).length, 1);
+      const v4 = await registry.import({ name: skill.name, content: changed, sourceProfile: 'bota' });
+      assert.equal(v4.version, 4);
       assert.equal((await registry.versions({ name: skill.name })).length, 4);
       const originalRevision = await registry.rollback({ name: skill.name, version: 1 });
       assert.equal(originalRevision.version, 5);
       assert.equal(originalRevision.sourceProfile, 'bota');
-      assert.equal(originalRevision.sourcePath, skill.sourcePath);
+      assert.equal(originalRevision.sourcePath, `manual:${skill.name}`);
       assert.equal(originalRevision.trust, 'observed');
       assert.equal((await registry.get({ name: skill.name })).content, original);
-      console.log('P4-3_STAGE metadata-only provenance revision and historical rollback verified');
+      console.log('P4-3_STAGE server-derived provenance, independent history, and historical rollback verified');
 
       await rpc.extensions.disable({ id: 'skills-registry' });
       assert.equal((await fetch(base + '/x/skills-registry/list', { headers: authHeaders() })).status, 404);
