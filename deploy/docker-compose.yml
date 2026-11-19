@@ -1,0 +1,73 @@
+# Linux Docker Engine: Gateway's existing loopback listener uses host networking.
+# Hermes is an initialization service, not an unsupported remote-Hermes API.
+name: neo-selfhost
+services:
+  hermes:
+    image: ${NEO_RUNTIME_IMAGE:-neo-runtime:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: [node, deploy/prepare-hermes.mjs]
+    env_file: [./config/hermes.env]
+    volumes:
+      - upstream-cache:/var/lib/neo/upstream
+      - hermes-cache:/opt/neo/extensions/engine-hermes/.cache
+      - hermes-home:/var/lib/neo/hermes
+    restart: "no"
+  gateway:
+    image: ${NEO_RUNTIME_IMAGE:-neo-runtime:local}
+    network_mode: host
+    command: [pnpm, --config.verifyDepsBeforeRun=false, --dir, apps/gateway, start]
+    env_file: [./config/gateway.env]
+    depends_on:
+      hermes:
+        condition: service_completed_successfully
+    volumes:
+      - neo-data:/var/lib/neo
+      - upstream-cache:/var/lib/neo/upstream:ro
+      - hermes-cache:/opt/neo/extensions/engine-hermes/.cache
+      - hermes-home:/var/lib/neo/hermes
+    init: true
+    restart: unless-stopped
+  honcho:
+    profiles: [memory]
+    image: ${NEO_HONCHO_IMAGE:-neo-honcho:v3.6.1}
+    entrypoint: [sh, docker/entrypoint.sh]
+    env_file: [./config/honcho.env]
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  honcho-deriver:
+    profiles: [memory]
+    image: ${NEO_HONCHO_IMAGE:-neo-honcho:v3.6.1}
+    entrypoint: [/app/.venv/bin/python, -m, src.deriver]
+    env_file: [./config/honcho.env]
+    depends_on:
+      honcho:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  postgres:
+    profiles: [memory]
+    image: ${NEO_PGVECTOR_IMAGE:-pgvector/pgvector:0.8.1-pg17}
+    env_file: [./config/postgres.env]
+    secrets: [postgres-password]
+    volumes: [honcho-postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+volumes:
+  neo-data:
+  upstream-cache:
+  hermes-cache:
+  hermes-home:
+  honcho-postgres:
+secrets:
+  postgres-password:
+    file: ./secrets/postgres-password
