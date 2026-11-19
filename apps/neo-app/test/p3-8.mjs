@@ -68,6 +68,9 @@ try {
   }, body: JSON.stringify(action) });
   assert.equal((await act({ action: 'click', x: 8, y: 9 })).status, 200);
   assert.equal((await act({ action: 'type', text: 'fake-only' })).status, 200);
+  // P3-7's shared safety layer blocks key chords until an admin opts this computer in.
+  assert.equal((await act({ action: 'key', keys: 'Ctrl+A' })).status, 403);
+  await rpc.computers.policy.set({ id: 'local-desktop', allowDestructiveKeys: true, navigationOrigins: [] });
   assert.equal((await act({ action: 'key', keys: 'Ctrl+A' })).status, 200);
   assert.equal((await act({ action: 'move', x: 1, y: 2 })).status, 200);
   assert.equal((await act({ action: 'scroll', direction: 'down', amount: 4 })).status, 200);
