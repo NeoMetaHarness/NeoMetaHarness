@@ -137,6 +137,17 @@ class CDP {
     });
   }
   static async open(details) {
+    // Since P7-5 (SEC-06) the headless Chrome provider speaks CDP over a pipe and hands
+    // out a { targetId, send } channel instead of a debugging WebSocket URL.
+    if (typeof details?.send === 'function') {
+      const cdp = Object.create(CDP.prototype);
+      cdp.send = (method, params = {}, sessionId) => details.send(method, params, sessionId);
+      cdp.close = () => {};
+      cdp.session = (await cdp.send('Target.attachToTarget', { targetId: details.targetId, flatten: true })).sessionId;
+      await cdp.send('Page.enable', {}, cdp.session);
+      await cdp.send('Runtime.enable', {}, cdp.session);
+      return cdp;
+    }
     const socket = new WebSocket(details.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
       socket.addEventListener('open', resolve, { once: true });
@@ -349,7 +360,11 @@ async function main() {
     assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).status, 200);
     await rpc.extensions.disable({ id: 'engine-t3' });
     await eventually(() => { try { process.kill(terminalSnapshot.pid, 0); return false; } catch { return true; } }, 'owned terminal process exits');
-    await assert.rejects(rpc.x['coding-workflow'].terminal.open({ threadId }), /T3.*(disabled|disconnected)/i);
+    // coding-workflow declares dependsOn engine-t3, so the kernel degrades it and its routes 404.
+    const degraded = (await rpc.extensions.list()).find((entry) => entry.id === 'coding-workflow');
+    assert.notEqual(degraded?.status, 'running', 'coding-workflow must not stay running without T3');
+    assert.match(degraded?.reason ?? '', /engine-t3.*(disabled|degraded)/i);
+    await assert.rejects(rpc.x['coding-workflow'].terminal.open({ threadId }), (e) => e.status === 404);
     assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).status, 200);
     await rpc.extensions.disable({ id: 'coding-workflow' });
     assert.ok(!existsSync(join(temp, 'extensions/coding-workflow/acp.token')), 'IPC capability removed');

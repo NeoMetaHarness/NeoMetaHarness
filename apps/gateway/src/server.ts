@@ -1109,13 +1109,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/coding-workflow/')) {
-        const matched = await httpRPC.handle(req, res, { context: context as GatewayAuthContext });
-        if (!matched.matched) res.writeHead(404).end();
-        return;
-      }
-
-      if (path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/')) {
+      if (path.startsWith('/x/coding-workflow/') || path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/')) {
         // Order for every role: authorize the procedure, then report availability,
         // then let oRPC validate method and input. Authorization runs before
         // anything else, so no role learns more than its policy allows, and a
