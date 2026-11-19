@@ -52,10 +52,6 @@ export default defineExtension({
       const { engine, targetId } = body as { engine: 'hermes' | 'dsh' | 'superagent'; targetId: string };
       return registry.ceiling(engine, targetId);
     });
-    ctx.route('ceiling/get', ({ body }) => {
-      const { engine, targetId } = body as { engine: 'hermes' | 'dsh' | 'superagent'; targetId: string };
-      return registry.ceiling(engine, targetId);
-    });
     ctx.route('ceiling/set', ({ body }) => {
       const { engine, targetId, ceiling } = body as { engine: 'hermes' | 'dsh' | 'superagent'; targetId: string; ceiling: 'suggest' | 'auto-low' | 'auto' };
       return registry.setCeiling(engine, targetId, ceiling);

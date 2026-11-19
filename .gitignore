@@ -13,7 +13,6 @@ upstream/sources/
 src-tauri/target/
 .DS_Store
 /upstream/source-*/
-
 /apps/neo-app/src-tauri/installer-payload/
 /apps/neo-app/src-tauri/binaries/neo-gateway-*
-
+/apps/docs/src/content.ts

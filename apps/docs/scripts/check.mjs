@@ -49,6 +49,13 @@ for (const file of allFiles) {
 }
 
 // 2. Verify required sections in content.ts
+if (!existsSync(join(docsAppDir, 'src', 'content.ts'))) {
+  const { execFileSync } = await import('node:child_process');
+  execFileSync(process.execPath, [join(docsAppDir, 'scripts', 'generate.mjs')], {
+    cwd: docsAppDir,
+    stdio: 'inherit',
+  });
+}
 const contentUrl = pathToFileURL(join(docsAppDir, 'src', 'content.ts')).href;
 const contentModule = await import(contentUrl);
 const items = contentModule.DOC_ITEMS || [];

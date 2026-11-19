@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -10,6 +10,9 @@ const docsAppDir = resolve(__dirname, '..');
 const checkScript = join(docsAppDir, 'scripts', 'check.mjs');
 
 console.log('Running test:docs:check unit tests...');
+if (!existsSync(join(docsAppDir, 'src', 'content.ts'))) {
+  spawnSync(process.execPath, [join(docsAppDir, 'scripts', 'generate.mjs')], { cwd: docsAppDir });
+}
 
 // Test 1: baseline passes
 {

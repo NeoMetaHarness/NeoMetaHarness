@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/generate.mjs && vite",
     "build": "node scripts/build.mjs",
     "preview": "vite preview",
     "check": "node scripts/check.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node scripts/generate.mjs && tsc --noEmit",
     "test": "node test/check.test.mjs"
   },
   "dependencies": {
