@@ -998,6 +998,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }),
     },
     computers: {
+      policy: {
+        get: os.computers.policy.get.handler(({ input, context }) => {
+          authorize('computers.policy.get', context); return computers.policy(input.id);
+        }),
+        set: os.computers.policy.set.handler(({ input, context }) => {
+          authorize('computers.policy.set', context); return computers.setPolicy(input.id, input);
+        }),
+      },
       list: os.computers.list.handler(async ({ context }) => {
         authorize('computers.list', context);
         return computers.list();

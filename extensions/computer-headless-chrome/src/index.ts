@@ -166,6 +166,7 @@ async function launchChrome(): Promise<ChromeInstance> {
 
     const computer: Computer = {
       screen: () => ({ protocol: 'png' }),
+      navigate: async (url) => { await send('Page.navigate', { url }); },
       lease: () => {},
       // A command channel, not a URL: only in-process code holding the provider can drive this browser.
       browser: (): BrowserChannel => ({ targetId, send: (method, params, session) => cdp!.send(method, params, session) }),

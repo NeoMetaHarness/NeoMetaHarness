@@ -146,6 +146,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'vault.delete': 'admin',
 
   // computers
+  'computers.policy.get': 'admin',
+  'computers.policy.set': 'admin',
   'computers.list': 'viewer',
   'computers.provision': 'admin',
   'computers.attach': 'admin',

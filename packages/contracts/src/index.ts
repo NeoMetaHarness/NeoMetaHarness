@@ -12,6 +12,8 @@ export const extensionStatusSchema = z.object({
 
 export const computerActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('capture') }),
+  z.object({ action: z.literal('status') }),
+  z.object({ action: z.literal('navigate'), url: z.string().url().max(4096) }),
   z.object({ action: z.literal('click'), x: z.number().finite(), y: z.number().finite() }),
   z.object({ action: z.literal('move'), x: z.number().finite(), y: z.number().finite() }),
   z.object({ action: z.literal('type'), text: z.string().max(10000) }),
@@ -35,10 +37,14 @@ export const gatewayEventSchema = z.discriminatedUnion('type', [
     status: z.enum(['running', 'disabled', 'degraded']), type: z.literal('extension.state') }),
   z.object({ seq: z.number().int(), type: z.literal('computer.acting'),
     computerId: z.string(), engine: z.string(), active: z.boolean(),
-    action: z.enum(['click', 'move', 'type', 'capture', 'key', 'scroll']) }),
+    action: z.enum(['click', 'move', 'type', 'capture', 'key', 'scroll', 'navigate', 'status']) }),
   z.object({ seq: z.number().int(), type: z.literal('computer.lease'),
     computerId: z.string(), holder: z.enum(['agent', 'human']) }),
   z.object({ seq: z.number().int(), type: z.literal('computer.kill'), engaged: z.boolean() }),
+  z.object({ seq: z.number().int(), type: z.literal('computer.action'), computerId: z.string(),
+    providerId: z.string(), engine: z.string(), targetId: z.string(),
+    action: z.enum(['click', 'move', 'type', 'capture', 'key', 'scroll', 'navigate', 'status']),
+    outcome: z.enum(['allowed', 'denied', 'failed']) }),
 ]);
 
 export type GatewayEvent = z.infer<typeof gatewayEventSchema>;
@@ -286,7 +292,7 @@ export const registrySkillSchema = z.object({
   provenance: z.string().optional(),
 });
 export type RegistrySkill = z.infer<typeof registrySkillSchema>;
-const skillTarget = z.object({ name: skillId, engine: z.enum(['hermes', 'dsh']), targetId: z.string().min(1) });
+const skillTarget = z.object({ name: skillId, engine: z.enum(['hermes', 'dsh', 'superagent']), targetId: z.string().min(1) });
 export const skillsRegistryContract = {
   list: oc.output(z.array(registrySkillSchema)),
   get: oc.input(z.object({ name: skillId })).output(z.object({ metadata: registrySkillSchema, content: z.string() })),
@@ -449,6 +455,11 @@ const baseNeoContract = {
     delete: oc.input(vaultSelectorSchema).output(z.object({ deleted: z.boolean() })),
   },
   computers: {
+    policy: {
+      get: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ allowDestructiveKeys: z.boolean(), navigationOrigins: z.array(z.string()) })),
+      set: oc.input(z.object({ id: z.string().min(1), allowDestructiveKeys: z.boolean(), navigationOrigins: z.array(z.string().max(2048)).max(32) }))
+        .output(z.object({ allowDestructiveKeys: z.boolean(), navigationOrigins: z.array(z.string()) })),
+    },
     list: oc.output(z.array(computerInfoSchema)),
     provision: oc.input(z.object({
       providerId: z.string().min(1),
@@ -461,7 +472,7 @@ const baseNeoContract = {
     lease: oc.input(z.object({ id: z.string().min(1), holder: z.enum(['agent', 'human']) }))
       .output(computerInfoSchema),
     assign: oc.input(z.object({
-      engine: z.enum(['hermes', 'dsh']), targetId: z.string().min(1), computerId: z.string().min(1),
+      engine: z.enum(['hermes', 'dsh', 'superagent']), targetId: z.string().min(1), computerId: z.string().min(1),
     })).output(z.object({ engine: z.string(), targetId: z.string(), computerId: z.string() })),
     kill: oc.input(z.object({ engaged: z.boolean() })).output(z.object({ engaged: z.boolean() })),
     state: oc.output(z.object({ engaged: z.boolean() })),

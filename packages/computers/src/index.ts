@@ -18,13 +18,15 @@ export type ComputerInput =
   | { action: 'type'; text: string }
   | { action: 'key'; keys: string }
   | { action: 'scroll'; direction: string; amount: number };
-export type ComputerAction = ComputerInput | { action: 'capture' };
+export type ComputerAction = ComputerInput | { action: 'capture' } | { action: 'status' } | { action: 'navigate'; url: string };
+export interface ComputerSafetyPolicy { allowDestructiveKeys: boolean; navigationOrigins: string[] }
 
 export interface Computer {
   screen(): StreamEndpoint | Promise<StreamEndpoint>;
   lease(holder: LeaseHolder): Promise<void> | void;
   input(action: ComputerInput): Promise<void> | void;
   capture(): Promise<Capture> | Capture;
+  navigate?(url: string): Promise<void> | void;
   browser?(): unknown;
   exec?(command: string): AsyncIterable<string>;
   files?: unknown;
@@ -44,7 +46,8 @@ export interface ComputerAttachContext { workspaceId?: string }
 export type ComputerNotice =
   | { type: 'computer.acting'; computerId: string; engine: string; active: boolean; action: ComputerAction['action'] }
   | { type: 'computer.lease'; computerId: string; holder: LeaseHolder }
-  | { type: 'computer.kill'; engaged: boolean };
+  | { type: 'computer.kill'; engaged: boolean }
+  | { type: 'computer.action'; computerId: string; providerId: string; engine: string; targetId: string; action: ComputerAction['action']; outcome: 'allowed' | 'denied' | 'failed' };
 
 export interface ComputerInfo {
   id: string;
@@ -55,7 +58,7 @@ export interface ComputerInfo {
 }
 export interface ComputerBinding { endpoint: string; token: string; computerId: string }
 
-interface Entry { providerId: string; provider: ComputerProvider; computer: Computer; holder: LeaseHolder; queue: Promise<unknown> }
+interface Entry { providerId: string; provider: ComputerProvider; computer: Computer; holder: LeaseHolder; policy: ComputerSafetyPolicy; queue: Promise<unknown> }
 interface Assignment { engine: string; targetId: string; computerId: string; token: string }
 
 export class ComputerRegistry {
@@ -110,7 +113,7 @@ export class ComputerRegistry {
         await provider.release(target);
         throw new Error('Computer provider was disabled');
       }
-      this.entries.set(target, { providerId, provider, computer, holder: 'agent', queue: Promise.resolve() });
+      this.entries.set(target, { providerId, provider, computer, holder: 'agent', policy: { allowDestructiveKeys: false, navigationOrigins: [] }, queue: Promise.resolve() });
       return this.list().find((entry) => entry.id === target)!;
     } finally {
       this.attaching.delete(target);
@@ -163,7 +166,7 @@ export class ComputerRegistry {
 
   private key(engine: string, targetId: string): string { return JSON.stringify([engine, targetId]); }
 
-  assign(engine: 'hermes' | 'dsh', targetId: string, computerId: string): ComputerBinding {
+  assign(engine: 'hermes' | 'dsh' | 'superagent', targetId: string, computerId: string): ComputerBinding {
     if (!this.entries.has(computerId)) throw new Error('Unknown computer');
     const key = this.key(engine, targetId);
     this.revoke(key);
@@ -218,23 +221,67 @@ export class ComputerRegistry {
     return running;
   }
 
-  async act(token: string, action: ComputerAction): Promise<{ ok: true; capture?: Capture }> {
+  policy(id: string): ComputerSafetyPolicy {
+    const entry = this.entries.get(id);
+    if (!entry) throw new Error('Unknown computer');
+    return structuredClone(entry.policy);
+  }
+
+  setPolicy(id: string, policy: ComputerSafetyPolicy): ComputerSafetyPolicy {
+    const entry = this.entries.get(id);
+    if (!entry) throw new Error('Unknown computer');
+    const origins = policy.navigationOrigins.map((origin) => {
+      const url = new URL(origin);
+      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.origin !== origin) {
+        throw new Error('Navigation policy requires exact HTTP(S) origins');
+      }
+      return url.origin;
+    });
+    entry.policy = { allowDestructiveKeys: policy.allowDestructiveKeys === true, navigationOrigins: origins };
+    return this.policy(id);
+  }
+
+  async act(token: string, action: ComputerAction): Promise<{ ok: true; capture?: Capture; lease?: { holder: LeaseHolder; engaged: boolean } }> {
     const assignment = this.tokens.get(token);
-    if (!assignment) throw new Error('Computer capability denied');
-    const entry = this.entries.get(assignment.computerId);
-    if (!entry) throw new Error('Computer is detached');
+    const entry = assignment && this.entries.get(assignment.computerId);
+    const audit = (outcome: 'allowed' | 'denied' | 'failed') => this.publish({
+      type: 'computer.action', computerId: assignment?.computerId ?? 'unassigned', providerId: entry?.providerId ?? 'unknown',
+      engine: assignment?.engine ?? 'unknown', targetId: assignment?.targetId ?? 'unknown', action: action.action, outcome,
+    });
+    if (!assignment || !entry) { audit('denied'); throw new Error('Computer capability denied'); }
     return this.runQueued(entry, async () => {
-      if (this.tokens.get(token) !== assignment) throw new Error('Computer capability revoked');
-      if (this.killed) throw new Error('Computer kill switch engaged');
-      if (entry.holder === 'human') throw new Error('Computer is leased to a human');
-      this.publish({ type: 'computer.acting', computerId: assignment.computerId, engine: assignment.engine,
-        active: true, action: action.action });
+      let executing = false;
       try {
-        if (action.action === 'capture') return { ok: true, capture: await entry.computer.capture() };
-        await entry.computer.input(action);
-        return { ok: true };
-      } finally {
+        if (this.tokens.get(token) !== assignment) throw new Error('Computer capability revoked');
+        if (action.action === 'status') {
+          audit('allowed'); return { ok: true, lease: { holder: entry.holder, engaged: this.killed } };
+        }
+        if (this.killed) throw new Error('Computer kill switch engaged');
+        if (entry.holder === 'human') throw new Error('Computer is leased to a human');
+        // Unknown chords and editing/deletion keys require explicit operator policy.
+        // Allow only single letters/digits and a small set of non-destructive keys by default.
+        if (action.action === 'key' && !entry.policy.allowDestructiveKeys
+          && !/^(?:[a-z0-9]|enter|return|tab|esc|escape|space|left|right|up|down|arrowleft|arrowright|arrowup|arrowdown|home|end|pageup|pagedown)$/i.test(action.keys.trim())) {
+          throw new Error('Key blocked by computer safety policy');
+        }
+        if (action.action === 'navigate') {
+          const url = new URL(action.url);
+          if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password
+            || !entry.policy.navigationOrigins.includes(url.origin)) throw new Error('Navigation blocked by computer safety policy');
+          if (!entry.computer.navigate) throw new Error('Computer does not support navigation');
+        }
+        executing = true;
         this.publish({ type: 'computer.acting', computerId: assignment.computerId, engine: assignment.engine,
+          active: true, action: action.action });
+        if (action.action === 'capture') {
+          const capture = await entry.computer.capture(); audit('allowed'); return { ok: true, capture };
+        }
+        if (action.action === 'navigate') await entry.computer.navigate!(action.url);
+        else await entry.computer.input(action);
+        audit('allowed'); return { ok: true };
+      } catch (error) { audit(executing ? 'failed' : 'denied'); throw error; }
+      finally {
+        if (executing) this.publish({ type: 'computer.acting', computerId: assignment.computerId, engine: assignment.engine,
           active: false, action: action.action });
       }
     });
