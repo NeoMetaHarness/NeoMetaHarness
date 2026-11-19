@@ -1,3 +1,4 @@
+import { registerWorkflowTools } from './workflow-tools.mjs';
 import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { RPCLink } from '@orpc/client/fetch';
@@ -13,7 +14,18 @@ if (!gateway?.startsWith('http://127.0.0.1:')) throw new Error('Expected loopbac
 const tokenFile = process.env.NMH_GATEWAY_TOKEN_FILE;
 const currentToken = () => { try { return tokenFile ? readFileSync(tokenFile, 'utf8').trim() || undefined : undefined; } catch { return undefined; } };
 const client = createORPCClient(new RPCLink({ url: gateway, headers: () => { const token = currentToken(); return token ? { authorization: `Bearer ${token}` } : {}; } }));
+async function codingSnapshot(threadId) {
+  const socket = new WebSocket(gateway.replace(/^http/, 'ws') + '/ws', [`bearer.${currentToken()}`]);
+  try {
+    const stream = createORPCClient(new WebSocketLink({ websocket: socket }));
+    for await (const event of await stream.x['engine-t3'].events({ threadId }, { signal: AbortSignal.timeout(15000) })) {
+      if (event.kind === 'snapshot') return event.payload.projection;
+    }
+    throw new Error('Coding thread snapshot unavailable');
+  } finally { socket.close(); }
+}
 const server = new McpServer({ name: 'neo-agents', version: '0.1.0' }, { capabilities: { tools: {} } });
+registerWorkflowTools(server, client, codingSnapshot);
 server.registerTool('agents.send_to_bot', {
   description: 'Delegate a ticket to a Neo Hermes bot and wait for its final status.',
   inputSchema: z.object({ botId: z.string().min(1), text: z.string().min(1) }),

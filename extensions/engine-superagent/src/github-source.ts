@@ -10,7 +10,9 @@ export type GitHubEvent =
   | { kind: 'comment'; key: string; repo: string; issue: number; url: string; text: string; botId?: string }
   | { kind: 'check'; key: string; repo: string; url: string; name: string; conclusion: string; botId?: string };
 
+export type ConfirmedPullRequest = { number: number; url: string; branch: string; commit: string };
 export interface GitHubSource {
+  pullRequest?(input: { repo: string; branch: string; commit: string }): Promise<ConfirmedPullRequest | null>;
   configure(config: GitHubConfig, token?: string): Promise<void>;
   status(): Promise<{ repositories: GitHubRepository[]; botId?: string; hasToken: boolean; pausedUntil: number | null; stopped: boolean }>;
   poll(): Promise<{ checked: number; created: number; pausedUntil: number | null }>;
@@ -176,6 +178,20 @@ export class PollingGitHubSource implements GitHubSource {
       if (created) await this.save();
     }
     return { checked, created, pausedUntil: this.pausedUntil };
+  }
+
+  /** GitHub REST GET /repos/{owner}/{repo}/pulls; read only, configured repositories only. */
+  async pullRequest(input: { repo: string; branch: string; commit: string }): Promise<ConfirmedPullRequest | null> {
+    if (this.stopped || (this.pausedUntil !== null && this.pausedUntil > Date.now())) throw new Error('GitHub source is stopped or paused');
+    if (!validRepo.test(input.repo) || !this.config.repositories.some(repo => repo.name === input.repo)
+      || !input.branch || input.branch.length > 160 || !/^[a-f0-9]{40}$/.test(input.commit)) throw new Error('Invalid or unconfigured PR destination');
+    const owner = input.repo.split('/')[0];
+    const pulls = await this.request<Array<{ number: number; state: string; html_url: string;
+      head: { ref: string; sha: string; repo?: { full_name: string } } }>>(`/repos/${input.repo}/pulls?state=open&head=${encodeURIComponent(owner + ':' + input.branch)}`);
+    const pull = pulls.find(pr => pr.state === 'open' && pr.head?.ref === input.branch && pr.head?.sha === input.commit
+      && pr.head?.repo?.full_name === input.repo && Number.isSafeInteger(pr.number) && pr.number > 0
+      && pr.html_url === `https://github.com/${input.repo}/pull/${pr.number}`);
+    return pull ? { number: pull.number, url: pull.html_url, branch: input.branch, commit: input.commit } : null;
   }
 
   async reply(repo: string, issue: number, text: string): Promise<void> {

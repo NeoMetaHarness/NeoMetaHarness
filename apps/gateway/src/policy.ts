@@ -212,6 +212,7 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'inbox.approval.decide': 'member',
   'inbox.retry': 'member',
   'inbox.upstream.check': 'admin',
+  'inbox.github.pullRequest': 'viewer',
   'inbox.github.configure': 'admin',
   'inbox.github.status': 'viewer',
   'inbox.github.poll': 'admin',

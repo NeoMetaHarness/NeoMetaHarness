@@ -52,7 +52,7 @@ export class PresetWorkerHost implements WorkerHost {
           config: {
             transport: 'stdio', serverName: 'neo', command: process.execPath,
             args: [serverFile, gatewayUrl], cwd: home,
-            env: bridgeEnv(home, tokenFile), toolCallTimeoutMs: 90000,
+            env: bridgeEnv(home, tokenFile), toolCallTimeoutMs: 180000,
             failOnStartupError: true, reconnect: { enabled: false },
           },
         }] });
@@ -97,13 +97,14 @@ export class PresetWorkerHost implements WorkerHost {
         content: [{ type: 'text', text: JSON.stringify({ botId, text }) }], source: { kind: 'user' },
       }));
       await worker.agent.whenIdle();
-      const result = worker.agent.session.snapshotEvents().find((event) => event.type === 'tool/result');
-      if (!result) throw new Error('DSH worker did not execute the Hermes MCP tool');
+      const result = worker.agent.session.snapshotEvents().filter((event) => event.type === 'tool/result').at(-1);
+      if (!result) throw new Error('DSH worker did not execute a Neo MCP tool');
       const output = result.data.message.content.find((part) => part.type === 'text');
       const message = output?.type === 'text' ? output.text : '';
-      if (result.data.message.isError) throw new Error(message || 'Hermes MCP tool failed');
+      if (result.data.message.isError) throw new Error(message || 'Neo MCP tool failed');
       const parsed = JSON.parse(message) as { summary: string; tests?: string[]; risks?: string[];
         kind?: 'question' | 'approval'; question?: string; destructive?: boolean };
+      if (typeof parsed.summary !== 'string' || !parsed.summary.trim()) throw new Error('Worker tool produced no report summary');
       return { summary: parsed.summary, tests: parsed.tests ?? [], risks: parsed.risks ?? [],
         kind: parsed.kind, question: parsed.question, destructive: parsed.destructive };
     } finally {

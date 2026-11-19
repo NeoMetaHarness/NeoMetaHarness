@@ -25,6 +25,7 @@ const server = createServer(async (req, res) => {
     pull_request_url: 'https://api.github.com/repos/acme/sample/pulls/8',
     html_url: 'https://github.com/acme/sample/pull/8#discussion_r13' };
   const data = req.method === 'POST' ? { id: 99 }
+    : req.url?.includes('/pulls?') ? [{ number: 9, state: 'open', html_url: 'https://github.com/acme/sample/pull/9', head: { ref: 'neo/feature', sha: 'a'.repeat(40), repo: { full_name: 'acme/sample' } } }]
     : req.url?.includes('/issues/comments?') ? [issue]
     : req.url?.includes('/pulls/comments?') ? [review]
     : { check_runs: [{ id: 33, name: 'build', status: 'completed', conclusion: 'failure',
@@ -59,6 +60,12 @@ try {
   assert.equal(posted?.url, '/repos/acme/sample/issues/7/comments');
   assert.deepEqual(JSON.parse(posted.body), { body: 'Safe approved report' });
   assert.ok(requests.every((request) => request.token === 'Bearer fake-test-token'));
+  assert.equal((await source.pullRequest({ repo: 'acme/sample', branch: 'neo/feature', commit: 'a'.repeat(40) }))?.number, 9);
+  assert.equal(await source.pullRequest({ repo: 'acme/sample', branch: 'neo/feature', commit: 'b'.repeat(40) }), null);
+  assert.equal(await source.pullRequest({ repo: 'acme/sample', branch: 'other', commit: 'a'.repeat(40) }), null);
+  const beforeDenied = requests.length;
+  await assert.rejects(source.pullRequest({ repo: 'other/private', branch: 'neo/feature', commit: 'a'.repeat(40) }), /unconfigured/);
+  assert.equal(requests.length, beforeDenied);
   source.stop();
   const afterStop = requests.length;
   await source.poll();

@@ -657,6 +657,9 @@ export const inboxContract = {
   retry: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
   upstream: { check: oc.output(z.object({ checked: z.number().int(), drift: z.number().int() })) },
   github: {
+    pullRequest: oc.input(z.object({ repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
+      branch: z.string().min(1).max(160), commit: z.string().regex(/^[a-f0-9]{40}$/) }))
+      .output(z.object({ number: z.number().int().positive(), url: z.string().url(), branch: z.string(), commit: z.string() }).nullable()),
     configure: oc.input(z.object({ repositories: z.array(z.object({
       name: z.string().regex(/^[\w.-]+\/[\w.-]+$/), ref: z.string().default('main'),
     })).max(30),

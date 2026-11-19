@@ -338,6 +338,11 @@ class SuperagentService {
       (created) => { created.github = github; created.acceptMode = acceptMode; created.destructive = destructive; });
   }
 
+  githubPullRequest(input: { repo: string; branch: string; commit: string }) {
+    if (!this.github?.pullRequest) throw new Error('GitHub PR lookup unavailable');
+    return this.github.pullRequest(input);
+  }
+
   async githubConfigure(input: GitHubConfig & { token?: string; mode?: 'observe' | 'act' }): Promise<void> {
     if (input.mode === 'act' && !(input.botId ?? (await this.github!.status()).botId)) {
       throw new Error('A bot must be selected for GitHub act mode');
@@ -690,7 +695,7 @@ class SuperagentService {
       const status = /disabled|unavailable|interrupted|stopped|unknown|require.*enabled.*engine-hermes/i.test(message)
         ? 'blocked' : 'failed';
       outcome = status;
-      const report: Report = { status, summary: `Hermes delegation ${status}: ${message}`, changes: [], tests: [],
+      const report: Report = { status, summary: `Worker delegation ${status}: ${message}`, changes: [], tests: [],
         risks: [message], options: [] };
       if (!this.terminalReports.has(ticketId)) {
         this.engine.report(ticketId, { state: status, summary: report.summary });
@@ -794,6 +799,7 @@ export default defineExtension({
     ctx.route('retry', ({ body }) => service.retry(body as { id: string }));
     ctx.route('upstream/check', () => service.checkUpstream());
     ctx.route('github/configure', async ({ body }) => { await service.githubConfigure(body as GitHubConfig & { token?: string }); return { ok: true }; });
+    ctx.route('github/pullRequest', ({ body }) => service.githubPullRequest(body as { repo: string; branch: string; commit: string }));
     ctx.route('github/status', () => service.githubStatus());
     ctx.route('github/poll', () => service.githubPoll());
     ctx.route('cron/list', () => service.cronList());
