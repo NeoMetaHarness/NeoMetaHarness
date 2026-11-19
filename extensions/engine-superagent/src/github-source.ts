@@ -4,14 +4,15 @@ import { dirname } from 'node:path';
 import type { VaultService } from '@neometaharness/vault';
 
 export type GitHubRepository = { name: string; ref: string };
-export type GitHubConfig = { repositories: GitHubRepository[]; mode: 'observe' | 'act'; botId?: string };
+/** What to poll and which bot does the work. Whether work starts is the workspace accept mode, held by the service. */
+export type GitHubConfig = { repositories: GitHubRepository[]; botId?: string };
 export type GitHubEvent =
-  | { kind: 'comment'; key: string; repo: string; issue: number; url: string; text: string; mode: 'observe' | 'act'; botId?: string }
-  | { kind: 'check'; key: string; repo: string; url: string; name: string; conclusion: string };
+  | { kind: 'comment'; key: string; repo: string; issue: number; url: string; text: string; botId?: string }
+  | { kind: 'check'; key: string; repo: string; url: string; name: string; conclusion: string; botId?: string };
 
 export interface GitHubSource {
   configure(config: GitHubConfig, token?: string): Promise<void>;
-  status(): Promise<{ repositories: GitHubRepository[]; mode: 'observe' | 'act'; hasToken: boolean; pausedUntil: number | null; stopped: boolean }>;
+  status(): Promise<{ repositories: GitHubRepository[]; botId?: string; hasToken: boolean; pausedUntil: number | null; stopped: boolean }>;
   poll(): Promise<{ checked: number; created: number; pausedUntil: number | null }>;
   reply(repo: string, issue: number, text: string): Promise<void>;
   stop(): void;
@@ -37,7 +38,9 @@ type CheckRun = { id: number; name: string; status: string; conclusion?: string 
  * https://docs.github.com/en/rest/checks/runs
  */
 export class PollingGitHubSource implements GitHubSource {
-  private config: GitHubConfig = { repositories: [], mode: 'observe' };
+  private config: GitHubConfig = { repositories: [] };
+  /** Per-source mode found in a P6-4 state file, used once to seed the workspace accept mode. */
+  legacyMode?: 'observe' | 'act';
   private seen = new Set<string>();
   private pausedUntil: number | null = null;
   private stopped = false;
@@ -54,7 +57,11 @@ export class PollingGitHubSource implements GitHubSource {
   async start(): Promise<void> {
     try {
       const saved = JSON.parse(await readFile(this.file, 'utf8')) as SavedState;
-      this.config = saved.config;
+      // P6-4 files also carry a per-source `mode`; the workspace accept mode replaces it.
+      const legacy = (saved.config as { mode?: unknown }).mode;
+      if (legacy === 'observe' || legacy === 'act') this.legacyMode = legacy;
+      this.config = { repositories: saved.config.repositories ?? [],
+        ...(saved.config.botId ? { botId: saved.config.botId } : {}) };
       this.seen = new Set(saved.seen.slice(-4000));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -65,14 +72,13 @@ export class PollingGitHubSource implements GitHubSource {
   async configure(config: GitHubConfig, token?: string): Promise<void> {
     if (this.stopped) throw new Error('GitHub source has stopped');
     const botId = config.botId ?? this.config.botId;
-    if (config.mode === 'act' && !botId) throw new Error('A bot must be selected for GitHub act mode');
     for (const repo of config.repositories) {
       if (!validRepo.test(repo.name) || !validRef.test(repo.ref) || repo.ref.includes('..')) {
         throw new Error('Invalid GitHub repository or ref');
       }
     }
     if (token) await this.vault.put(scope, credential, token);
-    this.config = { mode: config.mode, repositories: [...config.repositories], ...(botId ? { botId } : {}) };
+    this.config = { repositories: [...config.repositories], ...(botId ? { botId } : {}) };
     this.pausedUntil = null;
     await this.save();
     this.schedule(0);
@@ -152,8 +158,7 @@ export class PollingGitHubSource implements GitHubSource {
           const key = `comment:${name}:${comment.id}`;
           if (!request?.[1]?.trim() || !issue || this.seen.has(key)) continue;
           await this.onEvent({ kind: 'comment', key, repo: name, issue: Number(issue[1]),
-            url: comment.html_url ?? '', text: request[1].trim(), mode: this.config.mode,
-            botId: this.config.botId });
+            url: comment.html_url ?? '', text: request[1].trim(), botId: this.config.botId });
           this.seen.add(key);
           created++;
         }
@@ -162,7 +167,7 @@ export class PollingGitHubSource implements GitHubSource {
           const key = `check:${name}:${check.id}`;
           if (!['failure', 'timed_out', 'action_required'].includes(check.conclusion ?? '') || this.seen.has(key)) continue;
           await this.onEvent({ kind: 'check', key, repo: name,
-            url: check.html_url ?? '', name: check.name, conclusion: check.conclusion! });
+            url: check.html_url ?? '', name: check.name, conclusion: check.conclusion!, botId: this.config.botId });
           this.seen.add(key);
           created++;
         }

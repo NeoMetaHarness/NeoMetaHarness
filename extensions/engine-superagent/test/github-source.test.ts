@@ -46,7 +46,7 @@ try {
   const events: GitHubEvent[] = [];
   const source = new PollingGitHubSource(join(temp, 'github.json'), vault,
     async (event) => { events.push(event); }, fetch, base);
-  await source.configure({ mode: 'observe', repositories: [{ name: 'acme/sample', ref: 'main' }] }, 'fake-test-token');
+  await source.configure({ repositories: [{ name: 'acme/sample', ref: 'main' }] }, 'fake-test-token');
   assert.equal((await source.poll()).created, 3);
   assert.deepEqual(events.map((event) => event.kind), ['comment', 'comment', 'check']);
   assert.equal((events[0] as Extract<GitHubEvent, { kind: 'comment' }>).issue, 7);
@@ -68,7 +68,7 @@ try {
   for (const blocked of [429, 403]) {
     status = blocked;
     const limited = new PollingGitHubSource(join(temp, `github-${blocked}.json`), vault, async () => {}, fetch, base);
-    await limited.configure({ mode: 'observe', repositories: [{ name: 'acme/sample', ref: 'main' }] });
+    await limited.configure({ repositories: [{ name: 'acme/sample', ref: 'main' }] });
     await assert.rejects(limited.poll(), new RegExp(`HTTP ${blocked}`));
     const count = requests.length;
     const result = await limited.poll();

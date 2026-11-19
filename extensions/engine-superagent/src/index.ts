@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { z } from 'zod';
 import { defineExtension } from '@neometaharness/kernel';
-import type { InboxEvent, InboxItem } from '@neometaharness/contracts';
+import type { AcceptMode, InboxEvent, InboxItem } from '@neometaharness/contracts';
 import type { VaultService } from '@neometaharness/vault';
 import { loadPinnedSuperagent } from './pinned.js';
 import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './model.js';
@@ -18,6 +18,10 @@ import { BridgeKey, BRIDGE_KEY_ROTATE_MS, writeTokenFile, type BridgeKeyHandle }
 import { checkUpstreams } from './upstream-source.js';
 import { InboxStore } from './inbox-store.js';
 import { PollingGitHubSource, type GitHubConfig, type GitHubEvent, type GitHubSource } from './github-source.js';
+import { AcceptModeStore } from './accept-mode.js';
+
+type Role = 'viewer' | 'member' | 'admin' | 'owner';
+const isAdmin = (role?: Role) => role === 'admin' || role === 'owner';
 
 type Report = NonNullable<InboxItem['report']>;
 type Postmortem = NonNullable<Report['postmortem']>;
@@ -90,10 +94,14 @@ class SuperagentService {
   /** Path of the bridge API key file handed to the worker (SEC-11). */
   private token?: string;
   private inboxStore?: InboxStore;
+  private acceptModes!: AcceptModeStore;
+  private acceptModeStored = false;
 
   async start(home: string, gatewayUrl: () => string, tokenFile?: string, channel?: ChannelSource): Promise<void> {
     this.inboxStore = new InboxStore(join(home, '..', 'inbox.json'));
     for (const item of this.inboxStore.load()) this.items.set(item.id, item);
+    this.acceptModes = new AcceptModeStore(join(home, '..', 'accept-mode.json'));
+    this.acceptModeStored = this.acceptModes.load();
     this.workerHome = home;
     this.gatewayUrl = gatewayUrl;
     this.token = tokenFile;
@@ -202,43 +210,76 @@ class SuperagentService {
     const complete = report.status === 'ready' || report.status === 'blocked'
       ? { ...report, postmortem: await this.postmortem(item, report) } : report;
     if (this.closed) return this.items.get(item.id) ?? item;
-    if (item.source === 'neo/github' && item.github?.kind === 'comment'
-      && item.mode === 'act' && complete.status === 'ready') {
+    if (item.source === 'neo/github' && item.github?.kind === 'comment' && item.github.issue
+      && item.mode === 'act' && complete.status === 'ready' && !item.github.posted) {
+      // act delivers the reply itself; act-with-approval, and Suggestions accepted under observe, wait for an admin.
+      let failure = '';
+      if (item.acceptMode === 'act' && !item.destructive && this.github) {
+        try {
+          await this.github.reply(item.github.repo, item.github.issue, complete.summary);
+          return this.update(item, { status: 'ready', report: complete, github: { ...item.github, posted: true } });
+        } catch (error) {
+          failure = `Automatic GitHub reply failed (${error instanceof Error ? error.message : String(error)}). `;
+        }
+      }
       return this.update(item, { status: 'approval', kind: 'approval', report: complete,
-        approval: { destructive: true, reason: 'Approve posting this report as a GitHub comment' } });
+        approval: { destructive: true, reason: `${failure}Approve posting this report as a GitHub comment` } });
     }
     return this.update(item, { status: report.status, report: complete });
   }
 
   attachGithub(source: GitHubSource): void { this.github = source; }
 
+  /** A P6-4 install kept its mode on the GitHub source: carry it over once (act was approval-gated there). */
+  seedAcceptMode(legacy?: 'observe' | 'act'): void {
+    if (this.acceptModeStored || !legacy) return;
+    this.acceptModes.set(legacy === 'act' ? 'act-with-approval' : 'observe');
+    this.acceptModeStored = true;
+  }
+
+  acceptModeGet(): { mode: AcceptMode } { return { mode: this.acceptModes.get() }; }
+  acceptModeSet(input: { mode: AcceptMode }): { mode: AcceptMode } {
+    this.acceptModeStored = true;
+    return { mode: this.acceptModes.set(input.mode) };
+  }
+
+  /**
+   * Inferred Source work follows the workspace accept mode. Without a bot to delegate to, or when the work
+   * is destructive, it is always a Suggestion: nothing destructive starts unless an admin accepts it.
+   */
   async ingestGithub(event: GitHubEvent): Promise<void> {
     if (this.closed) return;
     const now = Date.now();
+    const acceptMode = this.acceptModes.get();
     const github: InboxItem['github'] = { repo: event.repo, url: event.url,
       kind: event.kind, ...(event.kind === 'comment' ? { issue: event.issue } : {}) };
-    if (event.kind === 'comment') {
-      const item = await this.ask({ text: event.text, botId: event.botId ?? 'neo-system', mode: event.mode,
-        requesterRole: 'owner' }, 'neo/github', (created) => { created.github = github; });
-      if (event.mode === 'observe' && item.status === 'suggestion') {
-        await this.finish({ ...item, github }, { status: 'ready',
-          summary: `Observed @neo request in ${event.repo}: ${event.text}`,
-          changes: [], tests: [], risks: [], options: [] });
-      }
-      return;
+    let text = event.kind === 'comment' ? event.text : '';
+    if (event.kind === 'check') {
+      const summary = `GitHub check "${event.name}" in ${event.repo} concluded ${event.conclusion}`;
+      const item: InboxItem = { id: randomUUID(), text: summary, botId: 'neo-system',
+        source: 'neo/github', github, requesterRole: 'owner', mode: 'observe', status: 'failed',
+        kind: 'failure', report: { status: 'failed', summary, changes: [], tests: [], risks: [summary], options: [] },
+        createdAt: now, updatedAt: now };
+      this.update(item, {});
+      // The failure is the record; the follow-up work is proposed or started per accept mode.
+      if (!event.botId) return;
+      text = `Investigate failing check "${event.name}" in ${event.repo} (${event.conclusion}): ${event.url}`;
     }
-    const summary = `GitHub check "${event.name}" in ${event.repo} concluded ${event.conclusion}`;
-    const item: InboxItem = { id: randomUUID(), text: summary, botId: 'neo-system',
-      source: 'neo/github', github, requesterRole: 'owner', mode: 'observe', status: 'failed',
-      kind: 'failure', report: { status: 'failed', summary, changes: [], tests: [], risks: [summary], options: [] },
-      createdAt: now, updatedAt: now };
-    this.update(item, {});
+    const destructive = isDestructive(text);
+    const mode = acceptMode === 'observe' || destructive || !event.botId ? 'observe' : 'act';
+    await this.ask({ text, botId: event.botId ?? 'neo-system', mode, requesterRole: 'owner' }, 'neo/github',
+      (created) => { created.github = github; created.acceptMode = acceptMode; created.destructive = destructive; });
   }
 
-  githubConfigure(input: GitHubConfig & { token?: string }): Promise<void> {
-    return this.github!.configure({ mode: input.mode, repositories: input.repositories, botId: input.botId }, input.token);
+  async githubConfigure(input: GitHubConfig & { token?: string; mode?: 'observe' | 'act' }): Promise<void> {
+    if (input.mode === 'act' && !(input.botId ?? (await this.github!.status()).botId)) {
+      throw new Error('A bot must be selected for GitHub act mode');
+    }
+    await this.github!.configure({ repositories: input.repositories, botId: input.botId }, input.token);
+    // Legacy P6-4 alias: the per-source mode is now the workspace accept mode.
+    if (input.mode) this.acceptModeSet({ mode: input.mode === 'act' ? 'act-with-approval' : 'observe' });
   }
-  githubStatus() { return this.github!.status(); }
+  async githubStatus() { return { ...await this.github!.status(), mode: this.acceptModes.get() }; }
   githubPoll() { return this.github!.poll(); }
 
   private async postmortem(item: InboxItem, report: Report): Promise<Postmortem> {
@@ -315,8 +356,11 @@ class SuperagentService {
     if (!candidate) throw new Error('Trigger was not evaluated by the pinned superagent');
     await this.evaluate(item, candidate);
     this.engine.candidateDelivered(candidate.evalId);
-    // Observe mode retains the accepted proposal for human approval.
-    if (item.mode === 'observe') return this.update(item, { status: 'suggestion' });
+    // Observe mode keeps the proposal as a Suggestion a member accepts or dismisses.
+    if (item.mode === 'observe') {
+      return this.update(item, { status: 'suggestion', kind: 'suggestion',
+        destructive: item.destructive ?? isDestructive(item.text) });
+    }
     await this.acceptCandidate(item, candidate, source);
     return this.items.get(item.id)!;
   }
@@ -380,20 +424,50 @@ class SuperagentService {
       latencyMs: Date.now() - started, outcome: 'accepted' });
   }
 
-  async accept(input: { id: string }): Promise<InboxItem> {
+  /** Accept a Suggestion as `role` (the accepting member; falls back to the requester for in-process callers). */
+  async accept(input: { id: string }, role?: Role): Promise<InboxItem> {
     const item = this.items.get(input.id);
     if (!item) throw new Error('Suggestion not found');
     if (item.source === 'neo/upstream') throw new Error('Upstream source is observe-only');
     if (item.status !== 'suggestion') throw new Error(`Cannot accept ${item.status} ticket`);
-    const reason = blockedReason(item.requesterRole ?? 'member', 'act', item.text);
+    if ((item.destructive ?? isDestructive(item.text)) && role && !isAdmin(role)) {
+      throw new Error('Accepting destructive work requires admin or owner');
+    }
+    const reason = blockedReason(role ?? item.requesterRole ?? 'member', 'act', item.text);
     if (reason) {
       return this.finish(item, { status: 'blocked', summary: reason,
         changes: [], tests: [], risks: [reason], options: [] });
     }
     const candidate = this.candidates.get(`${item.source ?? 'neo/app'}:${item.id}`);
     if (!candidate) throw new Error('Suggestion Eval expired');
-    await this.acceptCandidate(item, candidate, item.source);
+    // Accepted work acts; how its result is delivered still follows the item's accept mode.
+    const accepted = this.update(item, { mode: 'act', kind: undefined });
+    try {
+      await this.acceptCandidate(accepted, candidate, item.source);
+    } catch (error) {
+      const current = this.items.get(item.id);
+      if (current?.status === 'suggestion') this.update(current, { mode: item.mode, kind: item.kind });
+      throw error;
+    }
     return this.items.get(item.id)!;
+  }
+
+  /** Dismiss a Suggestion: the pinned engine records an `ignore` outcome and nothing starts. */
+  async dismiss(input: { id: string; reason?: string }, role?: Role): Promise<InboxItem> {
+    const item = this.items.get(input.id);
+    if (!item || item.status !== 'suggestion') throw new Error('Only Suggestions can be dismissed');
+    const reason = input.reason?.trim() || `Dismissed by ${role ?? 'member'}`;
+    const triggerId = `${item.source ?? 'neo/app'}:${item.id}`;
+    const candidate = this.candidates.get(triggerId);
+    if (candidate) {
+      try { this.engine.decide(triggerId, { kind: 'ignore', reason, evalId: candidate.evalId }); }
+      catch { /* The Eval already ended upstream; the Inbox record is still dismissed. */ }
+      this.candidates.delete(triggerId);
+    }
+    await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+      inputsSummary: reason.slice(0, 240), candidates: candidate ? [candidate.evalId] : [],
+      chosenAction: 'dismiss', modelRole: 'eval', latencyMs: 0, outcome: 'dismissed' });
+    return this.update(item, { status: 'dismissed', kind: 'suggestion' });
   }
 
   list(): InboxItem[] { return [...this.items.values()].map((item) => structuredClone(item)); }
@@ -463,6 +537,8 @@ class SuperagentService {
       const previousId = this.upstreamItems.get(entry.name);
       const previous = previousId && this.items.get(previousId);
       if (previous) {
+        // A dismissed drift stays dismissed until upstream moves again.
+        if (previous.status === 'dismissed' && previous.upstream?.latest === entry.latest) continue;
         this.update(previous, { upstream, report, status: 'suggestion' });
         continue;
       }
@@ -625,6 +701,8 @@ export default defineExtension({
     await github.start();
     ctx.provide('dshInboxSink', { report: (input: Parameters<typeof service.reportDsh>[0]) =>
       service.reportDsh(input) });
+    // Before the first poll (scheduled on a timer by start) so P6-4 installs keep their behaviour.
+    service.seedAcceptMode(github.legacyMode);
     ctx.effect(() => async () => {
       clearInterval(rotation);
       if (current) await bridgeKey.revoke(current.id).catch(() => {});
@@ -634,7 +712,10 @@ export default defineExtension({
     ctx.route('ask', ({ body }) => service.ask(body));
     ctx.route('list', () => service.list());
     ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number }));
-    ctx.route('accept', ({ body }) => service.accept(body as { id: string }));
+    ctx.route('accept', ({ body }) => service.accept(body as { id: string }, (body as { role?: Role }).role));
+    ctx.route('dismiss', ({ body }) => service.dismiss(body as { id: string; reason?: string }, (body as { role?: Role }).role));
+    ctx.route('accept-mode/get', () => service.acceptModeGet());
+    ctx.route('accept-mode/set', ({ body }) => service.acceptModeSet(body as { mode: AcceptMode }));
     ctx.route('reply', ({ body }) => service.reply(body as { id: string; answer: string }));
     ctx.route('approval/decide', ({ body }) => service.decideApproval(body as {
       id: string; decision: 'approve' | 'deny'; reason: string;
