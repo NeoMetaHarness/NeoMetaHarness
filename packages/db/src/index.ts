@@ -131,6 +131,7 @@ export interface DatabaseProvider {
   setEnabled(id: string, enabled: boolean): Promise<void>;
   getExtensionSettings?(id: string): Promise<Record<string, unknown> | undefined>;
   setExtensionSettings?(id: string, values: Record<string, unknown>): Promise<void>;
+  listExtensionInstalls?(): Promise<{ id: string; directory: string; version: string }[]>;
   getExtensionInstall?(id: string): Promise<{ directory: string; version: string } | undefined>;
   setExtensionInstall?(id: string, value: { directory: string; version: string }): Promise<void>;
   close(): Promise<void>;
@@ -217,6 +218,9 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
       .onConflict((conflict) => conflict.column('id').doUpdateSet({ data })).execute();
   }
 
+  async listExtensionInstalls() {
+    return this.db.selectFrom('extension_install').selectAll().execute();
+  }
   async getExtensionInstall(id: string) {
     return this.db.selectFrom('extension_install').select(['directory', 'version']).where('id', '=', id).executeTakeFirst();
   }

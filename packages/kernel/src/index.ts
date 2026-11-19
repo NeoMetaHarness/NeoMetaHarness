@@ -127,9 +127,12 @@ export class NeoKernel {
       }
     }
     await this.db.migrate();
-    for (const [id] of this.discovered) {
-      const installed = await this.db.getExtensionInstall?.(id);
-      if (!installed) continue;
+    const installs = this.db.listExtensionInstalls ? await this.db.listExtensionInstalls()
+      : (await Promise.all([...this.discovered.keys()].map(async (id) => {
+        const value = await this.db.getExtensionInstall?.(id); return value ? { id, ...value } : undefined;
+      }))).filter((value): value is { id: string; directory: string; version: string } => !!value);
+    for (const installed of installs) {
+      const { id } = installed;
       const directory = await realpath(installed.directory);
       const manifest = await loadManifest(directory);
       if (manifest.id !== id || manifest.version !== installed.version) throw new Error(`Installed extension identity changed: ${id}`);

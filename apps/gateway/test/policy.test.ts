@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { neoContract } from '@neometaharness/contracts';
@@ -218,8 +218,20 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
   const extensionsDir = join(root, 'extensions');
   await mkdir(extensionsDir);
 
+  for (const [id, route, result] of [
+    ['test-custom', 'status', { ok: true, version: '1.0' }],
+    ['memory-local', 'list', {}],
+  ] as const) {
+    const directory = join(extensionsDir, id);
+    await mkdir(directory);
+    await writeFile(join(directory, 'neo.extension.json'), JSON.stringify({
+      id, version: '1.0.0', displayName: id, runtime: { type: 'cordis', entry: './index.mjs' },
+    }));
+    await writeFile(join(directory, 'index.mjs'), `export default { activate(ctx) { ctx.route(${JSON.stringify(route)}, () => (${JSON.stringify(result)})); } };`);
+  }
   const gateway = await startGateway({
     databaseFile,
+    extensionsDir,
     mode: 'server',
     signup: 'open', // these suites predate SEC-08 and register users freely
   });
@@ -348,7 +360,7 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
     );
 
     // 3. Plain HTTP extension routes (kernel.hasRoute GET path)
-    (gateway.kernel as any).routes.set('/x/test-custom/status', () => ({ ok: true, version: '1.0' }));
+    await gateway.kernel.enable('test-custom');
 
     // Unauthenticated GET -> 401
     const unauthGet = await fetch(`${base}/x/test-custom/status`);
@@ -382,7 +394,7 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
     assert.equal(unmappedGet.status, 404, 'Unregistered /x/ route must return 404');
 
     // 4. Internal HTTP routes
-    (gateway.kernel as any).routes.set('/x/memory-local/list', () => ({}));
+    await gateway.kernel.enable('memory-local');
     const internalMemGet = await fetch(`${base}/internal/memory/context?profile=default`);
     assert.equal(internalMemGet.status, 401, 'Internal memory context without bearer token must return 401');
 

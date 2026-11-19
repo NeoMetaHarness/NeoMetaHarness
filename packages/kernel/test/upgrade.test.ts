@@ -85,7 +85,9 @@ try{
     assert.equal((await rpc.extensions.upgrade({id,directory:candidates.get(`${id}:3`)!})).upgraded,false);
     assert.equal((await hello(id)).version,2);
   }
-  await stop();rpc=await start();
+  await stop();
+  for(const id of ['sample-ts','sample-py']) await rm(join(installed,id),{recursive:true,force:true});
+  rpc=await start();
   for(const id of ['sample-ts','sample-py']){
     const response=await hello(id);assert.equal(response.version,2);assert.equal(response.projectionDigest,digest);assert.equal(response.setting,`preserved-${id}`);
     assert.equal((await rpc.extensions.list()).find(value=>value.id===id)?.version,'2.0.0');

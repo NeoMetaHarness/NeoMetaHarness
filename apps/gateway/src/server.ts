@@ -344,8 +344,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
   const agentApi = await createAgentGateway(db, kernel);
   for (const extension of kernel.list()) {
-    const manifest = JSON.parse(readFileSync(join(resolve(options.extensionsDir ?? defaultExtensions), extension.id, 'neo.extension.json'), 'utf8'));
-    backupStorage.versions[extension.id] = manifest.version;
+    if (extension.version) backupStorage.versions[extension.id] = extension.version;
   }
   const os = implement(neoContract).$context<GatewayAuthContext>().use(policyMiddleware as any);
 
@@ -1022,7 +1021,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }),
       upgrade: os.extensions.upgrade.handler(async ({ input, context }) => {
         authorize('extensions.upgrade', context);
-        return kernel.upgrade(input.id, input.directory, input);
+        const result = await kernel.upgrade(input.id, input.directory, input);
+        if (result.upgraded && result.extension.version) backupStorage.versions[input.id] = result.extension.version;
+        return result;
       }),
       enable: os.extensions.enable.handler(async ({ input, context }) => {
         authorize('extensions.enable', context);
