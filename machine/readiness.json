@@ -197,13 +197,15 @@
     },
     "P1-8": {
       "title": "Desktop tray, launcher, deep links, onboarding wizard",
-      "status": "review",
-      "owner": "sol-a"
+      "status": "done",
+      "owner": "sol-a",
+      "evidence": "Pushed 88e8857. test:p1-8 PASS x2 (WebView2, desktop-token auth, onboarding persisted); p1-2, p1-5, p2-3 PASS; gateway 28/28; toggle PASS. Native deep-link and tray clicks not automated."
     },
     "P1-9": {
       "title": "Schema-driven Settings",
-      "status": "review",
-      "owner": "antigravity"
+      "status": "in_progress",
+      "owner": "antigravity",
+      "note": "Returned 2026-11-20: gateway settings test and test:p1-9 trial 2 fail on main c466fec."
     }
   },
   "p2_tasks": {
@@ -268,8 +270,9 @@
     },
     "P2-8": {
       "title": "models-router-panda: Panda routing behind the model-router interface",
-      "status": "review",
-      "owner": "sol61"
+      "status": "done",
+      "owner": "sol61",
+      "evidence": "Pushed 5ce243c. test:p2-8 PASS x2 (five roles, vault key, direct fallback, disable isolation); models e2e PASS; gateway 28/28; toggle PASS. Task-aware escalation loop not yet built."
     }
   },
   "known_risks": [
@@ -478,8 +481,9 @@
     },
     "P6-4": {
       "title": "GitHub source + @neo comments (fake GitHub only)",
-      "status": "review",
-      "owner": "codex"
+      "status": "done",
+      "owner": "codex",
+      "evidence": "Pushed c466fec. test:p6-4 PASS x2 (fake GitHub, admin-only replies, 403/429 backoff, disable isolation); superagent tests x2; p6-1/2/3 PASS; gateway 28/28; toggle PASS."
     },
     "P6-5": {
       "title": "WhatsApp channel via Hermes platforms",
