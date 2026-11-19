@@ -16,3 +16,7 @@ src-tauri/target/
 /apps/neo-app/src-tauri/installer-payload/
 /apps/neo-app/src-tauri/binaries/neo-gateway-*
 /apps/docs/src/content.ts
+
+# Claude Code local files
+.claude/settings.local.json
+.claude/*.lock
