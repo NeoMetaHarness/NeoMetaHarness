@@ -1,0 +1,20 @@
+{
+  "name": "@neometaharness/computer-hermes-screen",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "typecheck": "tsc --noEmit", "test": "tsx --test test/provider.test.ts" },
+  "dependencies": {
+    "@neometaharness/kernel": "workspace:*",
+    "@neometaharness/computers": "workspace:*",
+    "@neometaharness/vault": "workspace:*",
+    "ws": "8.18.3",
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.13",
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.3",
+    "tsx": "4.20.6"
+  }
+}
