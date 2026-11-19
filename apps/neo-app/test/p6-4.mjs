@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
@@ -51,44 +51,24 @@ function upstreamCache() {
   }
 }
 
-async function createMember(base, role = 'member', existingOrganizationId) {
-  const email = `p6-3-${role}@neo.local`;
-  const password = 'P6-3-Test-Password!';
-  const signup = await fetch(`${base}/auth/sign-up/email`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password, name: 'P6-3 Member' }),
-  });
-  if (!signup.ok) throw new Error(`Member sign-up ${signup.status}: ${await signup.text()}`);
-  const { user } = await signup.json();
-  let organizationId = existingOrganizationId;
-  if (!organizationId) {
-    const organization = await fetch(`${base}/auth/organization/create`, {
-      method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ name: 'P6-3 Workspace', slug: 'p6-3-workspace' }),
-    });
-    if (!organization.ok) throw new Error(`Workspace create ${organization.status}: ${await organization.text()}`);
-    organizationId = (await organization.json()).id;
-  }
-  const invite = await fetch(`${base}/auth/organization/invite-member`, {
+async function createMember(base) {
+  // Desktop sign-up is closed by P7-2. An owner's API key can restrict its
+  // effective role to member, exercising the same gateway approval policy.
+  const sessionResponse = await fetch(`${base}/auth/get-session`, { headers: authHeaders() });
+  assert.equal(sessionResponse.status, 200);
+  const { session } = await sessionResponse.json();
+  const workspaceId = session?.activeOrganizationId;
+  assert.ok(workspaceId, 'Desktop owner must have an active workspace');
+  const keyResponse = await fetch(`${base}/auth/api-key/create`, {
     method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ organizationId, email, role }),
+    body: JSON.stringify({ name: 'P6-4 member-scoped test key', expiresIn: 3600,
+      metadata: { workspaceId, role: 'member' } }),
   });
-  if (!invite.ok) throw new Error(`Member invite ${invite.status}: ${await invite.text()}`);
-  const { id: invitationId } = await invite.json();
-  const login = await fetch(`${base}/auth/sign-in/email`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  if (!login.ok) throw new Error(`Member login ${login.status}: ${await login.text()}`);
-  const { token } = await login.json();
-  assert.ok(token);
-  const accept = await fetch(`${base}/auth/organization/accept-invitation`, {
-    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ invitationId }),
-  });
-  if (!accept.ok) throw new Error(`Member accept ${accept.status}: ${await accept.text()}`);
-  return { organizationId, rpc: createORPCClient(new RPCLink({ url: base,
-    headers: { authorization: `Bearer ${token}` } })) };
+  assert.equal(keyResponse.status, 200, 'Member-scoped test key creation must succeed');
+  const { key } = await keyResponse.json();
+  assert.ok(key);
+  return { rpc: createORPCClient(new RPCLink({ url: base,
+    headers: { 'x-api-key': key } })) };
 }
 
 let AUTH = '';
@@ -326,7 +306,7 @@ async function trial() {
       item.source === 'neo/github' && item.text === 'research release notes'
       && item.status === 'approval' && item.report?.status === 'ready'), 'admin approval', 120000);
     assert.equal(github.state.posts.length, 0);
-    const { rpc: member } = await createMember(base, 'member');
+    const { rpc: member } = await createMember(base);
     await assert.rejects(member.inbox.approval.decide({ id: pending.id, decision: 'approve', reason: 'test' }),
       (error) => error.message.includes('403') || /FORBIDDEN|admin/i.test(error.message));
     assert.equal(github.state.posts.length, 0);
