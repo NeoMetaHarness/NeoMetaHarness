@@ -1,4 +1,5 @@
 import { codingWorkflowRouter } from './coding-workflow.js';
+import { ComputerMcpBridge } from '@neometaharness/kernel';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, linkSync, unlinkSync, existsSync, mkdirSync, renameSync } from 'node:fs';
@@ -228,6 +229,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   ));
 
   let gatewayPort = 0;
+  const computerMcpBridge = new ComputerMcpBridge();
   const computers = new ComputerRegistry(
     () => {
       if (!gatewayPort) throw new Error('Computer Gateway is not listening');
@@ -280,6 +282,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     channelSource: channelBus,
     channelBus,
     computers,
+    computerMcpBridge,
     vault,
     auth,
     memoryRecords: (db as any).memories,
@@ -1182,6 +1185,23 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           });
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ id: entry.id }));
         }
+        return;
+      }
+
+      if (path === '/internal/computers-mcp/action') {
+        if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+        if (!kernel.hasRoute('/x/computers-mcp/action')) { res.writeHead(404).end(); return; }
+        const chunks: Buffer[] = []; let size = 0;
+        for await (const chunk of req) {
+          size += (chunk as Buffer).length;
+          if (size > 16384) { res.writeHead(413).end(); return; }
+          chunks.push(chunk as Buffer);
+        }
+        let payload: unknown;
+        try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { res.writeHead(400).end(); return; }
+        const result = await kernel.invokeRoute('/x/computers-mcp/action', 'POST', { authorization: req.headers.authorization, payload }) as { status: number; body: unknown };
+        res.writeHead(result.status, { 'content-type': 'application/json' }).end(JSON.stringify(result.body));
         return;
       }
 

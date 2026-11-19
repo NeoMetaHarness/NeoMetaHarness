@@ -1,3 +1,4 @@
+import type { ComputerMcpBridge } from '@neometaharness/kernel';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
@@ -573,7 +574,8 @@ export default defineExtension({
       : modelHubFactory(() => ctx.inject<ModelHubResolver>('modelHub'));
     const service = new SuperagentService(models,
       new DecisionLog(join(dataDir, 'engine-superagent', 'traces')),
-      () => ctx.inject<SkillImporter>('skillRegistry'));
+      () => ctx.inject<SkillImporter>('skillRegistry'),
+      new PresetWorkerHost(models, ctx.inject<ComputerMcpBridge>('computerMcpBridge')));
     const github = new PollingGitHubSource(join(dataDir, 'engine-superagent', 'github.json'),
       vault, (event) => service.ingestGithub(event), fetch,
       process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_GITHUB_API_URL

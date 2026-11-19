@@ -218,6 +218,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
 export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
   '/internal/memory/context': 'internal',
   '/internal/memory/write': 'internal',
+  '/internal/computers-mcp/action': 'internal',
+  '/x/computers-mcp/action': 'internal',
   '/internal/computers/action': 'internal',
   '/auth/ws-ticket': 'viewer',
   '/auth/*': 'internal',

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { DshEvent } from '@neometaharness/contracts';
 import { DshProjector, type VaultService } from '@neometaharness/vault';
 import type { ComputerRegistry } from '@neometaharness/computers';
-import type { SkillsBridge } from '@neometaharness/kernel';
+import type { ComputerMcpBridge, SkillsBridge } from '@neometaharness/kernel';
 import type { DshMemoryBridge } from './memory.js';
 
 const extensionRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -215,7 +215,8 @@ export class DshAgentRuntime {
   constructor(private readonly vault: VaultService, private readonly dataDir: string,
     private readonly computers?: ComputerRegistry, private readonly skills?: SkillsBridge,
     private readonly memory?: DshMemoryBridge,
-    private readonly modelHub?: () => ModelResolver | undefined) {}
+    private readonly modelHub?: () => ModelResolver | undefined,
+    private readonly computerMcp?: ComputerMcpBridge) {}
 
   async create(input: { workspaceId: string; cwd: string; computerId?: string; role?: ModelRole; profile?: string }): Promise<{ sessionId: string; pid: number }> {
     if (this.closing) throw new Error('DSH runtime is stopped');
@@ -251,6 +252,7 @@ export class DshAgentRuntime {
     } catch (error) {
       this.skills?.forgetDsh(sessionId);
       this.memory?.forget(sessionId);
+      await this.computerMcp?.forget('dsh', sessionId);
       await rm(stateDir, { recursive: true, force: true });
       throw error;
     }
@@ -265,6 +267,11 @@ export class DshAgentRuntime {
     const localPlugins = ['neo-providers.mjs', 'neo-computer-tool.mjs', ...(memoryBinding ? ['neo-memory-plugin.mjs'] : [])];
     for (const name of localPlugins) {
       patch = patch.replace(`name: './${name}'`, `name: '${new URL(`../${name}`, import.meta.url).href}'`);
+    }
+    const mcp = await this.computerMcp?.ready('dsh', sessionId, join(stateDir, 'home'), input.workspaceId);
+    if (mcp) {
+      // deepseek-harness@0.2.2-rc.1 packages/mcp/mcp-client/src/index.ts:51-78 (stdio config).
+      patch += `\n- insert:\n    - id: neo-computers-mcp\n      name: ${JSON.stringify(import.meta.resolve('@deepseek-ai/dsh-mcp-client'))}\n      config: ${JSON.stringify({ ...mcp, cwd: stateDir, toolCallTimeoutMs: 15000, failOnStartupError: false })}\n`;
     }
     const patchFile = join(stateDir, 'cordis.patch.yml');
     await writeFile(patchFile, patch);
@@ -295,8 +302,10 @@ export class DshAgentRuntime {
     } catch (error) {
       await session.stop(true);
       this.computers?.unassign('dsh', sessionId);
+      await this.computerMcp?.forget('dsh', sessionId);
       this.skills?.forgetDsh(sessionId);
       this.memory?.forget(sessionId);
+      await this.computerMcp?.forget('dsh', sessionId);
       throw error;
     }
   }
@@ -318,6 +327,7 @@ export class DshAgentRuntime {
     await session.stop(true);
     this.sessions.delete(input.sessionId);
     this.computers?.unassign('dsh', input.sessionId);
+    await this.computerMcp?.forget('dsh', input.sessionId);
     this.skills?.forgetDsh(input.sessionId);
     this.memory?.forget(input.sessionId);
     return { cancelled: true };
@@ -328,6 +338,7 @@ export class DshAgentRuntime {
     await session.stop();
     this.sessions.delete(input.sessionId);
     this.computers?.unassign('dsh', input.sessionId);
+    await this.computerMcp?.forget('dsh', input.sessionId);
     this.skills?.forgetDsh(input.sessionId);
     this.memory?.forget(input.sessionId);
     return { stopped: true };
@@ -340,6 +351,7 @@ export class DshAgentRuntime {
     for (const id of this.sessions.keys()) {
       this.skills?.forgetDsh(id);
       this.memory?.forget(id);
+      await this.computerMcp?.forget('dsh', id);
     }
     this.sessions.clear();
   }

@@ -1,0 +1,12 @@
+{
+  "id": "computers-mcp",
+  "version": "0.1.0",
+  "displayName": "Computer MCP Projection",
+  "kind": [
+    "tool"
+  ],
+  "runtime": {
+    "type": "cordis",
+    "entry": "./src/index.ts"
+  }
+}

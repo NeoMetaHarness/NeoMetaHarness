@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import type { ComputerMcpBridge } from '@neometaharness/kernel';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Context } from '@deepseek-ai/cordis';
@@ -21,13 +23,16 @@ export interface WorkerHost {
 }
 
 export class PresetWorkerHost implements WorkerHost {
-  constructor(private readonly models: ModelFactory) {}
+  constructor(private readonly models: ModelFactory, private readonly computers?: ComputerMcpBridge) {}
   private readonly context = new Context();
   private registration?: { dispose(): Promise<void> };
   private active = new Set<{ dispose(): Promise<void> }>();
   private next = 0;
+  private home = '';
+  private readonly computerProfiles = new Set<string>();
 
   async start(home: string, gatewayUrl: string, tokenFile?: string): Promise<void> {
+    this.home = home;
     await mkdir(home, { recursive: true });
     this.context.baseUrl = import.meta.url;
     await this.context.plugin(Loader);
@@ -57,6 +62,9 @@ export class PresetWorkerHost implements WorkerHost {
     kind?: 'question' | 'approval'; question?: string; destructive?: boolean }> {
     const binding = await this.models('worker', { botId, text });
     const { adapter, provider, model } = binding;
+    const computerProfile = botId;
+    this.computerProfiles.add(computerProfile);
+    const computerMcp = await this.computers?.ready('superagent', computerProfile, join(this.home, createHash('sha256').update(computerProfile).digest('hex')));
     // Every worker has its own model adapter, allowing concurrent assignments.
     const unregister = this.context.llm.registerAdapter([provider], adapter);
     let worker: Awaited<ReturnType<typeof this.context.agents.create>> | undefined;
@@ -64,7 +72,14 @@ export class PresetWorkerHost implements WorkerHost {
       worker = await this.context.agents.create({
         sessionId: SessionId(`neo-superagent-${++this.next}-${randomUUID()}`),
         agentOptions: { provider, model },
-        setup: async (owner) => { await this.context.agentPresets.mount(owner, 'neo-superagent-worker'); },
+        setup: async (owner) => {
+          await this.context.agentPresets.mount(owner, 'neo-superagent-worker');
+          // dsh-superagent@8c32a9dc5d72 cordis.patch.yml:20-26 (worker preset plugins);
+          // DSH@0.2.2-rc.1 packages/mcp/mcp-client/src/index.ts:51-78,154 (stdio mount).
+          if (computerMcp) await owner.plugin(await import('@deepseek-ai/dsh-mcp-client'), {
+            ...computerMcp, cwd: this.home, toolCallTimeoutMs: 15000, failOnStartupError: false,
+          });
+        },
       });
       this.active.add(worker);
       // DSH normalizes MCP tool names containing dots and adds a stable suffix.
@@ -103,6 +118,8 @@ export class PresetWorkerHost implements WorkerHost {
 
   async close(): Promise<void> {
     await Promise.allSettled([...this.active].map((worker) => worker.dispose()));
+    for (const profile of this.computerProfiles) await this.computers?.forget('superagent', profile);
+    this.computerProfiles.clear();
     await this.registration?.dispose();
     await this.context.fiber.dispose();
   }
