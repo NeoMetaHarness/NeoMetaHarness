@@ -203,9 +203,15 @@
     },
     "P1-9": {
       "title": "Schema-driven Settings",
-      "status": "in_progress",
+      "status": "done",
       "owner": "antigravity",
-      "note": "Returned 2026-11-20: gateway settings test and test:p1-9 trial 2 fail on main c466fec."
+      "evidence": "Pushed 10a47bf (fix e7fe898). test:p1-9 PASS x2, gateway settings test PASS."
+    },
+    "P1-10": {
+      "title": "Blue/green extension upgrade in the kernel",
+      "status": "in_progress",
+      "owner": "sol61",
+      "note": "Returned 2026-11-20: kernel generation refactor conflicts with P1-9 settings; rebase requested."
     }
   },
   "p2_tasks": {
@@ -273,6 +279,12 @@
       "status": "done",
       "owner": "sol61",
       "evidence": "Pushed 5ce243c. test:p2-8 PASS x2 (five roles, vault key, direct fallback, disable isolation); models e2e PASS; gateway 28/28; toggle PASS. Task-aware escalation loop not yet built."
+    },
+    "P2-9": {
+      "title": "Panda task-aware escalation for superagent evals",
+      "owner": "sol61",
+      "status": "done",
+      "evidence": "Pushed cd2ca10. test:p2-9 PASS x2 (authenticated Panda escalation, scripted endpoints)."
     }
   },
   "known_risks": [
@@ -329,6 +341,11 @@
       "status": "done",
       "owner": "sol-b",
       "evidence": "Pushed ababad4. SEC-14/17/18 fixed; skills p4-3/p4-4/p4-5x2/p4-6x2/p4-7 PASS; gateway 28/28. Follow-up 978fe19 restores superagent provenance via agent origin."
+    },
+    "P4-8": {
+      "title": "Registry engine picker includes superagent",
+      "status": "in_progress",
+      "owner": "antigravity"
     }
   },
   "p3_tasks": {
@@ -367,13 +384,26 @@
     },
     "P3-6": {
       "title": "computer-docker provider (fake docker CLI in tests)",
-      "status": "in_progress",
-      "owner": "sol-b"
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "Pushed b38382d. computer-docker with fake docker CLI; computers + gateway + toggle PASS."
     },
     "P3-7": {
       "title": "MCP projection of computers into all engines + shared safety layer",
+      "status": "done",
+      "owner": "sol61",
+      "evidence": "Pushed d38dc4b (+a34e817 merge fix). test:p3-7 PASS x2; deny-by-default key/navigation policy, computer.action audit."
+    },
+    "P3-8": {
+      "title": "computer-local provider (opt-in local desktop)",
+      "owner": "sol-b",
+      "status": "done",
+      "evidence": "Pushed 268fe4d. test:p3-8 PASS x2 after PM test fix opting into key chords via P3-7 policy; p3-3..p3-7, gateway, toggle PASS."
+    },
+    "P3-9": {
+      "title": "computer-hermes-screen: bot screen via Hermes seams",
       "status": "in_progress",
-      "owner": "sol61"
+      "owner": "sol-b"
     }
   },
   "p5_tasks": {
@@ -412,8 +442,9 @@
     },
     "P5-6": {
       "title": "DSH plugins: memory, soul, skills, report",
-      "status": "in_progress",
-      "owner": "codex"
+      "status": "done",
+      "owner": "codex",
+      "evidence": "Pushed 513c0d9. DSH plugins suite PASS; app typecheck fixed in PM commit."
     }
   },
   "p7_tasks": {
@@ -451,12 +482,20 @@
     "P7-6": {
       "title": "Installers (Win/macOS/Linux) and install docs",
       "status": "in_progress",
-      "owner": "sol-a"
+      "owner": "sol-a",
+      "note": "Returned 2026-11-20: cargo build fails, bundled gateway sidecar binary missing; fix to bundle-only config."
     },
     "P7-7": {
       "title": "Docs site (static, local build)",
+      "status": "done",
+      "owner": "antigravity",
+      "evidence": "Pushed 2db3db9. docs:build + docs:check + apps/docs test PASS x2.",
+      "follow_up": "docs:build rewrites the committed generated apps/docs/src/content.ts (tree dirty after build); returned to antigravity."
+    },
+    "P7-8": {
+      "title": "Onboarding under 15 minutes (v1 exit)",
       "status": "in_progress",
-      "owner": "antigravity"
+      "owner": "sol-a"
     }
   },
   "p6_tasks": {
@@ -487,8 +526,25 @@
     },
     "P6-5": {
       "title": "WhatsApp channel via Hermes platforms",
+      "status": "done",
+      "owner": "opus",
+      "evidence": "Pushed 94e68d1. WhatsApp via Hermes platforms with scripted fakes; toggle PASS."
+    },
+    "P6-6": {
+      "title": "Workspace accept modes and Suggestions lane",
+      "owner": "opus",
+      "status": "done",
+      "evidence": "Pushed 8e1c288. test:p6-6 PASS x2; p6-1..p6-4, gateway, toggle, app typecheck PASS. Accept-mode set is admin-only."
+    },
+    "P6-7": {
+      "title": "Episodes and playbooks into the skills fabric",
       "status": "in_progress",
-      "owner": "opus"
+      "owner": "codex"
+    },
+    "P6-9": {
+      "title": "P6 exit scenarios end to end",
+      "status": "in_progress",
+      "owner": "sol61"
     }
   }
 }
