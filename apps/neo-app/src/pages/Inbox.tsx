@@ -88,7 +88,12 @@ export default function Inbox() {
       const actions = document.createElement('div');
       actions.className = 'inbox-suggestion';
       actions.dataset.testid = 'inbox-suggestion';
-      if (item.destructive) actions.append(textNode('p', 'Destructive: an admin must accept', 'inbox-blocked'));
+      const upstream = item.source === 'neo/upstream';
+      if (upstream) {
+        actions.append(textNode('p', item.botId === 'neo-system'
+          ? 'Configure a bot for upstream work to approve this bump'
+          : 'Upgrade: an admin must approve; the bot bumps on a branch and reports', 'inbox-blocked'));
+      } else if (item.destructive) actions.append(textNode('p', 'Destructive: an admin must accept', 'inbox-blocked'));
       const buttons: HTMLButtonElement[] = [];
       const run = async (label: string, call: () => Promise<InboxItem>) => {
         for (const control of buttons) control.disabled = true;
@@ -99,8 +104,9 @@ export default function Inbox() {
           for (const control of buttons) control.disabled = false;
         }
       };
-      if (item.source !== 'neo/upstream') {
-        const accept = textNode('button', 'Accept', 'inbox-accept') as HTMLButtonElement;
+      // An upstream bump can be approved only once a bot is assigned to do it.
+      if (!upstream || item.botId !== 'neo-system') {
+        const accept = textNode('button', upstream ? 'Approve bump' : 'Accept', 'inbox-accept') as HTMLButtonElement;
         accept.type = 'button';
         accept.dataset.action = 'accept';
         accept.onclick = () => run('accept', () => http.inbox.accept({ id: item.id }));
