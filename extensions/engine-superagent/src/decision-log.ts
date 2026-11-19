@@ -10,7 +10,9 @@ export type DecisionTrace = {
   inputsSummary: string;
   candidates: string[];
   chosenAction: string;
-  modelRole: 'eval' | 'coding';
+  modelRole: 'default' | 'fast' | 'reasoning' | 'eval' | 'coding';
+  attempt?: number;
+  tier?: 'default' | 'fast' | 'reasoning' | 'eval' | 'coding';
   latencyMs: number;
   outcome: string;
   model_id: string;

@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { pandaSettingsSchema, type PandaSettings } from '@neometaharness/contracts';
 import type { VaultService } from '@neometaharness/vault';
-import type { ModelRole, ModelRouter, ModelSelection } from '../../models/src/hub.js';
+import type { ModelRole, ModelRouter, ModelSelection, RoutedTask, RouteAttempt, EscalationLimits } from '../../models/src/hub.js';
+import { DecisionLog } from '../../engine-superagent/src/decision-log.js';
 
 /** PandaOrchestrator@83e408c794ef: serve/server.py:30-38 (/health, /route),
  * serve/router.py:73-86; schemas/route_request.schema.json:8-35 (task/pool),
@@ -13,12 +14,33 @@ export class PandaRouter implements ModelRouter {
   private active = true;
   private readonly requests = new Set<AbortController>();
   private pending: Promise<unknown> = Promise.resolve();
-  constructor(private readonly vault: VaultService, private readonly home: string) {}
+  private readonly decisions: DecisionLog;
+  constructor(private readonly vault: VaultService, private readonly home: string) {
+    this.decisions = new DecisionLog(join(home, 'traces'));
+  }
   async load() {
     try { this.config = pandaSettingsSchema.parse(JSON.parse(await readFile(join(this.home, 'settings.json'), 'utf8'))); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Invalid Panda settings'); }
   }
   settings(): PandaSettings | null { return this.config ? structuredClone(this.config) : null; }
+  escalationLimits(): EscalationLimits {
+    return this.active && this.config
+      ? (this.config.escalation ?? { enabled: true, maxAttempts: 2, maxTotalMs: 30000 })
+      : { enabled: false, maxAttempts: 1, maxTotalMs: 30000 };
+  }
+  async recordAttempt(entry: RouteAttempt): Promise<void> {
+    if (!this.active) return;
+    const candidate = this.config?.roles[entry.tier]?.find((item) =>
+      item.providerId === entry.selection.providerId && item.model === entry.selection.model);
+    await this.decisions.record({
+      ticketId: entry.task.ticketId ?? 'routed-turn', source: entry.task.source ?? 'neo/models',
+      inputsSummary: entry.task.text.slice(0, 240),
+      candidates: this.config?.roles[entry.tier]?.map((item) => item.modelId) ?? [],
+      chosenAction: entry.attempt === 1 ? 'route' : 'escalate', modelRole: entry.role,
+      model_id: candidate?.modelId ?? `${entry.selection.providerId}/${entry.selection.model}`,
+      latencyMs: entry.latencyMs, outcome: entry.outcome, attempt: entry.attempt, tier: entry.tier,
+    });
+  }
   async configure(input: unknown): Promise<PandaSettings> {
     const config = pandaSettingsSchema.parse(input);
     for (const candidates of Object.values(config.roles)) {
@@ -78,14 +100,13 @@ export class PandaRouter implements ModelRouter {
       return { ok: status?.ok === true && this.active && this.config === config, configured: true };
     } catch { return { ok: false, configured: true }; }
   }
-  async select(role: ModelRole, _direct: ModelSelection): Promise<ModelSelection | undefined> {
+  async select(role: ModelRole, _direct: ModelSelection, task?: RoutedTask): Promise<ModelSelection | undefined> {
     const config = this.config;
     const candidates = config?.roles[role];
     if (!this.active || !config || !candidates?.length) return undefined;
     try {
-      // Model Hub currently supplies role metadata, not prompt contents. Keep prompts and keys out of Panda.
       const response = await this.request(config, 'route', {
-        task: { text: `Select a model for Neo's ${role} role`, kind_hint: role },
+        task: { text: task?.text.slice(0, 240) || `Select a model for Neo's ${role} role`, kind_hint: role },
         pool: candidates.map((candidate) => candidate.modelId),
       }) as { choice?: { model_id?: unknown } } | null;
       if (!this.active || this.config !== config) return undefined;

@@ -16,9 +16,24 @@ export interface ModelProvider {
   hasKey: boolean;
 }
 export interface ModelSelection { providerId: string; model: string }
+export interface RoutedTask { text: string; ticketId?: string; source?: string }
+export interface RouteAttempt {
+  task: RoutedTask;
+  role: ModelRole;
+  tier: ModelRole;
+  attempt: number;
+  selection: ModelSelection;
+  latencyMs: number;
+  outcome: 'accepted' | 'failed' | 'declined';
+}
+export interface EscalationLimits { enabled: boolean; maxAttempts: number; maxTotalMs: number }
+/** The evaluator can distinguish a declined decision from a transport failure. */
+export class ModelRouteRejected extends Error {}
 /** Optional routing policy; credentials and endpoints remain owned by Model Hub. */
 export interface ModelRouter {
-  select(role: ModelRole, direct: ModelSelection): Promise<ModelSelection | undefined>;
+  select(role: ModelRole, direct: ModelSelection, task?: RoutedTask): Promise<ModelSelection | undefined>;
+  escalationLimits?(): EscalationLimits;
+  recordAttempt?(entry: RouteAttempt): Promise<void>;
 }
 export interface ResolvedModel extends ModelSelection { baseUrl: string; apiKey?: string }
 type ProviderRecord = Omit<ModelProvider, 'hasKey'> & { hasKey?: boolean };
@@ -161,7 +176,7 @@ export class ModelHub {
     return { providerId: input.providerId, model: input.model.trim() };
   }
 
-  async resolve(role: ModelRole, profile?: string): Promise<ResolvedModel> {
+  async resolve(role: ModelRole, profile?: string, task?: RoutedTask): Promise<ResolvedModel> {
     if (!this.active) throw new Error('Model Hub extension is disabled');
     const override = profile ? this.settings.overrides[hermesProfile(profile)] : undefined;
     let selection = override ?? this.settings.roles[role];
@@ -170,7 +185,7 @@ export class ModelHub {
     if (!override && this.router) {
       const router = this.router;
       try {
-        const routed = await router.select(role, { ...selection });
+        const routed = await router.select(role, { ...selection }, task);
         if (this.active && this.router === router && routed?.model.trim()
           && this.settings.providers.some((item) => item.id === routed.providerId)) selection = routed;
       } catch { /* Direct binding is the fallback; never expose upstream errors or secrets. */ }
@@ -180,6 +195,52 @@ export class ModelHub {
     if (!provider) throw new Error(`Model provider ${selection.providerId} is unavailable`);
     const apiKey = await this.vault.get(scope, credentialName(provider.id));
     return { ...selection, baseUrl: provider.baseUrl, ...(apiKey ? { apiKey } : {}) };
+  }
+
+  /** One task-scoped retry at the next configured tier. A detached router cannot extend a run. */
+  async runRoutedTurn<T>(role: ModelRole, profile: string | undefined, task: RoutedTask,
+    execute: (binding: ResolvedModel, context: { attempt: number; tier: ModelRole; signal: AbortSignal }) => Promise<T>,
+    onAttempt?: (entry: RouteAttempt) => Promise<void>): Promise<T> {
+    const router = this.router;
+    const override = profile ? this.settings.overrides[hermesProfile(profile)] : undefined;
+    const limits = override ? undefined : router?.escalationLimits?.();
+    const tiers: Record<ModelRole, ModelRole[]> = {
+      fast: ['fast', 'default', 'reasoning'], default: ['default', 'reasoning'],
+      reasoning: ['reasoning'], coding: ['coding', 'reasoning'], eval: ['eval', 'reasoning'],
+    };
+    const maxAttempts = limits?.enabled ? Math.min(limits.maxAttempts, tiers[role].length) : 1;
+    const started = Date.now();
+    let failure: unknown;
+    let previous: ModelSelection | undefined;
+    for (let index = 0; index < maxAttempts; index++) {
+      if (index > 0 && (this.router !== router || !this.settings.roles[tiers[role][index]])) break;
+      const remaining = limits?.enabled ? limits.maxTotalMs - (Date.now() - started) : undefined;
+      if (remaining !== undefined && remaining <= 0) break;
+      const tier = tiers[role][index];
+      const binding = await this.resolve(tier, profile, task);
+      if (previous && previous.providerId === binding.providerId && previous.model === binding.model) break;
+      previous = { providerId: binding.providerId, model: binding.model };
+      const controller = new AbortController();
+      const timer = remaining === undefined ? undefined : setTimeout(() => controller.abort(), remaining);
+      const attemptStarted = Date.now();
+      let outcome: RouteAttempt['outcome'] = 'failed';
+      try {
+        const result = await execute(binding, { attempt: index + 1, tier, signal: controller.signal });
+        outcome = 'accepted';
+        return result;
+      } catch (error) {
+        failure = error;
+        if (error instanceof ModelRouteRejected) outcome = 'declined';
+        if (index + 1 >= maxAttempts || controller.signal.aborted) throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
+        const entry: RouteAttempt = { task, role, tier, attempt: index + 1,
+          selection: previous, latencyMs: Date.now() - attemptStarted, outcome };
+        if (this.router === router) await router?.recordAttempt?.(entry);
+        await onAttempt?.(entry);
+      }
+    }
+    throw failure ?? new Error('Model escalation budget exhausted');
   }
 
   /** Project only Hermes' model keys and its Neo-managed .env block into an isolated profile. */

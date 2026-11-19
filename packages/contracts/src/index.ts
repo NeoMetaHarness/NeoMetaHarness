@@ -389,6 +389,11 @@ export const pandaSettingsSchema = z.object({
     reasoning: z.array(pandaCandidate).max(32).optional(), coding: z.array(pandaCandidate).max(32).optional(),
     eval: z.array(pandaCandidate).max(32).optional(),
   }).strict(),
+  escalation: z.object({
+    enabled: z.boolean(),
+    maxAttempts: z.number().int().min(1).max(2),
+    maxTotalMs: z.number().int().min(100).max(120000),
+  }).strict().optional(),
 }).strict();
 export type PandaSettings = z.infer<typeof pandaSettingsSchema>;
 export const pandaContract = {
