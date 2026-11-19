@@ -131,7 +131,7 @@ export class ComputerRegistry {
         await provider.release(id);
         throw new Error('Computer provider was disabled');
       }
-      this.entries.set(id, { providerId, provider, computer, holder: 'agent', queue: Promise.resolve() });
+      this.entries.set(id, { providerId, provider, computer, holder: 'agent', policy: { allowDestructiveKeys: false, navigationOrigins: [] }, queue: Promise.resolve() });
       return this.list().find((entry) => entry.id === id)!;
     } finally {
       this.attaching.delete(id);

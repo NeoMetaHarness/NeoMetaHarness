@@ -29,7 +29,8 @@ for (const providerId of ['fake', 'headless-chrome', 'local-sandbox', 'vnc']) {
   for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'https://evil.test/', 'https://user:pass@allowed.test/']) await assert.rejects(registry.act(token, { action: 'navigate', url }), /policy/);
   await assert.rejects(registry.act(token, { action: 'click', x: 0, y: 0 }, () => false), /revoked/);
   fail = true; await assert.rejects(registry.act(token, { action: 'click', x: 0, y: 0 }), /fake provider/);
-  const audits = events.filter((event) => event.type === 'computer.action' && event.providerId === providerId);
+  const audits = events.filter((event): event is Extract<ComputerNotice, { type: 'computer.action' }> =>
+    event.type === 'computer.action' && event.providerId === providerId);
   assert.ok(audits.some((event) => event.outcome === 'allowed'));
   assert.ok(audits.some((event) => event.outcome === 'denied'));
   assert.ok(audits.some((event) => event.outcome === 'failed'));
