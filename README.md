@@ -18,6 +18,7 @@ Built on giants:
 7. [Org structure](docs/06-org-structure.md): NeoMetaHarness GitHub org, BrowserHarness-style
 8. [Research notes: PandaCode family](docs/07-research-nuggets.md)
 9. [Upstream registry](upstream/registry.yaml)
+10. [Self-host with Docker Compose](docs/deploy/docker-compose.md)
 
 ## Working in this repo
 - Agent rules: [AGENTS.md](AGENTS.md) · GitHub policy: [guardrails](docs/policies/GITHUB-SAFETY-GUARDRAILS.md) · ADRs: [docs/adr](docs/adr/README.md)
