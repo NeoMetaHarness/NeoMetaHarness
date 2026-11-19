@@ -514,10 +514,21 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('inbox.retry', context);
         return invokeInbox('retry', input) as Promise<InboxItem>;
       }),
-      upstream: { check: os.inbox.upstream.check.handler(async ({ context }) => {
-        authorize('inbox.upstream.check', context);
-        return invokeInbox('upstream/check', {}) as Promise<{ checked: number; drift: number }>;
-      }) },
+      upstream: {
+        check: os.inbox.upstream.check.handler(async ({ context }) => {
+          authorize('inbox.upstream.check', context);
+          return invokeInbox('upstream/check', {}) as Promise<{ checked: number; drift: number }>;
+        }),
+        configure: os.inbox.upstream.configure.handler(async ({ input, context }) => {
+          authorize('inbox.upstream.configure', context);
+          return invokeInbox('upstream/configure', input) as Promise<{ ok: boolean }>;
+        }),
+        status: os.inbox.upstream.status.handler(async ({ context }) => {
+          authorize('inbox.upstream.status', context);
+          return invokeInbox('upstream/status', {}) as Promise<{ botId: string | null; lastCheckedAt: number | null;
+            lastDrift: number | null; lastError: string | null }>;
+        }),
+      },
       github: {
         pullRequest: os.inbox.github.pullRequest.handler(async ({ input, context }) => {
           authorize('inbox.github.pullRequest', context);

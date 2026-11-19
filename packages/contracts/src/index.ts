@@ -659,7 +659,13 @@ export const inboxContract = {
   approval: { decide: oc.input(z.object({ id: z.string().min(1),
     decision: z.enum(['approve', 'deny']), reason: z.string().trim().min(1) })).output(inboxItemSchema) },
   retry: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
-  upstream: { check: oc.output(z.object({ checked: z.number().int(), drift: z.number().int() })) },
+  upstream: {
+    check: oc.output(z.object({ checked: z.number().int(), drift: z.number().int() })),
+    /** The bot that does upstream work: approved bumps and, in the act modes, read-only reviews (P6-8). */
+    configure: oc.input(z.object({ botId: z.string().min(1).nullable() })).output(z.object({ ok: z.boolean() })),
+    status: oc.output(z.object({ botId: z.string().nullable(), lastCheckedAt: z.number().nullable(),
+      lastDrift: z.number().int().nullable(), lastError: z.string().nullable() })),
+  },
   github: {
     pullRequest: oc.input(z.object({ repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
       branch: z.string().min(1).max(160), commit: z.string().regex(/^[a-f0-9]{40}$/) }))
