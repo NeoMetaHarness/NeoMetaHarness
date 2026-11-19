@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": { "test": "tsx test/e2e.test.ts", "typecheck": "tsc --noEmit" },
+  "scripts": { "test": "tsx test/e2e.test.ts && tsx test/whatsapp.e2e.test.ts", "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@neometaharness/kernel": "workspace:*",
     "@neometaharness/vault": "workspace:*",

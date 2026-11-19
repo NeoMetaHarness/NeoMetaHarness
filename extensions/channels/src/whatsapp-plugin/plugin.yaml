@@ -1,0 +1,5 @@
+name: neo-channels
+version: 1.0.0
+description: Hands WhatsApp messages addressed to @neo from allowlisted senders to the Neo Inbox
+provides_hooks:
+  - pre_gateway_dispatch
