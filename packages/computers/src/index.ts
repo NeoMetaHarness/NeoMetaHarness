@@ -27,6 +27,9 @@ export interface Computer {
   input(action: ComputerInput): Promise<void> | void;
   capture(): Promise<Capture> | Capture;
   navigate?(url: string): Promise<void> | void;
+  /** Synchronous preemption for human takeover and the global kill switch. */
+  interrupt?(): void;
+  resumeInput?(): void;
   browser?(): unknown;
   exec?(command: string): AsyncIterable<string>;
   files?: unknown;
@@ -192,6 +195,10 @@ export class ComputerRegistry {
 
   kill(engaged: boolean): { engaged: boolean } {
     this.killed = engaged;
+    for (const entry of this.entries.values()) {
+      if (engaged) entry.computer.interrupt?.();
+      else if (entry.holder === 'agent') entry.computer.resumeInput?.();
+    }
     this.publish({ type: 'computer.kill', engaged });
     return { engaged };
   }
@@ -207,9 +214,15 @@ export class ComputerRegistry {
   async lease(id: string, holder: LeaseHolder): Promise<ComputerInfo> {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown computer');
+    // Human takeover preempts active native input before queued agent work drains.
+    if (holder === 'human') {
+      entry.holder = 'human';
+      entry.computer.interrupt?.();
+    }
     await this.runQueued(entry, async () => {
       await entry.computer.lease(holder);
       entry.holder = holder;
+      if (this.killed && holder === 'agent') entry.computer.interrupt?.();
       this.publish({ type: 'computer.lease', computerId: id, holder });
     });
     return this.list().find((computer) => computer.id === id)!;

@@ -1,0 +1,7 @@
+{
+  "id": "computer-local",
+  "version": "0.1.0",
+  "displayName": "My desktop (local driver)",
+  "kind": ["computer"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}
