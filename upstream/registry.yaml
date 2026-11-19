@@ -23,7 +23,7 @@ upstreams:
     channel: stable-release
     bump: nightly
     role: [agent-runtime]
-    seams: [api-server-v1, dashboard-backend-api, dashboard-backend-plugin, plugin-loader, memory-provider-plugin, platform-plugin, model-provider-plugin, computer-use, bot-screen, skills-dir, cron, kanban, acp-adapter]
+    seams: [api-server-v1, cli, dashboard-backend-api, dashboard-backend-plugin, plugin-loader, memory-provider-plugin, platform-plugin, model-provider-plugin, computer-use, bot-screen, skills-dir, cron, kanban, acp-adapter]
   t3code:
     upstream: pingdotgg/t3code
     lang: ts

@@ -182,8 +182,9 @@ async function main() {
       NMH_HERMES_HOME: home, NMH_HERMES_MODEL_URL: `http://127.0.0.1:${hermesPort}/v1`,
       NMH_SUPERAGENT_MODEL_URL: `http://127.0.0.1:${dshPort}`,
       NMH_CHANNELS_WHATSAPP_BRIDGE_SCRIPT: join(bridgeDir, 'bridge.mjs'),
-      // Shared Hermes PM store: Hermes' pinned Node is downloaded once, then reused by each temp root.
-      NMH_HERMES_RUNTIME_DIR: process.env.NMH_HERMES_RUNTIME_DIR ?? join(extension, '.cache', 'hermes-runtime'),
+      // Shared Hermes PM store outside the repo: Hermes' pinned Node is downloaded once per machine,
+      // then reused by each isolated temp root.
+      NMH_HERMES_RUNTIME_DIR: process.env.NMH_HERMES_RUNTIME_DIR ?? join(tmpdir(), 'nmh-hermes-runtime'),
     });
     const base = `http://127.0.0.1:${gateway.port}`;
     const rpc = createORPCClient<Client>(new RPCLink({ url: base, headers: { authorization: `Bearer ${gateway.token}` } }));
