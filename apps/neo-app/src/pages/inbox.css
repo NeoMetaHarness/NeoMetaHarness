@@ -27,3 +27,6 @@
 .inbox-report-group { font-size: 13px; margin: 8px 0; }
 .inbox-report-group p { margin: 5px 0; }
 .inbox-blocked { font-weight: 650; border-left: 3px solid currentColor; padding-left: 12px; }
+.inbox-suggestion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.inbox-suggestion p { flex-basis: 100%; margin: 0; }
+.inbox-accept-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; }

@@ -3,7 +3,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
-import { neoContract, type InboxItem } from '@neometaharness/contracts';
+import { neoContract, type AcceptMode, type InboxItem } from '@neometaharness/contracts';
 import { Button } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './inbox.css';
@@ -34,6 +34,7 @@ export default function Inbox() {
   const [enabled, setEnabled] = useState(false);
   const [connection, setConnection] = useState('Connecting');
   const [error, setError] = useState('');
+  const [acceptMode, setAcceptMode] = useState<AcceptMode | ''>('');
   const list = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<string, HTMLElement>());
   const latest = useRef(0);
@@ -79,19 +80,36 @@ export default function Inbox() {
       }
       content.push(details);
     }
-    if (item.status === 'suggestion' && item.source !== 'neo/upstream') {
-      const accept = document.createElement('button');
-      accept.type = 'button';
-      accept.className = 'inbox-accept';
-      accept.textContent = 'Accept';
-      accept.dataset.action = 'accept';
-      accept.onclick = async () => {
-        accept.disabled = true;
+    if (item.status === 'suggestion') {
+      // Suggestions: proposed work a member accepts (policy-checked by the gateway) or dismisses.
+      const actions = document.createElement('div');
+      actions.className = 'inbox-suggestion';
+      actions.dataset.testid = 'inbox-suggestion';
+      if (item.destructive) actions.append(textNode('p', 'Destructive: an admin must accept', 'inbox-blocked'));
+      const buttons: HTMLButtonElement[] = [];
+      const run = async (label: string, call: () => Promise<InboxItem>) => {
+        for (const control of buttons) control.disabled = true;
         setError('');
-        try { renderItem(await http.inbox.accept({ id: item.id })); }
-        catch (reason) { setError(`Could not accept suggestion: ${String(reason)}`); accept.disabled = false; }
+        try { renderItem(await call()); }
+        catch (reason) {
+          setError(`Could not ${label} suggestion: ${String(reason)}`);
+          for (const control of buttons) control.disabled = false;
+        }
       };
-      content.push(accept);
+      if (item.source !== 'neo/upstream') {
+        const accept = textNode('button', 'Accept', 'inbox-accept') as HTMLButtonElement;
+        accept.type = 'button';
+        accept.dataset.action = 'accept';
+        accept.onclick = () => run('accept', () => http.inbox.accept({ id: item.id }));
+        buttons.push(accept);
+      }
+      const dismiss = textNode('button', 'Dismiss', 'inbox-accept') as HTMLButtonElement;
+      dismiss.type = 'button';
+      dismiss.dataset.action = 'dismiss';
+      dismiss.onclick = () => run('dismiss', () => http.inbox.dismiss({ id: item.id }));
+      buttons.push(dismiss);
+      actions.append(...buttons);
+      content.push(actions);
     }
     if (item.status === 'question') {
       const form = document.createElement('form');
@@ -204,6 +222,7 @@ export default function Inbox() {
       const extensions = await http.extensions.list();
       const running = extensions.some((entry) => entry.id === 'engine-superagent' && entry.status === 'running');
       if (!closed) setEnabled(running);
+      if (running) void http.inbox.acceptMode.get().then(({ mode }) => { if (!closed) setAcceptMode(mode); }).catch(() => {});
       return running;
     };
     void http.agents.bots.list().then((result) => {
@@ -292,6 +311,14 @@ export default function Inbox() {
     finally { setBusy(false); }
   }
 
+  async function changeAcceptMode(next: AcceptMode) {
+    const previous = acceptMode;
+    setAcceptMode(next);
+    setError('');
+    try { setAcceptMode((await http.inbox.acceptMode.set({ mode: next })).mode); }
+    catch (reason) { setAcceptMode(previous); setError(`Could not change accept mode (admins only): ${String(reason)}`); }
+  }
+
   return <section className="inbox-page" aria-label="Inbox">
     <header className="page-header">
       <div><h1>Inbox</h1><p>Ask Neo to coordinate work across your agents.</p></div>
@@ -315,6 +342,14 @@ export default function Inbox() {
         <Button type="submit" label={busy ? 'Sending…' : 'Ask Neo'} isDisabled={!enabled || !botId || !draft.trim() || busy} />
       </div>
     </form>
+    {enabled && acceptMode && <label className="inbox-accept-mode">
+      Accept mode for @neo comments and failing checks{' '}
+      <select aria-label="Accept mode" value={acceptMode} onChange={(event) => { void changeAcceptMode(event.target.value as AcceptMode); }}>
+        <option value="observe">Observe: suggest only</option>
+        <option value="act-with-approval">Act with approval</option>
+        <option value="act">Act</option>
+      </select>
+    </label>}
     <div className="inbox-items" aria-label="Inbox items" ref={list} />
   </section>;
 }
