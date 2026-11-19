@@ -25,7 +25,8 @@ export class HttpOrgoClient implements OrgoClient {
       const response = await this.transport(this.origin + path, {
         method, headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: signal ?? AbortSignal.timeout(30000), redirect: 'error',
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
+        redirect: 'error',
       });
       if (!response.ok) throw new Error('Orgo API request failed (' + response.status + ')');
       if (response.status === 204) return {} as T;
