@@ -94,7 +94,7 @@ export class ComputerProjection implements ComputerMcpProjection {
     if (!action.success) return { status: 400, body: { error: 'Invalid computer action' } };
     const binding = this.computers.binding(consumer.engine, consumer.profile);
     if (!binding) return denied;
-    try { return { status: 200, body: await this.computers.act(binding.token, action.data) }; }
+    try { return { status: 200, body: await this.computers.act(binding.token, action.data, () => this.active && this.consumers.get(this.key(consumer.engine, consumer.profile)) === consumer) }; }
     catch (error) {
       const message = (error as Error).message;
       const safe = /^(Computer (kill switch engaged|is leased to a human|capability revoked|does not support navigation)|Key blocked by computer safety policy|Navigation blocked by computer safety policy)$/.test(message);

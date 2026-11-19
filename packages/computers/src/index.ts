@@ -241,7 +241,7 @@ export class ComputerRegistry {
     return this.policy(id);
   }
 
-  async act(token: string, action: ComputerAction): Promise<{ ok: true; capture?: Capture; lease?: { holder: LeaseHolder; engaged: boolean } }> {
+  async act(token: string, action: ComputerAction, authorized: () => boolean = () => true): Promise<{ ok: true; capture?: Capture; lease?: { holder: LeaseHolder; engaged: boolean } }> {
     const assignment = this.tokens.get(token);
     const entry = assignment && this.entries.get(assignment.computerId);
     const audit = (outcome: 'allowed' | 'denied' | 'failed') => this.publish({
@@ -252,6 +252,7 @@ export class ComputerRegistry {
     return this.runQueued(entry, async () => {
       let executing = false;
       try {
+        if (!authorized()) throw new Error('Computer capability revoked');
         if (this.tokens.get(token) !== assignment) throw new Error('Computer capability revoked');
         if (action.action === 'status') {
           audit('allowed'); return { ok: true, lease: { holder: entry.holder, engaged: this.killed } };
