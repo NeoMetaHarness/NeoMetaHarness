@@ -59,8 +59,8 @@ class SuperagentService {
     private readonly registry: () => SkillImporter | undefined,
     private readonly worker: WorkerHost = new PresetWorkerHost(models)) {}
   private readonly items = new Map<string, InboxItem>();
-  reportDsh(input: { sessionId: string; workspaceId: string; profile: string;
-    turn: string; status: 'ready' | 'failed'; summary: string; question: string }): void {
+  async reportDsh(input: { sessionId: string; workspaceId: string; profile: string;
+    turn: string; status: 'ready' | 'failed'; summary: string; question: string }): Promise<void> {
     if (this.closed) return;
     const now = Date.now();
     const report: Report = { status: input.status, summary: input.summary.slice(0, 2000),
@@ -69,7 +69,7 @@ class SuperagentService {
       requesterRole: 'member', mode: 'observe', status: input.status,
       text: input.question.slice(0, 1000) || `DSH ${input.profile} session ${input.sessionId}`,
       report, createdAt: now, updatedAt: now };
-    this.update(item, {});
+    await this.finish(item, report);
   }
   private readonly candidates = new Map<string, Candidate>();
   private readonly events: InboxEvent[] = [];
@@ -217,7 +217,8 @@ class SuperagentService {
       if (item.acceptMode === 'act' && !item.destructive && this.github) {
         try {
           await this.github.reply(item.github.repo, item.github.issue, complete.summary);
-          return this.update(item, { status: 'ready', report: complete, github: { ...item.github, posted: true } });
+          return this.recordEpisode(item, complete, { status: 'ready', report: complete,
+            github: { ...item.github, posted: true } });
         } catch (error) {
           failure = `Automatic GitHub reply failed (${error instanceof Error ? error.message : String(error)}). `;
         }
@@ -225,7 +226,30 @@ class SuperagentService {
       return this.update(item, { status: 'approval', kind: 'approval', report: complete,
         approval: { destructive: true, reason: `${failure}Approve posting this report as a GitHub comment` } });
     }
-    return this.update(item, { status: report.status, report: complete });
+    return this.recordEpisode(item, complete, { status: report.status, report: complete });
+  }
+
+  private async recordEpisode(item: InboxItem, complete: Report, patch: Partial<InboxItem>): Promise<InboxItem> {
+    if (complete.status !== 'ready' && complete.status !== 'blocked' && complete.status !== 'failed') {
+      return this.update(item, patch);
+    }
+    const prior = await this.decisions.list({ ticketId: item.id, limit: 20 });
+    const traceId = await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+      inputsSummary: item.text.slice(0, 240), candidates: [], chosenAction: 'ticket.complete',
+      modelRole: 'eval', latencyMs: 0, outcome: complete.status });
+    const episode: InboxItem['episode'] = {
+      goal: item.text.slice(0, 1000),
+      steps: [...new Set([...prior.slice().reverse().map((entry) => entry.chosenAction), 'ticket.complete'])],
+      tools: [...new Set([
+        ...prior.filter((entry) => !entry.model_id.startsWith('policy:')).map((entry) => entry.model_id),
+        ...(this.assignments.has(item.id) ? ['hermes-worker'] : []),
+        ...(item.source === 'neo/dsh' ? ['dsh-session'] : []),
+      ])],
+      outcome: complete.status, traceId,
+      ...(complete.status === 'ready' && complete.postmortem?.reusable && complete.postmortem.procedure?.trim()
+        ? { procedure: complete.postmortem.procedure.trim() } : {}),
+    };
+    return this.update(item, { ...patch, episode });
   }
 
   attachGithub(source: GitHubSource): void { this.github = source; }

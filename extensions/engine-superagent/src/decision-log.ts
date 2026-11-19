@@ -31,7 +31,7 @@ export class DecisionLog {
     this.path = join(dir, 'decisions.jsonl');
   }
 
-  record(input: Omit<DecisionTrace, 'trace_id' | 'at' | 'model_id' | 'success' | 'actual_latency_ms' | 'choice' | 'ranking'> & { model_id?: string }): Promise<void> {
+  record(input: Omit<DecisionTrace, 'trace_id' | 'at' | 'model_id' | 'success' | 'actual_latency_ms' | 'choice' | 'ranking'> & { model_id?: string }): Promise<string> {
     const modelId = input.model_id ?? `policy:${input.chosenAction}`;
     const trace: DecisionTrace = {
       ...input, trace_id: randomUUID(), at: Date.now(), model_id: modelId,
@@ -57,7 +57,7 @@ export class DecisionLog {
       await appendFile(this.path, line, 'utf8');
     });
     this.pending = task.catch(() => {});
-    return task;
+    return task.then(() => trace.trace_id);
   }
 
   async list(input: { ticketId?: string; limit?: number } = {}): Promise<DecisionTrace[]> {

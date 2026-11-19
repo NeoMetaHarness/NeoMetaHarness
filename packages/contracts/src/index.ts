@@ -600,6 +600,11 @@ export const inboxReportSchema = z.object({
 /** Workspace accept mode for inferred Source work (`@neo` comments, failing checks). */
 export const acceptModeSchema = z.enum(['observe', 'act-with-approval', 'act']);
 export type AcceptMode = z.infer<typeof acceptModeSchema>;
+export const inboxEpisodeSchema = z.object({
+  goal: z.string(), steps: z.array(z.string()), tools: z.array(z.string()),
+  outcome: z.enum(['ready', 'blocked', 'failed']), traceId: z.string(),
+  procedure: z.string().optional(),
+});
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
   source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github', 'neo/dsh']).optional(),
@@ -618,6 +623,7 @@ export const inboxItemSchema = z.object({
   approval: z.object({ destructive: z.boolean(), reason: z.string(),
     decision: z.enum(['approved', 'denied']).optional() }).optional(),
   ticketId: z.string().optional(), report: inboxReportSchema.optional(),
+  episode: inboxEpisodeSchema.optional(),
   createdAt: z.number(), updatedAt: z.number(),
 });
 export const inboxEventSchema = z.object({ seq: z.number().int(), item: inboxItemSchema });
