@@ -5,6 +5,7 @@ export type UpstreamScan = { policy: string; findings?: { file?: string; line?: 
 export type HubFinding = { file: string; line: number; category: string; description: string };
 export type HubReport = {
   id: string; profile: string; identifier: string; name: string; blocked: boolean;
+  scannedAt: number;
   approved?: boolean; approvedBy?: string; approvedReason?: string;
   files: string[]; findings: HubFinding[];
 };
@@ -55,5 +56,6 @@ export function inspectHub(profile: string, identifier: string, preview: HubPrev
       category: String(finding.category ?? 'upstream'), description: String(finding.description ?? 'Hermes scan finding') });
   }
   const id = createHash('sha256').update(JSON.stringify({ profile, identifier, preview, upstream })).digest('hex');
-  return { id, profile, identifier, name, blocked: findings.length > 0, files, findings };
+  return { id, profile, identifier, name, blocked: findings.length > 0,
+    scannedAt: Date.now(), files, findings };
 }

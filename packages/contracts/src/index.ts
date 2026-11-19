@@ -269,7 +269,7 @@ const skillEval = z.object({
 });
 const hubReport = z.object({
   id: z.string().length(64), profile: skillName, identifier: z.string(), name: skillName,
-  blocked: z.boolean(), approved: z.boolean().optional(),
+  blocked: z.boolean(), scannedAt: z.number(), approved: z.boolean().optional(),
   approvedBy: z.string().optional(), approvedReason: z.string().optional(),
   files: z.array(z.string()),
   findings: z.array(z.object({ file: z.string(), line: z.number(), category: z.string(), description: z.string() })),

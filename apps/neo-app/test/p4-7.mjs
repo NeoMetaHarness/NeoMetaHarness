@@ -54,7 +54,8 @@ async function fixtureServer() {
     }
     if (req.method === 'GET' && url.pathname === '/api/skills/hub/preview') {
       const identifier = url.searchParams.get('identifier');
-      const content = identifier === 'benign' ? benign : identifier === 'malicious' ? malicious : null;
+      const content = identifier === 'benign' || identifier?.startsWith('benign-') ? benign
+        : identifier === 'malicious' ? malicious : null;
       if (!content) { respond(404, { error: 'unknown fixture' }); return; }
       respond(200, { name: identifier === 'benign' ? 'hub-benign' : 'hub-malicious',
         identifier, skill_md: content, files: ['SKILL.md'] });
@@ -177,6 +178,32 @@ async function run() {
     await registry.hub.install({ profile: 'skillbot', identifier: 'benign', reportId: report.id });
     assert.equal(fixture.scanCalls, 0, 'SEC-19: preview and independently fetched scan are an unbound pair');
     console.log('SEC-19 PASS');
+    const stable = await registry.import({ name: 'stable', sourceProfile: 'skillbot',
+      content: skill('stable', 'suggest', 'CHECK_PASS', 'PASS_OK') });
+    await registry.checks.set({ name: stable.name, checks: [{ prompt: 'CHECK_PASS', expected: ['PASS_OK'] }] });
+    await registry.evaluate({ name: stable.name });
+    await registry.assign({ name: stable.name, ...ceilingTarget, assigned: true });
+    const stableContent = await readFile(skillPath('stable'), 'utf8');
+    await registry.import({ name: 'stable', sourceProfile: 'skillbot',
+      content: skill('stable', 'suggest', 'CHECK_FAIL', 'NEVER_PASS') });
+    assert.equal(await readFile(skillPath('stable'), 'utf8'), stableContent,
+      'SEC-20: importing an unevaluated update must preserve last approved projection');
+    await registry.rollback({ name: stable.name, version: 1 });
+    assert.equal(await readFile(skillPath('stable'), 'utf8'), stableContent,
+      'SEC-20: rolling back must preserve the last approved projection');
+    console.log('SEC-20_PROJECTION PASS');
+    for (let i = 0; i < 110; i++) {
+      await registry.hub.scan({ profile: 'skillbot', identifier: 'benign-' + i });
+    }
+    const reports = JSON.parse(await readFile(join(temp, 'extensions', 'skills-registry', 'hub-reports.json'), 'utf8'));
+    assert.ok(Object.keys(reports).length <= 100, 'SEC-20: Hub scan reports must be bounded');
+    console.log('SEC-20_REPORTS PASS');
+    const brokenMarker = join(temp, 'hermes-home', 'profiles', 'skillbot', 'skills', 'broken-marker');
+    await mkdir(brokenMarker, { recursive: true });
+    await writeFile(join(brokenMarker, '.neo-skill-registry.json'), '{ malformed JSON');
+    await registry.ceiling.set({ ...ceilingTarget, ceiling: 'auto' });
+    assert.equal(await readFile(join(brokenMarker, '.neo-skill-registry.json'), 'utf8'), '{ malformed JSON');
+    console.log('SEC-20_MARKER PASS');
     console.log('P4-7_EXIT PASS');
   } finally {
     if (gateway) await gateway.close();

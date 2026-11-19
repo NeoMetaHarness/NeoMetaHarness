@@ -17,6 +17,8 @@ type Engine = 'hermes' | 'dsh';
 type Assignment = { name: string; engine: Engine; targetId: string };
 export type Autonomy = 'suggest' | 'auto-low' | 'auto';
 const autonomyRank: Record<Autonomy, number> = { suggest: 0, 'auto-low': 1, auto: 2 };
+const hubReportLimit = 100;
+const hubReportMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
 export type SkillCheck = { prompt: string; expected: string[] };
 export type Evaluation = {
   status: 'unevaluated' | 'passed' | 'failed' | 'overridden';
@@ -352,7 +354,7 @@ export class SkillRegistry implements SkillProjection {
       safeName(input.profile);
       const report = inspectHub(input.profile, input.identifier, input.preview, input.upstream);
       const previous = this.hubReports[report.id];
-      if (previous?.approved) Object.assign(report, { approved: true,
+      if (previous?.approved && report.scannedAt - (previous.scannedAt ?? 0) < hubReportMaxAgeMs) Object.assign(report, { approved: true,
         approvedBy: previous.approvedBy, approvedReason: previous.approvedReason });
       this.hubReports[report.id] = report;
       await this.saveHubReports();
@@ -361,6 +363,11 @@ export class SkillRegistry implements SkillProjection {
   }
 
   private async saveHubReports(): Promise<void> {
+    const fresh = Object.values(this.hubReports)
+      .filter((report) => Date.now() - (report.scannedAt ?? 0) < hubReportMaxAgeMs)
+      .sort((a, b) => b.scannedAt - a.scannedAt)
+      .slice(0, hubReportLimit);
+    this.hubReports = Object.fromEntries(fresh.map((report) => [report.id, report]));
     await writeFile(this.hubReportsFile, JSON.stringify(this.hubReports, null, 2) + '\n');
   }
 
@@ -368,7 +375,9 @@ export class SkillRegistry implements SkillProjection {
     return this.serialize(async () => {
       if (!reason.trim() || reason.length > 1000) throw new Error('Approval requires an audit reason');
       const report = this.hubReports[id];
-      if (!report || !report.blocked) throw new Error('Unknown or already safe Hub scan');
+      if (!report || !report.blocked || Date.now() - (report.scannedAt ?? 0) >= hubReportMaxAgeMs) {
+        throw new Error('Unknown, expired or already safe Hub scan');
+      }
       await appendFile(this.auditFile, JSON.stringify({ action: 'hub.approve', id, actor,
         identifier: report.identifier, reason: reason.trim(), at: Date.now() }) + '\n');
       report.approved = true;
@@ -384,7 +393,9 @@ export class SkillRegistry implements SkillProjection {
     safeName(input.profile);
     const report = inspectHub(input.profile, input.identifier, input.preview, input.upstream);
     const stored = this.hubReports[input.reportId];
-    if (!stored || report.id !== input.reportId) throw new Error('Hub contents changed; re-scan before installing');
+    if (!stored || report.id !== input.reportId || Date.now() - (stored.scannedAt ?? 0) >= hubReportMaxAgeMs) {
+      throw new Error('Hub contents changed or scan expired; re-scan before installing');
+    }
     if (report.blocked && !stored.approved) throw new Error('Hub security scan blocked installation; admin approval required');
     if (report.findings.some((item) => item.category === 'path-escape' || item.category === 'unavailable-file'
       || item.category === 'manifest' || item.category === 'identity')) {
@@ -527,16 +538,41 @@ export class SkillRegistry implements SkillProjection {
     for (const row of this.assignments.filter((item) => item.name === name)) await this.refresh(row.engine, row.targetId);
   }
 
+  private async lastApproved(name: string): Promise<{ metadata: SkillRecord; content: string } | undefined> {
+    const current = await this.get(name);
+    if (this.approved(current.metadata)) return current;
+    const history = await this.history(name);
+    for (const revision of history.reverse()) {
+      const metadata = this.withEvaluation(revision.metadata);
+      if (this.approved(metadata)) return { metadata, content: await this.versionContent(revision) };
+    }
+    return undefined;
+  }
+
+  private async projectionMarker(path: string): Promise<{ name: string; version?: number } | undefined> {
+    if (!existsSync(join(path, marker))) return undefined;
+    try {
+      const value: unknown = JSON.parse(await readFile(join(path, marker), 'utf8'));
+      if (value && typeof value === 'object' && 'name' in value && typeof value.name === 'string'
+        && (validIdentity.test(value.name) || validName.test(value.name))) {
+        return value as { name: string; version?: number };
+      }
+    } catch { /* A corrupted marker is treated as unowned and left untouched. */ }
+    return undefined;
+  }
+
   private async refresh(engine: Engine, targetId: string): Promise<void> {
     const home = this.homes.get(this.key(engine, targetId));
     if (!home || this.disposed) return;
     const root = join(home, 'skills');
     const ceiling = this.ceiling(engine, targetId).ceiling;
-    const eligible: Assignment[] = [];
+    const eligible: (Assignment & { content: string; version: number })[] = [];
     for (const row of this.assignments.filter((item) => item.engine === engine && item.targetId === targetId)) {
       try {
-        const metadata = await this.record(row.name);
-        if (this.approved(metadata) && autonomyRank[metadata.autonomy ?? 'suggest'] <= autonomyRank[ceiling]) eligible.push(row);
+        const approved = await this.lastApproved(row.name);
+        if (approved && autonomyRank[approved.metadata.autonomy ?? 'suggest'] <= autonomyRank[ceiling]) {
+          eligible.push({ ...row, content: approved.content, version: approved.metadata.version });
+        }
       }
       catch (error) { if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error; }
     }
@@ -544,8 +580,7 @@ export class SkillRegistry implements SkillProjection {
       .filter((item) => item.isDirectory()).map((item) => join(root, item.name)) : [];
     for (const path of existing) {
       const name = path.slice(root.length + 1);
-      const owned = existsSync(join(path, marker))
-        ? JSON.parse(await readFile(join(path, marker), 'utf8')) as { name: string } : undefined;
+      const owned = await this.projectionMarker(path);
       if (owned && !eligible.some((item) => item.name === owned.name && baseName(item.name) === name)) {
         await this.removeOwned(path);
         this.projected.delete(path);
@@ -557,14 +592,14 @@ export class SkillRegistry implements SkillProjection {
         if (!existsSync(join(destination, marker)) || (await lstat(destination)).isSymbolicLink()) {
           throw new Error(`Skill destination already in use: ${row.name}`);
         }
-        const owned = JSON.parse(await readFile(join(destination, marker), 'utf8')) as { name: string };
+        const owned = await this.projectionMarker(destination);
+        if (!owned) continue;
         if (owned.name !== row.name && owned.name !== baseName(row.name))
           throw new Error(`Skill destination marker mismatch: ${row.name}`);
       }
-      const { content, metadata } = await this.get(row.name);
       await mkdir(destination, { recursive: true });
-      await writeFile(join(destination, 'SKILL.md'), content, 'utf8');
-      await writeFile(join(destination, marker), JSON.stringify({ name: row.name, version: metadata.version }) + '\n', 'utf8');
+      await writeFile(join(destination, 'SKILL.md'), row.content, 'utf8');
+      await writeFile(join(destination, marker), JSON.stringify({ name: row.name, version: row.version }) + '\n', 'utf8');
       this.projected.add(destination);
     }
   }
@@ -573,7 +608,8 @@ export class SkillRegistry implements SkillProjection {
     if (!existsSync(join(path, marker))) return;
     const stat = await lstat(path);
     if (stat.isSymbolicLink()) return;
-    const record = JSON.parse(await readFile(join(path, marker), 'utf8')) as { name: string };
+    const record = await this.projectionMarker(path);
+    if (!record) return;
     if ((validIdentity.test(record.name) ? baseName(record.name) : record.name) === path.split(/[\\/]/).at(-1)) {
       await unlink(join(path, 'SKILL.md')).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; });
       await unlink(join(path, marker));
