@@ -31,7 +31,7 @@ Scope: the Gateway (`apps/gateway`), auth (`packages/auth`), vault (`packages/va
 
 | Attacker | Capabilities | Main targets |
 |---|---|---|
-| A1. Other local OS user | Connects to loopback ports, reads world-readable files | `/auth/*` sign-up/org/API-key endpoints, CDP port, token files |
+| A1. Other local OS user | Connects to loopback ports, reads world-readable files | `/auth/*` sign-up/org/API-key endpoints, CDP port (closed by SEC-06: pipe transport), token files |
 | A2. Malicious web page in the user's browser | Cross-origin requests; DNS rebinding to `127.0.0.1`; crafted links to the PWA | Unauthenticated `/auth/*`, CSRF on cookie sessions, `?gateway=` redirection |
 | A3. Malicious extension or skill | Code (extension) or instructions (skill) inside the trust boundary | `ctx.inject('auth')`, env secrets, projection paths, agent behaviour |
 | A4. Compromised engine | Holds its own callback token; writes into its own home | Other profiles' memory, symlink tricks during projection, other computers |
