@@ -1,6 +1,6 @@
 import { spawnSync, execFileSync } from 'node:child_process';
-import { copyFileSync, cpSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { copyFileSync, cpSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -58,5 +58,10 @@ if (!expectedArch || !target.startsWith(expectedArch + '-')) {
 const suffix = process.platform === 'win32' ? '.exe' : '';
 const sidecar = join(binaries, `neo-gateway-${target}${suffix}`);
 copyFileSync(process.execPath, sidecar);
+const nodeDirectory = dirname(realpathSync(process.execPath));
+const licenses = [process.env.NMH_NODE_LICENSE, join(nodeDirectory, 'LICENSE'), join(nodeDirectory, '..', 'LICENSE'), '/usr/share/doc/nodejs/copyright'];
+const nodeLicense = licenses.find((path) => path && existsSync(path));
+if (!nodeLicense) throw new Error('Node distribution license missing. Set NMH_NODE_LICENSE to its path.');
+copyFileSync(nodeLicense, join(runtime, 'NODE-LICENSE.txt'));
 if (process.platform !== 'win32') chmodSync(sidecar, 0o755);
 console.log(`Installer payload ready for ${target}: gateway, extensions and Node sidecar.`);
