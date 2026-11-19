@@ -30,6 +30,9 @@ test('local provider is opt-in, routes every action via the driver, and revokes 
   await f.registry.attach('computer-local', LOCAL_DESKTOP_ID);
   const binding = f.registry.assign('hermes', 'bot', LOCAL_DESKTOP_ID);
   assert.deepEqual((await f.registry.act(binding.token, { action: 'capture' })).capture, { png, width: 1, height: 1 });
+  // P3-7's shared safety layer blocks key chords on the user's own desktop until an owner opts in.
+  await assert.rejects(f.registry.act(binding.token, { action: 'key', keys: 'Ctrl+A' }), /safety policy/);
+  f.registry.setPolicy(LOCAL_DESKTOP_ID, { allowDestructiveKeys: true, navigationOrigins: [] });
   for (const action of [
     { action: 'click', x: 10, y: 20 }, { action: 'move', x: 3, y: 4 },
     { action: 'type', text: 'safe' }, { action: 'key', keys: 'Ctrl+A' },
