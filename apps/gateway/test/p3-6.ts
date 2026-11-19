@@ -4,8 +4,12 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
+import { neoContract } from '@neometaharness/contracts';
 import { startGateway } from '../src/server.js';
 import { FakeRfbServer } from '../../../extensions/computer-vnc/test/fake-rfb.js';
+
+type GatewayClient = ContractRouterClient<typeof neoContract>;
 
 const root = await mkdtemp(join(tmpdir(), 'neo-p36-'));
 const bin = join(root, 'bin');
@@ -59,8 +63,8 @@ try {
   const base = `http://127.0.0.1:${gateway.port}`;
   const token = gateway.desktopToken;
   assert.ok(token, 'desktop gateway must issue authenticated token');
-  const rpc = createORPCClient(new RPCLink({ url: base, headers: { authorization: `Bearer ${token}` } }));
-  const anonymous = createORPCClient(new RPCLink({ url: base }));
+  const rpc = createORPCClient<GatewayClient>(new RPCLink({ url: base, headers: { authorization: `Bearer ${token}` } }));
+  const anonymous = createORPCClient<GatewayClient>(new RPCLink({ url: base }));
   assert.equal((await rpc.extensions.enable({ id: 'computer-docker' })).status, 'running');
   assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
   const workspaceId = (await gateway.auth.kysely.selectFrom('organization').select('id').executeTakeFirstOrThrow()).id;
