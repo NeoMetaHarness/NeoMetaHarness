@@ -466,8 +466,28 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       },
       accept: os.inbox.accept.handler(async ({ input, context }) => {
         authorize('inbox.accept', context);
-        return invokeInbox('accept', input) as Promise<InboxItem>;
+        // Accepting a Suggestion starts work: destructive work needs an admin or owner (as approvals do).
+        const items = await invokeInbox('list', {}) as InboxItem[];
+        const item = items.find((entry) => entry.id === input.id);
+        if (item?.destructive && context.role !== 'admin' && context.role !== 'owner') {
+          throw new ORPCError('FORBIDDEN', { message: 'Accepting destructive work requires admin or owner' });
+        }
+        return invokeInbox('accept', { ...input, role: context.role }) as Promise<InboxItem>;
       }),
+      dismiss: os.inbox.dismiss.handler(async ({ input, context }) => {
+        authorize('inbox.dismiss', context);
+        return invokeInbox('dismiss', { ...input, role: context.role }) as Promise<InboxItem>;
+      }),
+      acceptMode: {
+        get: os.inbox.acceptMode.get.handler(async ({ context }) => {
+          authorize('inbox.acceptMode.get', context);
+          return invokeInbox('accept-mode/get', {}) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
+        }),
+        set: os.inbox.acceptMode.set.handler(async ({ input, context }) => {
+          authorize('inbox.acceptMode.set', context);
+          return invokeInbox('accept-mode/set', input) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
+        }),
+      },
       reply: os.inbox.reply.handler(async ({ input, context }) => {
         authorize('inbox.reply', context);
         return invokeInbox('reply', input) as Promise<InboxItem>;
@@ -498,7 +518,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           authorize('inbox.github.status', context);
           return invokeInbox('github/status', {}) as Promise<{
             repositories: { name: string; ref: string }[];
-            mode: 'observe' | 'act'; botId?: string; hasToken: boolean;
+            mode: import('@neometaharness/contracts').AcceptMode; botId?: string; hasToken: boolean;
             pausedUntil: number | null; stopped: boolean;
           }>;
         }),

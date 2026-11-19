@@ -597,6 +597,9 @@ export const inboxReportSchema = z.object({
     procedure: z.string().optional(), skill: z.string().optional(),
   }).optional(),
 });
+/** Workspace accept mode for inferred Source work (`@neo` comments, failing checks). */
+export const acceptModeSchema = z.enum(['observe', 'act-with-approval', 'act']);
+export type AcceptMode = z.infer<typeof acceptModeSchema>;
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
   source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github', 'neo/dsh']).optional(),
@@ -606,8 +609,12 @@ export const inboxItemSchema = z.object({
     changelog: z.string().url().nullable() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).optional(),
   mode: z.enum(['observe', 'act']),
-  status: z.enum(['suggestion', 'running', 'ready', 'question', 'approval', 'blocked', 'failed']),
-  kind: z.enum(['question', 'approval', 'failure']).optional(),
+  status: z.enum(['suggestion', 'running', 'ready', 'question', 'approval', 'blocked', 'failed', 'dismissed']),
+  kind: z.enum(['question', 'approval', 'failure', 'suggestion']).optional(),
+  /** Workspace accept mode the item was created under (inferred Source work only). */
+  acceptMode: acceptModeSchema.optional(),
+  /** Destructive work: accepting it needs an admin or owner. */
+  destructive: z.boolean().optional(),
   approval: z.object({ destructive: z.boolean(), reason: z.string(),
     decision: z.enum(['approved', 'denied']).optional() }).optional(),
   ticketId: z.string().optional(), report: inboxReportSchema.optional(),
@@ -631,6 +638,12 @@ export const inboxContract = {
   decisions: { list: oc.input(z.object({ ticketId: z.string().optional(),
     limit: z.number().int().min(1).max(500).default(100) })).output(z.array(inboxDecisionSchema)) },
   accept: oc.input(z.object({ id: z.string().min(1) })).output(inboxItemSchema),
+  dismiss: oc.input(z.object({ id: z.string().min(1), reason: z.string().trim().max(500).optional() }))
+    .output(inboxItemSchema),
+  acceptMode: {
+    get: oc.output(z.object({ mode: acceptModeSchema })),
+    set: oc.input(z.object({ mode: acceptModeSchema })).output(z.object({ mode: acceptModeSchema })),
+  },
   reply: oc.input(z.object({ id: z.string().min(1), answer: z.string().trim().min(1) })).output(inboxItemSchema),
   approval: { decide: oc.input(z.object({ id: z.string().min(1),
     decision: z.enum(['approve', 'deny']), reason: z.string().trim().min(1) })).output(inboxItemSchema) },
@@ -639,10 +652,12 @@ export const inboxContract = {
   github: {
     configure: oc.input(z.object({ repositories: z.array(z.object({
       name: z.string().regex(/^[\w.-]+\/[\w.-]+$/), ref: z.string().default('main'),
-    })).max(30), mode: z.enum(['observe', 'act']).default('observe'), botId: z.string().min(1).optional(),
+    })).max(30),
+      /** Legacy P6-4 alias for inbox.acceptMode.set: observe -> observe, act -> act-with-approval. */
+      mode: z.enum(['observe', 'act']).optional(), botId: z.string().min(1).optional(),
       token: z.string().min(1).optional() })).output(z.object({ ok: z.boolean() })),
     status: oc.output(z.object({ repositories: z.array(z.object({ name: z.string(), ref: z.string() })),
-      mode: z.enum(['observe', 'act']), botId: z.string().optional(), hasToken: z.boolean(), pausedUntil: z.number().nullable(), stopped: z.boolean() })),
+      mode: acceptModeSchema, botId: z.string().optional(), hasToken: z.boolean(), pausedUntil: z.number().nullable(), stopped: z.boolean() })),
     poll: oc.output(z.object({ checked: z.number().int(), created: z.number().int(),
       pausedUntil: z.number().nullable() })),
   },
