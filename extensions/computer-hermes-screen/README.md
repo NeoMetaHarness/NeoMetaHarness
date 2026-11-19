@@ -11,5 +11,5 @@ Hermes v0.23.2 seams are pinned by `upstream/registry.yaml:26`.
 `tui_gateway/methods_display.py:50` serves `display.status`, and line 60
 serves `display.thumbnail`, suppressing frames during the native human lease.
 `tui_gateway/contracts/display.py:71,89` defines the result schemas.
-Hermes's native computer-use and RFB observation seams remain owned by Hermes.
+Hermes's native bot-desktop screenshot comes from `tools/bot_desktop/thumbnail.py:21`; the native human-control lease is in `tools/bot_desktop/lease.py:146,190`. Computer-use remains governed by Hermes.
 On hosts without Hermes's Linux bot desktop, the viewer reports unavailable.
