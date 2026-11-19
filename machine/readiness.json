@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "phase": "P1-kernel-and-app",
-  "updated": "2026-11-18",
+  "updated": "2026-11-20",
   "decisions": {
     "upstream_strategy": "engines unmodified via seams; bot-hq adopted first-party",
     "ui": "one Neo App on Astryx",
@@ -197,12 +197,12 @@
     },
     "P1-8": {
       "title": "Desktop tray, launcher, deep links, onboarding wizard",
-      "status": "in_progress",
+      "status": "review",
       "owner": "sol-a"
     },
     "P1-9": {
       "title": "Schema-driven Settings",
-      "status": "in_progress",
+      "status": "review",
       "owner": "antigravity"
     }
   },
@@ -265,6 +265,11 @@
       "status": "done",
       "owner": "sol-a",
       "evidence": "PM rerun 2x + regression 30/30: P2-7_EXIT PASS (routine fires + history + pause; kanban board, assign to bot, done after turn); Hermes seams plugins/kanban/dashboard/plugin_api.py:1267,1409, tools/kanban_tools.py:744"
+    },
+    "P2-8": {
+      "title": "models-router-panda: Panda routing behind the model-router interface",
+      "status": "review",
+      "owner": "sol61"
     }
   },
   "known_risks": [
@@ -318,8 +323,9 @@
     },
     "P4-7": {
       "title": "Fix skills-safety gaps found by security review (SEC-14/17/18)",
-      "status": "in_progress",
-      "owner": "sol-b"
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "Pushed ababad4. SEC-14/17/18 fixed; skills p4-3/p4-4/p4-5x2/p4-6x2/p4-7 PASS; gateway 28/28. Follow-up 978fe19 restores superagent provenance via agent origin."
     }
   },
   "p3_tasks": {
@@ -340,11 +346,29 @@
     },
     "P3-3": {
       "title": "Second computer provider + bot swaps computers without restart (P3 exit, no Docker here)",
-      "status": "in_progress",
-      "owner": "sol-a"
+      "status": "done",
+      "owner": "sol-a",
+      "evidence": "Pushed 84aa32a. PM regression on stack (35 suites) green; computers pkg + p3-3 exit PASS; agents-hermes PASS on rerun (venv)."
     },
     "P3-4": {
       "title": "computer-vnc provider (RFB client, fake RFB server in tests)",
+      "status": "done",
+      "owner": "sol61",
+      "evidence": "Pushed 1464314; test fixed for P7-5 pipe transport in 0c52770. test:p3-4 PASS x2 on main stack."
+    },
+    "P3-5": {
+      "title": "Self-host Docker Compose stack and deploy docs",
+      "status": "done",
+      "owner": "sol61",
+      "evidence": "Pushed d69eb47. pnpm deploy:check PASS (offline schema, no literal secrets, loopback defaults)."
+    },
+    "P3-6": {
+      "title": "computer-docker provider (fake docker CLI in tests)",
+      "status": "in_progress",
+      "owner": "sol-b"
+    },
+    "P3-7": {
+      "title": "MCP projection of computers into all engines + shared safety layer",
       "status": "in_progress",
       "owner": "sol61"
     }
@@ -373,20 +397,28 @@
     },
     "P5-4": {
       "title": "Coding depth: history on reopen, per-turn diff, checkpoints, provider choice",
-      "status": "in_progress",
-      "owner": "sol-b"
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "Pushed 922913e. PM stack regression green; test:p5-4 PASS."
     },
     "P5-5": {
       "title": "Coding exit: DSH as T3 provider, switch provider, worktree/terminal/PR prep",
-      "status": "review",
-      "owner": "sol61"
+      "status": "done",
+      "owner": "sol61",
+      "evidence": "Pushed 6748d6c. test:p5-5 PASS x2 after PM fixes (pipe CDP helper, coding-workflow dependsOn engine-t3, routes gated on availability); full regression 39/41 (p4-5 PASS on rerun; p3-4 fixed in 0c52770)."
+    },
+    "P5-6": {
+      "title": "DSH plugins: memory, soul, skills, report",
+      "status": "in_progress",
+      "owner": "codex"
     }
   },
   "p7_tasks": {
     "P7-1": {
       "title": "Extension toggle-safety suite (routes, health, processes, projections)",
-      "status": "in_progress",
-      "owner": "antigravity"
+      "status": "done",
+      "owner": "antigravity",
+      "evidence": "Pushed 939ba82. test:toggle PASS (all official extensions, dependency order, self-reporting routes); rerun PASS 2026-11-19 with coding-workflow dependsOn engine-t3."
     },
     "P7-2": {
       "title": "Security review: threat model, findings, fixes with tests",
@@ -397,13 +429,31 @@
     },
     "P7-4": {
       "title": "Fix remaining open security findings (SEC-07, SEC-08, Lows)",
-      "status": "in_progress",
-      "owner": "opus"
+      "status": "done",
+      "owner": "opus",
+      "evidence": "Pushed ff19927. SEC-07/08/10/11/13/15/16 fixed; gateway 27/27 incl. security.test.ts; stack3 regression green."
     },
     "P7-3": {
       "title": "Backup and restore drill",
-      "status": "review",
-      "owner": "sol61"
+      "status": "done",
+      "owner": "sol61",
+      "evidence": "Pushed 47271ed. test:p7-3 PASS x2 (encrypted backup, wipe, fresh restore, tamper rejected); toggle PASS."
+    },
+    "P7-5": {
+      "title": "SEC-06: headless Chrome CDP over a pipe, no debugging port",
+      "status": "done",
+      "owner": "opus",
+      "evidence": "Pushed 75de652. computers pkg + p3-3 PASS, gateway 28/28."
+    },
+    "P7-6": {
+      "title": "Installers (Win/macOS/Linux) and install docs",
+      "status": "in_progress",
+      "owner": "sol-a"
+    },
+    "P7-7": {
+      "title": "Docs site (static, local build)",
+      "status": "in_progress",
+      "owner": "antigravity"
     }
   },
   "p6_tasks": {
@@ -422,13 +472,19 @@
     },
     "P6-3": {
       "title": "neo/upstream source + Inbox question/approval/failure",
-      "status": "review",
-      "owner": "codex"
+      "status": "done",
+      "owner": "codex",
+      "evidence": "Pushed 978fe19. test:p6-3 PASS x2 (members seeded through auth DB; desktop sign-up stays 403); superagent e2e PASS; gateway 28/28."
     },
     "P6-4": {
       "title": "GitHub source + @neo comments (fake GitHub only)",
-      "status": "in_progress",
+      "status": "review",
       "owner": "codex"
+    },
+    "P6-5": {
+      "title": "WhatsApp channel via Hermes platforms",
+      "status": "in_progress",
+      "owner": "opus"
     }
   }
 }
