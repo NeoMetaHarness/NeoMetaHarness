@@ -450,9 +450,14 @@ const baseNeoContract = {
   },
   computers: {
     list: oc.output(z.array(computerInfoSchema)),
+    provision: oc.input(z.object({
+      providerId: z.string().min(1),
+      spec: z.object({ image: z.string().min(1).max(255), vncPort: z.number().int().min(1).max(65535).optional(), secretName: z.string().min(1).max(128).optional() }),
+    })).output(computerInfoSchema),
     attach: oc.input(z.object({ providerId: z.string().min(1), target: z.string().min(1) }))
       .output(computerInfoSchema),
     release: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ released: z.boolean() })),
+    terminate: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ terminated: z.boolean() })),
     lease: oc.input(z.object({ id: z.string().min(1), holder: z.enum(['agent', 'human']) }))
       .output(computerInfoSchema),
     assign: oc.input(z.object({

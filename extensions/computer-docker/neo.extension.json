@@ -1,0 +1,4 @@
+{
+  "id": "computer-docker", "version": "0.1.0", "displayName": "Docker desktop",
+  "kind": ["computer"], "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}

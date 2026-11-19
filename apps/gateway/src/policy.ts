@@ -147,8 +147,10 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
 
   // computers
   'computers.list': 'viewer',
+  'computers.provision': 'admin',
   'computers.attach': 'admin',
   'computers.release': 'admin',
+  'computers.terminate': 'admin',
   'computers.lease': 'admin',
   'computers.assign': 'admin',
   'computers.kill': 'admin',

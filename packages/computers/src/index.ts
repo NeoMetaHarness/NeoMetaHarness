@@ -34,9 +34,10 @@ export interface Computer {
 }
 export interface ComputerProvider {
   capabilities: ComputerCapabilities;
-  provision(spec: Record<string, unknown>): Computer | Promise<Computer>;
+  provision(spec: Record<string, unknown>, context?: ComputerAttachContext): Computer | Promise<Computer>;
   attach(target: string, context?: ComputerAttachContext): Computer | Promise<Computer>;
   release(id: string): void | Promise<void>;
+  terminate?(id: string): void | Promise<void>;
 }
 /** Set by the authenticated Gateway, never parsed from an untrusted target string. */
 export interface ComputerAttachContext { workspaceId?: string }
@@ -116,7 +117,33 @@ export class ComputerRegistry {
     }
   }
 
+  async provision(providerId: string, spec: Record<string, unknown>, context?: ComputerAttachContext): Promise<ComputerInfo> {
+    const provider = this.providers.get(providerId);
+    if (!provider) throw new Error('Computer provider is unavailable');
+    const id = `neo-${randomBytes(12).toString('hex')}`;
+    this.attaching.add(id);
+    try {
+      const computer = await provider.provision({ ...spec, id }, context);
+      if (this.providers.get(providerId) !== provider) {
+        await provider.release(id);
+        throw new Error('Computer provider was disabled');
+      }
+      this.entries.set(id, { providerId, provider, computer, holder: 'agent', queue: Promise.resolve() });
+      return this.list().find((entry) => entry.id === id)!;
+    } finally {
+      this.attaching.delete(id);
+    }
+  }
+
   async release(id: string): Promise<boolean> {
+    return this.remove(id, false);
+  }
+
+  async terminate(id: string): Promise<boolean> {
+    return this.remove(id, true);
+  }
+
+  private async remove(id: string, force: boolean): Promise<boolean> {
     const entry = this.entries.get(id);
     if (!entry) return false;
     this.releasing.add(id);
@@ -126,7 +153,8 @@ export class ComputerRegistry {
     }
     try {
       await entry.queue.catch(() => {});
-      await entry.provider.release(id);
+      if (force && entry.provider.terminate) await entry.provider.terminate(id);
+      else await entry.provider.release(id);
       return true;
     } finally {
       this.releasing.delete(id);

@@ -1002,6 +1002,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('computers.list', context);
         return computers.list();
       }),
+      provision: os.computers.provision.handler(async ({ input, context }) => {
+        authorize('computers.provision', context);
+        try { return await computers.provision(input.providerId, input.spec, { workspaceId: context.workspaceId ?? undefined }); }
+        catch { throw new ORPCError('BAD_REQUEST', { message: 'Computer provisioning failed; check the image, Docker service and workspace credentials' }); }
+      }),
       attach: os.computers.attach.handler(async ({ input, context }) => {
         authorize('computers.attach', context);
         try { return await computers.attach(input.providerId, input.target, { workspaceId: context.workspaceId ?? undefined }); }
@@ -1010,6 +1015,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       release: os.computers.release.handler(async ({ input, context }) => {
         authorize('computers.release', context);
         return { released: await computers.release(input.id) };
+      }),
+      terminate: os.computers.terminate.handler(async ({ input, context }) => {
+        authorize('computers.terminate', context);
+        return { terminated: await computers.terminate(input.id) };
       }),
       lease: os.computers.lease.handler(async ({ input, context }) => {
         authorize('computers.lease', context);
