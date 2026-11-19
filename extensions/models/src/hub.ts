@@ -50,7 +50,7 @@ const scope = { kind: 'workspace' as const, workspaceId: 'default' };
 const credentialName = (id: string) => `NEO_MODEL_${id.toUpperCase().replace(/-/g, '_')}_KEY`;
 const hermesProfile = (name: string) => {
   const profile = name.trim().toLowerCase();
-  if (profile !== 'default' && !/^[a-z][a-z0-9_-]{0,47}$/.test(profile)) {
+  if (profile !== 'default' && !/^[a-z0-9][a-z0-9_-]{0,47}$/.test(profile)) {
     throw new Error('Invalid Hermes profile name');
   }
   return profile;

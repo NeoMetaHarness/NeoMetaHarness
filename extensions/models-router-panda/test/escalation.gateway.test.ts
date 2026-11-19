@@ -53,7 +53,7 @@ const endpoint = `http://127.0.0.1:${address.port}`;
 
 const extensionsDir = join(home, 'extensions-source');
 await mkdir(extensionsDir);
-for (const id of ['models', 'models-router-panda']) {
+for (const id of ['models', 'models-router-panda', 'engine-superagent', 'engine-hermes']) {
   const source = join(repo, 'extensions', id);
   const manifest = JSON.parse(await readFile(join(source, 'neo.extension.json'), 'utf8'));
   manifest.runtime.entry = './index.mjs';
@@ -109,6 +109,8 @@ export default { activate(ctx) {
 } };`);
 
 let gateway: Awaited<ReturnType<typeof startGateway>> | undefined;
+const previousHermesHome = process.env.NMH_HERMES_HOME;
+process.env.NMH_HERMES_HOME = join(home, 'hermes-home');
 try {
   gateway = await startGateway({ databaseFile: join(home, 'gateway.db'), dataDir: home,
     extensionsDir, mode: 'desktop' });
@@ -145,6 +147,21 @@ try {
   assert.equal(evalResult, 'tier-reasoning');
   assert.deepEqual(calls.splice(0), ['tier-eval', 'tier-reasoning']);
   console.log('P2-9_EVAL PASS declined=eval accepted=reasoning');
+
+  const engine = await rpc.extensions.enable({ id: 'engine-hermes' });
+  assert.equal(engine.status, 'running', engine.reason ?? 'Hermes did not start');
+  const service = await rpc.extensions.enable({ id: 'engine-superagent' });
+  assert.equal(service.status, 'running', service.reason ?? 'superagent did not start');
+  const bot = await rpc.agents.bots.create({ name: 'P2-9 Scripted Model Bot' });
+  const item = await rpc.inbox.ask({ botId: bot.id, text: 'Evaluate this harmless proposal', mode: 'observe' });
+  assert.equal(item.status, 'suggestion');
+  assert.deepEqual(calls.splice(0), ['tier-eval', 'tier-reasoning']);
+  const superagentTraces = (await rpc.inbox.decisions.list({ ticketId: item.id }))
+    .filter((entry) => entry.chosenAction === 'eval' || entry.chosenAction === 'escalate')
+    .reverse();
+  assert.deepEqual(superagentTraces.map((entry) => [entry.outcome, entry.model_id]),
+    [['declined', 'eval/tier-eval'], ['accepted', 'reasoning/tier-reasoning']]);
+  console.log('P2-9_SUPERAGENT PASS observe_ticket=suggestion eval_rejected_then_escalated=true');
 
   await configure(true, 1);
   await assert.rejects(invoke('run', { role: 'fast', text: 'One attempt only' }), /Model turn failed/);
@@ -189,6 +206,8 @@ try {
   console.log('P2-9_DISABLE PASS direct_fallback=true models_healthy=true');
 } finally {
   await gateway?.close();
+  if (previousHermesHome === undefined) delete process.env.NMH_HERMES_HOME;
+  else process.env.NMH_HERMES_HOME = previousHermesHome;
   fake.closeAllConnections();
   await new Promise<void>((done) => fake.close(() => done()));
   await rm(home, { recursive: true, force: true });
