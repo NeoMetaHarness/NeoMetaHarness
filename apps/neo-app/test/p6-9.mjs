@@ -392,6 +392,10 @@ async function trial(previewPort) {
     } finally { await rpc.x['engine-dsh'].shutdown({ sessionId: reader.sessionId }); }
     console.log('P6-9_RESTART PASS coding_thread=true report=true cron=true delivery_ack=true no_duplicate_notification=true later_DSH_memory_recall=true');
     await rpc.extensions.disable({ id: 'engine-superagent' });
+    await rpc.extensions.disable({ id: 'channels' });
+    for (const method of ['GET', 'POST']) {
+      assert.equal((await fetch(base + '/x/channels/notification/resolve', { method, headers: authHeaders() })).status, 404);
+    }
     assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: authHeaders() })).status, 200);
     assert.equal((await rpc.extensions.list()).find(e => e.id === 'engine-hermes').status, 'running');
     console.log('P6-9 PASS authenticated=true build_first=true scripted_models=true isolated_engines=true fake_WhatsApp_GitHub_computers=true three_exit_scenarios=true restart=true disable_isolation=true');

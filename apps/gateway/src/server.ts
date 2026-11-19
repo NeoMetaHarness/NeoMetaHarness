@@ -1372,8 +1372,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         if (CONTRACT_POLICY[procedure]) {
           authorize(procedure, context as GatewayAuthContext);
           const extensionPath = path.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
-          // Honcho status/list and channels report their own disabled state.
-          const selfReporting = path === '/x/memory-honcho/status' || path === '/x/memory-honcho/list' || path.startsWith('/x/channels/');
+          // Existing Honcho and Channels procedures report their own disabled state.
+          // Destination resolution requires a live Channels extension.
+          const selfReporting = path === '/x/memory-honcho/status' || path === '/x/memory-honcho/list' || (path.startsWith('/x/channels/') && path !== '/x/channels/notification/resolve');
           if (!selfReporting && !kernel.hasRoute(extensionPath)) {
             res.writeHead(404).end();
             return;
