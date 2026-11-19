@@ -42,7 +42,7 @@ async function pythonPath(upstream: string): Promise<string> {
   const python = process.platform === 'win32' ? join(venv, 'Scripts/python.exe') : join(venv, 'bin/python');
   const marker = join(venv, '.neo-hermes-upstream');
   const installed = await readFile(marker, 'utf8').catch(() => '');
-  const dependencySet = `${upstream}|web,sms,telegram`;
+  const dependencySet = `${upstream}|web,sms,telegram,mcp`;
   if (existsSync(python) && installed.trim() === dependencySet) return python;
 
   await mkdir(cacheDir, { recursive: true });
@@ -52,9 +52,11 @@ async function pythonPath(upstream: string): Promise<string> {
   }
   const requirements = join(cacheDir, 'requirements.txt');
   // Hermes places the dashboard in [web] and the run API's aiohttp in [sms].
+  // MCP discovery requires the optional SDK (pinned Hermes pyproject.toml:430-434;
+  // tools/mcp_tool_discovery.py:639-641 otherwise silently returns no tools).
   // Use Hermes's frozen lock so both surfaces have pinned, reproducible deps.
   await exec('uv', ['export', '--project', upstream, '--frozen', '--no-dev',
-    '--no-emit-project', '--extra', 'web', '--extra', 'sms', '--extra', 'telegram',
+    '--no-emit-project', '--extra', 'web', '--extra', 'sms', '--extra', 'telegram', '--extra', 'mcp',
     '--format', 'requirements-txt', '--output-file', requirements, '--quiet'],
   { env: uvEnv, maxBuffer: 4_000_000 });
   await exec('uv', ['pip', 'sync', '--python', python, requirements], { env: uvEnv, maxBuffer: 2_000_000 });
