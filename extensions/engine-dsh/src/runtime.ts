@@ -19,6 +19,10 @@ export interface ModelResolver {
   active: boolean;
   resolve(role: ModelRole, profile?: string): Promise<{ model: string; baseUrl: string; apiKey?: string }>;
 }
+export interface DshInboxSink {
+  report(input: { sessionId: string; workspaceId: string; profile: string;
+    turn: string; status: 'ready' | 'failed'; summary: string; question: string }): void | Promise<void>;
+}
 
 interface PendingCall {
   resolve(value: any): void;
@@ -210,13 +214,16 @@ class Session {
 /** Each SDK session owns an isolated DSH process, home and provider registration. */
 export class DshAgentRuntime {
   private readonly sessions = new Map<string, Session>();
+  private readonly reportSettings = new Map<string, { workspaceId: string; profile: string;
+    deliveredTurn?: string }>();
   private closing = false;
 
   constructor(private readonly vault: VaultService, private readonly dataDir: string,
     private readonly computers?: ComputerRegistry, private readonly skills?: SkillsBridge,
     private readonly memory?: DshMemoryBridge,
     private readonly modelHub?: () => ModelResolver | undefined,
-    private readonly computerMcp?: ComputerMcpBridge) {}
+    private readonly computerMcp?: ComputerMcpBridge,
+    private readonly inbox?: () => DshInboxSink | undefined) {}
 
   async create(input: { workspaceId: string; cwd: string; computerId?: string; role?: ModelRole; profile?: string;
     plugins?: { memory?: boolean; soul?: boolean; skills?: boolean; report?: boolean } }): Promise<{ sessionId: string; pid: number }> {
@@ -269,13 +276,17 @@ export class DshAgentRuntime {
     if (input.plugins?.skills === false) {
       patch = patch.replace(/    - id: neo-skills\r?\n      name: '\.\/neo-skills-plugin\.mjs'\r?\n/, '');
     }
+    if (input.plugins?.report === false) {
+      patch = patch.replace(/    - id: neo-report\r?\n      name: '\.\/neo-report-plugin\.mjs'\r?\n/, '');
+    }
     for (const name of ['@deepseek-ai/dsh-computer-use', '@deepseek-ai/dsh-browser-use']) {
       patch = patch.replace(`name: '${name}'`, `name: '${import.meta.resolve(name)}'`);
     }
     const localPlugins = ['neo-providers.mjs', 'neo-computer-tool.mjs',
       ...(memoryBinding && input.plugins?.memory !== false ? ['neo-memory-plugin.mjs'] : []),
       ...(memoryBinding && input.plugins?.soul !== false ? ['neo-soul-plugin.mjs'] : []),
-      ...(input.plugins?.skills !== false ? ['neo-skills-plugin.mjs'] : [])];
+      ...(input.plugins?.skills !== false ? ['neo-skills-plugin.mjs'] : []),
+      ...(input.plugins?.report !== false ? ['neo-report-plugin.mjs'] : [])];
     for (const name of localPlugins) {
       patch = patch.replace(`name: './${name}'`, `name: '${new URL(`../${name}`, import.meta.url).href}'`);
     }
@@ -300,6 +311,7 @@ export class DshAgentRuntime {
         NEO_MEMORY_TOKEN: memoryBinding.token,
         NEO_MEMORY_PROFILE: memoryBinding.profile,
       } : {}),
+      ...(input.plugins?.report !== false ? { NEO_DSH_REPORT_PATH: join(stateDir, 'report.json') } : {}),
       DSH_HOME: join(stateDir, 'home'),
       DSH_AGENTS_HOME: join(stateDir, 'agents'),
       DSH_TELEMETRY_DISABLED: '1',
@@ -309,6 +321,9 @@ export class DshAgentRuntime {
       await session.initialize();
       if (this.closing) throw new Error('DSH runtime is stopped');
       this.sessions.set(session.id, session);
+      if (input.plugins?.report !== false) this.reportSettings.set(session.id, {
+        workspaceId: input.workspaceId, profile: input.profile ?? 'neo-coding',
+      });
       return { sessionId: session.id, pid: session.pid };
     } catch (error) {
       await session.stop(true);
@@ -331,12 +346,37 @@ export class DshAgentRuntime {
   events(input: { sessionId: string; signal?: AbortSignal; afterSequence?: number }) {
     return this.session(input.sessionId).subscribe(input.signal, input.afterSequence);
   }
-  wait(input: { sessionId: string }) { return this.session(input.sessionId).wait(); }
+  async wait(input: { sessionId: string }): Promise<{ status: 'settled' }> {
+    const session = this.session(input.sessionId);
+    const result = await session.wait();
+    const settings = this.reportSettings.get(input.sessionId);
+    const sink = this.inbox?.();
+    if (settings && sink) {
+      try {
+        const report = JSON.parse(await readFile(join(session.stateDir, 'report.json'), 'utf8')) as {
+          turn: string; status: 'ready' | 'failed'; summary: string; question: string;
+        };
+        if (report.turn && report.turn !== settings.deliveredTurn
+          && (report.status === 'ready' || report.status === 'failed')) {
+          await sink.report({ sessionId: input.sessionId, workspaceId: settings.workspaceId,
+            profile: settings.profile, turn: report.turn, status: report.status,
+            summary: String(report.summary).slice(0, 2000), question: String(report.question).slice(0, 1000) });
+          settings.deliveredTurn = report.turn;
+        }
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+          console.error('DSH report delivery skipped:', error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
+    return result;
+  }
 
   async cancel(input: { sessionId: string }): Promise<{ cancelled: boolean }> {
     const session = this.session(input.sessionId);
     await session.stop(true);
     this.sessions.delete(input.sessionId);
+    this.reportSettings.delete(input.sessionId);
     this.computers?.unassign('dsh', input.sessionId);
     await this.computerMcp?.forget('dsh', input.sessionId);
     this.skills?.forgetDsh(input.sessionId);
@@ -348,6 +388,7 @@ export class DshAgentRuntime {
     const session = this.session(input.sessionId);
     await session.stop();
     this.sessions.delete(input.sessionId);
+    this.reportSettings.delete(input.sessionId);
     this.computers?.unassign('dsh', input.sessionId);
     await this.computerMcp?.forget('dsh', input.sessionId);
     this.skills?.forgetDsh(input.sessionId);
@@ -365,5 +406,6 @@ export class DshAgentRuntime {
       await this.computerMcp?.forget('dsh', id);
     }
     this.sessions.clear();
+    this.reportSettings.clear();
   }
 }

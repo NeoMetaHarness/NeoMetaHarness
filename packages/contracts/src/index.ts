@@ -572,7 +572,7 @@ export const inboxReportSchema = z.object({
 });
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
-  source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github']).optional(),
+  source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github', 'neo/dsh']).optional(),
   github: z.object({ repo: z.string(), issue: z.number().int().optional(),
     url: z.string(), kind: z.enum(['comment', 'check']), posted: z.boolean().optional() }).optional(),
   upstream: z.object({ name: z.string(), pinned: z.string(), latest: z.string(),

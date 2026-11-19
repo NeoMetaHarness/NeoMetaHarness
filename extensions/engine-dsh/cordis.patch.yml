@@ -15,3 +15,5 @@
       name: './neo-soul-plugin.mjs'
     - id: neo-skills
       name: './neo-skills-plugin.mjs'
+    - id: neo-report
+      name: './neo-report-plugin.mjs'

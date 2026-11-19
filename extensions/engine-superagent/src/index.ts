@@ -54,6 +54,18 @@ class SuperagentService {
     private readonly registry: () => SkillImporter | undefined,
     private readonly worker: WorkerHost = new PresetWorkerHost(models)) {}
   private readonly items = new Map<string, InboxItem>();
+  reportDsh(input: { sessionId: string; workspaceId: string; profile: string;
+    turn: string; status: 'ready' | 'failed'; summary: string; question: string }): void {
+    if (this.closed) return;
+    const now = Date.now();
+    const report: Report = { status: input.status, summary: input.summary.slice(0, 2000),
+      changes: [], tests: [], risks: [], options: [] };
+    const item: InboxItem = { id: randomUUID(), botId: input.profile, source: 'neo/dsh',
+      requesterRole: 'member', mode: 'observe', status: input.status,
+      text: input.question.slice(0, 1000) || `DSH ${input.profile} session ${input.sessionId}`,
+      report, createdAt: now, updatedAt: now };
+    this.update(item, {});
+  }
   private readonly candidates = new Map<string, Candidate>();
   private readonly events: InboxEvent[] = [];
   private readonly listeners = new Set<() => void>();
@@ -587,6 +599,8 @@ export default defineExtension({
       ?? (process.env.NODE_ENV === 'test' ? new FakeChannelSource() : undefined);
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
     await github.start();
+    ctx.provide('dshInboxSink', { report: (input: Parameters<typeof service.reportDsh>[0]) =>
+      service.reportDsh(input) });
     ctx.effect(() => async () => {
       clearInterval(rotation);
       if (current) await bridgeKey.revoke(current.id).catch(() => {});
