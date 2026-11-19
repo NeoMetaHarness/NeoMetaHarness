@@ -1114,7 +1114,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path === '/internal/memory/context' || path === '/internal/memory/write') {
+      if (path === '/internal/memory/context' || path === '/internal/memory/soul' || path === '/internal/memory/write') {
         if (!kernel.hasRoute('/x/memory-local/list')) { res.writeHead(404).end(); return; }
         const writing = path.endsWith('/write');
         if (req.method !== (writing ? 'POST' : 'GET')) { res.writeHead(405).end(); return; }
@@ -1144,7 +1144,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         if (!provided || !expected || !timingSafeEqual(Buffer.from(provided, 'hex'), Buffer.from(expected, 'hex'))) {
           res.writeHead(401).end(); return;
         }
-        if (!writing) {
+        if (path === '/internal/memory/soul') {
+          const scoped = await invokeMemory('list', { workspace: consumer.workspace, query: '' }) as Array<{
+            text: string; subject: 'user' | 'bot'; subject_id: string;
+          }>;
+          const soul = scoped.filter((entry) => entry.subject === 'bot'
+            && (entry.subject_id === 'neo-coding' || entry.subject_id === 'global'))
+            .slice(0, 12).map((entry) => entry.text).join('\n').slice(0, 4000);
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ soul }));
+        } else if (!writing) {
           const query = (url.searchParams.get('q') ?? '').slice(0, 500);
           const scoped = await invokeMemory('list', { workspace: consumer.workspace, query }) as Array<{
             text: string; source: string; trust: string; subject: 'user' | 'bot'; subject_id: string;

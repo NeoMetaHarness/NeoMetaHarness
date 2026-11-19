@@ -11,3 +11,5 @@
       inject: [tools]
     - id: neo-memory-context
       name: './neo-memory-plugin.mjs'
+    - id: neo-soul
+      name: './neo-soul-plugin.mjs'

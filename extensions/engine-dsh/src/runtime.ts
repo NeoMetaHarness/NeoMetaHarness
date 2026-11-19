@@ -247,7 +247,7 @@ export class DshAgentRuntime {
     await mkdir(this.dataDir, { recursive: true });
     const stateDir = join(this.dataDir, randomUUID());
     await mkdir(stateDir);
-    const memoryBinding = input.plugins?.memory === false ? undefined
+    const memoryBinding = input.plugins?.memory === false && input.plugins?.soul === false ? undefined
       : await this.memory?.binding(sessionId, input.workspaceId);
     try {
       if (input.plugins?.skills !== false) await this.skills?.dshReady(sessionId, join(stateDir, 'home'));
@@ -260,13 +260,18 @@ export class DshAgentRuntime {
     }
     const patchSource = await readFile(join(extensionRoot, 'cordis.patch.yml'), 'utf8');
     let patch = patchSource;
-    if (!memoryBinding) {
+    if (!memoryBinding || input.plugins?.memory === false) {
       patch = patch.replace(/    - id: neo-memory-context\r?\n      name: '\.\/neo-memory-plugin\.mjs'\r?\n/, '');
+    }
+    if (!memoryBinding || input.plugins?.soul === false) {
+      patch = patch.replace(/    - id: neo-soul\r?\n      name: '\.\/neo-soul-plugin\.mjs'\r?\n/, '');
     }
     for (const name of ['@deepseek-ai/dsh-computer-use', '@deepseek-ai/dsh-browser-use']) {
       patch = patch.replace(`name: '${name}'`, `name: '${import.meta.resolve(name)}'`);
     }
-    const localPlugins = ['neo-providers.mjs', 'neo-computer-tool.mjs', ...(memoryBinding ? ['neo-memory-plugin.mjs'] : [])];
+    const localPlugins = ['neo-providers.mjs', 'neo-computer-tool.mjs',
+      ...(memoryBinding && input.plugins?.memory !== false ? ['neo-memory-plugin.mjs'] : []),
+      ...(memoryBinding && input.plugins?.soul !== false ? ['neo-soul-plugin.mjs'] : [])];
     for (const name of localPlugins) {
       patch = patch.replace(`name: './${name}'`, `name: '${new URL(`../${name}`, import.meta.url).href}'`);
     }
