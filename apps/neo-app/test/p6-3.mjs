@@ -3,11 +3,13 @@ import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { createInterface } from 'node:readline';
+import { createRequire } from 'node:module';
+import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
@@ -85,15 +87,30 @@ async function fakeUpstreamFeed(directory) {
   return { filename, target, pinned: pins[target].ref };
 }
 
-async function createMember(base, role = 'member', existingOrganizationId) {
+let testAuthModule;
+
+async function createMember(base, dbFile, role = 'member', existingOrganizationId) {
   const email = `p6-3-${role}@neo.local`;
   const password = 'P6-3-Test-Password!';
-  const signup = await fetch(`${base}/auth/sign-up/email`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password, name: 'P6-3 Member' }),
-  });
-  if (!signup.ok) throw new Error(`Member sign-up ${signup.status}: ${await signup.text()}`);
-  const { user } = await signup.json();
+  // Desktop mode deliberately blocks public sign-up. Seed test identities through
+  // the same Better Auth service against the gateway's isolated SQLite file.
+  if (!testAuthModule) {
+    const gatewayRequire = createRequire(join(gatewayDir, 'package.json'));
+    const { register } = await import(pathToFileURL(gatewayRequire.resolve('tsx/esm/api')).href);
+    register();
+    testAuthModule = import(pathToFileURL(join(repo, 'packages/auth/src/index.ts')).href);
+  }
+  const { createNeoAuth } = await testAuthModule;
+  const sqlite = new DatabaseSync(dbFile);
+  let user;
+  try {
+    const secret = process.env.BETTER_AUTH_SECRET ?? process.env.NEO_AUTH_SECRET
+      ?? (await readFile(join(dirname(dbFile), 'auth.secret'), 'utf8')).trim();
+    const auth = createNeoAuth({ sqlite, secret, baseURL: base });
+    ({ user } = await auth.api.signUpEmail({ body: { email, password, name: 'P6-3 Member' } }));
+  } finally {
+    sqlite.close();
+  }
   let organizationId = existingOrganizationId;
   if (!organizationId) {
     const organization = await fetch(`${base}/auth/organization/create`, {
@@ -348,7 +365,8 @@ async function trial(previewPort) {
   let chrome;
   let page;
   try {
-    gateway = await startGateway(join(temporary, 'state.sqlite'),
+    const dbFile = join(temporary, 'state.sqlite');
+    gateway = await startGateway(dbFile,
       join(temporary, 'hermes-home'), `http://127.0.0.1:${hermes.port}/v1`, `http://127.0.0.1:${dsh.port}`, upstreamFeed.filename);
     const base = `http://127.0.0.1:${gateway.port}`;
     const rpc = createORPCClient(new RPCLink({ url: base, headers: authHeaders }));
@@ -475,8 +493,8 @@ async function trial(previewPort) {
       .find((item) => item.id === approvalAsk.id && item.status === 'approval'), 'approval waiting', 120000);
     assert.equal(approval.approval.destructive, true);
     await page.eventually(`!!document.querySelector('[data-testid="inbox-${approvalAsk.id}"] [data-testid="inbox-approval"] [data-action=approve]')`, 'approval card');
-    const member = await createMember(base);
-    const admin = await createMember(base, 'admin', member.organizationId);
+    const member = await createMember(base, dbFile);
+    const admin = await createMember(base, dbFile, 'admin', member.organizationId);
     await assert.rejects(member.rpc.inbox.approval.decide({ id: approval.id, decision: 'approve', reason: 'Member request' }),
       (error) => error?.code === 'FORBIDDEN', 'Member must receive a 403 for destructive approval');
     assert.equal((await admin.rpc.inbox.approval.decide({ id: approval.id,
