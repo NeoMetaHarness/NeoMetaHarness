@@ -1,4 +1,5 @@
 import { defineExtension } from '@neometaharness/kernel';
+import { timingSafeEqual } from 'node:crypto';
 import type { ComputerRegistry } from '@neometaharness/computers';
 import { projectHermesComputer } from '@neometaharness/computers/hermes';
 import { HermesRuntime, ProfileFileCredentials, VaultCredentials } from './runtime.js';
@@ -34,6 +35,17 @@ export default defineExtension({
     }, home);
     await service.start();
     ctx.provide('agentRuntime', service);
+    ctx.provide('hermesScreen', {
+      async connect(profile: string, workspaceId: string, token: string) {
+        if (!vault || !workspaceId || !/^[a-f0-9]{64}$/.test(token)) throw new Error('Hermes screen authorization denied');
+        const expected = await vault.get({ kind: 'engine', workspaceId, subjectId: `engine-hermes/${profile}` }, 'NEO_SCREEN_VIEW_TOKEN');
+        if (!expected || expected.length !== token.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(token))) {
+          throw new Error('Hermes screen authorization denied');
+        }
+        return service.screenConnection(profile);
+      },
+    });
+
     ctx.effect(() => async () => {
       await ctx.inject<ComputerMcpBridge>('computerMcpBridge')?.forgetEngine('hermes');
       await service.disconnect();

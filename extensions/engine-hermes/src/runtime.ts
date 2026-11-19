@@ -189,6 +189,15 @@ export class HermesRuntime {
 
   get connected(): boolean { return Boolean(this.dashboard && this.dashboard.child.exitCode === null && !this.stopped); }
   get pid(): number | undefined { return this.dashboard?.child.pid; }
+  
+  /** Hermes v0.23.2 chat_ws.py:650 and methods_display.py:50,60.
+   * Credentials stay inside the extension-to-extension interface. */
+  screenConnection(profile: string): { url: string; sessionToken: string } {
+    profileName(profile);
+    if (!this.connected || !this.dashboard) throw new Error('Hermes dashboard unavailable');
+    return { url: `ws://127.0.0.1:${this.dashboard.port}/api/ws`, sessionToken: this.dashboardToken };
+  }
+
 
   private profileHome(name: string): string {
     const profile = profileName(name);
