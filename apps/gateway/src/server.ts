@@ -100,6 +100,7 @@ export interface GatewayOptions {
   computerLocalDriverFactory?: import('../../../extensions/computer-local/src/provider.js').LocalDriverFactory;
   /** Injection for the fake Hermes screen in isolated gateway tests. */
   hermesScreenBridge?: import('../../../extensions/computer-hermes-screen/src/provider.js').HermesScreenBridge;
+  orgoClient?: import('../../../extensions/computer-orgo/src/provider.js').OrgoClient;
   /**
    * Server-mode HTTP sign-up. 'invite' (default; NEO_SIGNUP overrides): the first
    * account needs the one-time setup token, later ones a pending invitation.
@@ -325,6 +326,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     computerMcpBridge,
     computerLocalDriverFactory: options.computerLocalDriverFactory,
     hermesScreen: options.hermesScreenBridge,
+    orgoClient: options.orgoClient,
     vault,
     auth,
     memoryRecords: (db as any).memories,

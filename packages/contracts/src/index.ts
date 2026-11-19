@@ -565,7 +565,7 @@ const baseNeoContract = {
     list: oc.output(z.array(computerInfoSchema)),
     provision: oc.input(z.object({
       providerId: z.string().min(1),
-      spec: z.object({ image: z.string().min(1).max(255), vncPort: z.number().int().min(1).max(65535).optional(), secretName: z.string().min(1).max(128).optional() }),
+      spec: z.object({ image: z.string().min(1).max(255).optional(), vncPort: z.number().int().min(1).max(65535).optional(), secretName: z.string().min(1).max(128).optional() }).catchall(z.unknown()),
     })).output(computerInfoSchema),
     attach: oc.input(z.object({ providerId: z.string().min(1), target: z.string().min(1) }))
       .output(computerInfoSchema),

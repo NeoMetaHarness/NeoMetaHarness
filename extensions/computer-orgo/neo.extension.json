@@ -1,0 +1,23 @@
+{
+  "id": "computer-orgo",
+  "version": "0.1.0",
+  "displayName": "Orgo cloud computers",
+  "kind": ["computer"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" },
+  "settings": {
+    "type": "object",
+    "properties": {
+      "workspaceId": {
+        "type": "string",
+        "title": "Orgo workspace UUID",
+        "description": "Workspace in Orgo where cloud computers will be created"
+      },
+      "apiKey": {
+        "type": "string",
+        "title": "Orgo API key",
+        "description": "Stored in the encrypted extension vault",
+        "secret": true
+      }
+    }
+  }
+}
