@@ -16,6 +16,10 @@ export interface ModelProvider {
   hasKey: boolean;
 }
 export interface ModelSelection { providerId: string; model: string }
+/** Optional routing policy; credentials and endpoints remain owned by Model Hub. */
+export interface ModelRouter {
+  select(role: ModelRole, direct: ModelSelection): Promise<ModelSelection | undefined>;
+}
 export interface ResolvedModel extends ModelSelection { baseUrl: string; apiKey?: string }
 type ProviderRecord = Omit<ModelProvider, 'hasKey'> & { hasKey?: boolean };
 type HubSettings = {
@@ -40,6 +44,7 @@ const hermesProfile = (name: string) => {
 /** Neo-owned metadata and role routing. Secrets only ever enter the encrypted vault. */
 export class ModelHub {
   active = false;
+  private router?: ModelRouter;
   private settings: HubSettings;
   private pending: Promise<void> = Promise.resolve();
   private readonly projections = new Map<string, string>();
@@ -52,6 +57,12 @@ export class ModelHub {
   }
 
   setActive(value: boolean): void { this.active = value; }
+
+  registerRouter(router: ModelRouter): () => void {
+    if (this.router) throw new Error('A model router is already registered');
+    this.router = router;
+    return () => { if (this.router === router) this.router = undefined; };
+  }
 
   state() {
     return {
@@ -152,8 +163,19 @@ export class ModelHub {
 
   async resolve(role: ModelRole, profile?: string): Promise<ResolvedModel> {
     if (!this.active) throw new Error('Model Hub extension is disabled');
-    const selection = profile ? this.settings.overrides[hermesProfile(profile)] ?? this.settings.roles[role] : this.settings.roles[role];
+    const override = profile ? this.settings.overrides[hermesProfile(profile)] : undefined;
+    let selection = override ?? this.settings.roles[role];
     if (!selection) throw new Error(`Model role ${role} is unconfigured`);
+    // Explicit profile overrides bypass automatic routing. Router failure preserves direct service.
+    if (!override && this.router) {
+      const router = this.router;
+      try {
+        const routed = await router.select(role, { ...selection });
+        if (this.active && this.router === router && routed?.model.trim()
+          && this.settings.providers.some((item) => item.id === routed.providerId)) selection = routed;
+      } catch { /* Direct binding is the fallback; never expose upstream errors or secrets. */ }
+    }
+    if (!this.active) throw new Error('Model Hub extension is disabled');
     const provider = this.settings.providers.find((item) => item.id === selection.providerId);
     if (!provider) throw new Error(`Model provider ${selection.providerId} is unavailable`);
     const apiKey = await this.vault.get(scope, credentialName(provider.id));
