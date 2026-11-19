@@ -1020,6 +1020,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('extensions.list', context);
         return Promise.all(kernel.list().map((extension) => withHealth(extension.id)));
       }),
+      upgrade: os.extensions.upgrade.handler(async ({ input, context }) => {
+        authorize('extensions.upgrade', context);
+        return kernel.upgrade(input.id, input.directory, input);
+      }),
       enable: os.extensions.enable.handler(async ({ input, context }) => {
         authorize('extensions.enable', context);
         await kernel.enable(input.id);

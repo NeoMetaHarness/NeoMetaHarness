@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 export const extensionStatusSchema = z.object({
   id: z.string(),
+  version: z.string().optional(),
   desired: z.boolean(),
   status: z.enum(['running', 'disabled', 'degraded']),
   reason: z.string().optional(),
@@ -459,6 +460,9 @@ const baseNeoContract = {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
     disable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
+    upgrade: oc.input(z.object({ id: z.string().min(1), directory: z.string().min(1),
+      healthTimeoutMs: z.number().int().min(10).max(30000).optional(), drainTimeoutMs: z.number().int().min(10).max(30000).optional(),
+    })).output(z.object({ extension: extensionStatusSchema, previousVersion: z.string(), upgraded: z.boolean(), reason: z.string().optional() })),
   },
   settings: {
     get: oc.input(z.object({ extension: z.string().min(1) }))

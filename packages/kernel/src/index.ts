@@ -1,7 +1,8 @@
 import { ExtensionGeneration } from './generation.js';
 import { Context } from '@deepseek-ai/cordis';
-import { readdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import semver from 'semver';
+import { readdir, realpath } from 'node:fs/promises';
+import { resolve, isAbsolute, relative, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DatabaseProvider } from '@neometaharness/db';
 import type { ExtensionStatus, GatewayEvent } from '@neometaharness/contracts';
@@ -125,8 +126,16 @@ export class NeoKernel {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
     }
-    this.order = resolveOrder(this.discovered);
     await this.db.migrate();
+    for (const [id] of this.discovered) {
+      const installed = await this.db.getExtensionInstall?.(id);
+      if (!installed) continue;
+      const directory = await realpath(installed.directory);
+      const manifest = await loadManifest(directory);
+      if (manifest.id !== id || manifest.version !== installed.version) throw new Error(`Installed extension identity changed: ${id}`);
+      this.discovered.set(id, { manifest, directory });
+    }
+    this.order = resolveOrder(this.discovered);
     for (const id of this.order) {
       this.entries.set(id, { desired: await this.db.getEnabled(id), status: 'disabled' });
     }
@@ -142,7 +151,7 @@ export class NeoKernel {
     if (!entry) throw new Error(`Unknown extension: ${id}`);
     const manifest = this.discovered.get(id)?.manifest;
     return {
-      id,
+      id, version: manifest!.version,
       desired: entry.desired,
       status: entry.status,
       ...(entry.reason ? { reason: entry.reason } : {}),
@@ -157,6 +166,61 @@ export class NeoKernel {
 
   enable(id: string): Promise<ExtensionStatus> { return this.setEnabled(id, true); }
   disable(id: string): Promise<ExtensionStatus> { return this.setEnabled(id, false); }
+
+  /** Stage and health-check a local immutable version; old registrations remain live until commit. */
+  upgrade(id: string, directory: string, options: { healthTimeoutMs?: number; drainTimeoutMs?: number } = {}): Promise<{
+    extension: ExtensionStatus; previousVersion: string; upgraded: boolean; reason?: string;
+  }> {
+    const work = this.operation.then(async () => {
+      const entry = this.entries.get(id);
+      const previous = this.discovered.get(id);
+      if (!entry || !previous) throw new Error(`Unknown extension: ${id}`);
+      const old = entry.running;
+      let candidate: ExtensionGeneration | undefined;
+      let persisted = false;
+      try {
+        if (!old || !entry.desired) throw new Error('Enable the extension before upgrading');
+        if (!this.db.setExtensionInstall) throw new Error('Database provider does not support installed extension versions');
+        if (!isAbsolute(directory)) throw new Error('Upgrade directory must be absolute');
+        directory = await realpath(directory);
+        if (directory === await realpath(previous.directory)) throw new Error('Upgrade requires a separate immutable version directory');
+        const manifest = await loadManifest(directory);
+        if (manifest.id !== id || !semver.gt(manifest.version, previous.manifest.version)) throw new Error('Upgrade requires the same id and a newer version');
+        if (manifest.runtime.type === 'cordis') {
+          const path = relative(directory, await realpath(resolve(directory, manifest.runtime.entry)));
+          if (path.startsWith('..') || isAbsolute(path)) throw new Error('Extension entry escapes install root');
+        }
+        const located = { manifest, directory };
+        const prospective = new Map(this.discovered).set(id, located);
+        const order = resolveOrder(prospective);
+        for (const value of prospective.values()) {
+          const problem = dependencyProblem(value.manifest, prospective);
+          if (problem && (value.manifest.id === id || this.entries.get(value.manifest.id)?.desired)) throw new Error(problem);
+        }
+        for (const dependency of Object.keys(manifest.dependsOn ?? {})) {
+          if (this.entries.get(dependency)?.status !== 'running') throw new Error(`Dependency ${dependency} is not running`);
+        }
+        candidate = new ExtensionGeneration(id);
+        await deadline(this.start(id, located, candidate), options.healthTimeoutMs ?? 5000, 'Extension activation timed out');
+        const health = await deadline(candidate.check(), options.healthTimeoutMs ?? 5000, 'Extension health check timed out');
+        if (health.ok !== true) throw new Error('Candidate extension is unhealthy');
+        this.compile(new Map(this.active).set(id, candidate));
+        await this.db.setExtensionInstall(id, { directory, version: manifest.version });
+        persisted = true;
+        this.publish(id, candidate);
+        this.discovered.set(id, located); this.order = order; entry.running = candidate;
+      } catch (error) {
+        if (persisted) await this.db.setExtensionInstall!(id, { directory: previous.directory, version: previous.manifest.version });
+        if (candidate) await candidate.dispose(0);
+        return { extension: this.status(id), previousVersion: previous.manifest.version, upgraded: false, reason: (error as Error).message };
+      }
+      // Commit is final. A teardown failure must never switch back to a partially retired generation.
+      try { await old!.dispose(options.drainTimeoutMs ?? 5000); }
+      catch { return { extension: this.status(id), previousVersion: previous.manifest.version, upgraded: true, reason: 'Upgrade committed; old generation cleanup failed' }; }
+      return { extension: this.status(id), previousVersion: previous.manifest.version, upgraded: true };
+    });
+    this.operation = work.catch(() => {}); return work;
+  }
 
   private setEnabled(id: string, enabled: boolean): Promise<ExtensionStatus> {
     const work = this.operation.then(async () => {
@@ -383,9 +447,8 @@ export class NeoKernel {
     return sanitized;
   }
 
-  private async start(id: string, located = this.discovered.get(id)!): Promise<ExtensionGeneration> {
+  private async start(id: string, located = this.discovered.get(id)!, generation = new ExtensionGeneration(id)): Promise<ExtensionGeneration> {
     const { manifest, directory } = located;
-    const generation = new ExtensionGeneration(id);
     generation.settingsSchema = structuredClone(manifest.settings);
     Object.assign(generation.settings, structuredClone((await this.readSettings(id, manifest.settings)).values));
     if (manifest.runtime.type === 'cordis') {
@@ -418,7 +481,8 @@ export class NeoKernel {
       generation.cleanup = () => runtime.stop();
       generation.check = () => runtime.health();
       try {
-        const registered = await runtime.initialize(id);
+        const registered = await runtime.initialize(id, typeof this.services.extensionDataDir === 'string'
+          ? { dataDir: join(this.services.extensionDataDir, id), projectionDir: join(this.services.extensionDataDir, id, 'projections') } : {});
         for (const route of registered.routes) {
           if (typeof route.path !== 'string') throw new Error(`Invalid route from ${id}`);
           generation.route(route.path, ({ method, body }) => runtime.call('route.invoke', { path: route.path, method, body }));
@@ -441,4 +505,10 @@ export class NeoKernel {
     }
     await this.db.close();
   }
+}
+
+async function deadline<T>(operation: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try { return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); })]); }
+  finally { if (timer) clearTimeout(timer); }
 }

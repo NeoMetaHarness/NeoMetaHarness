@@ -120,6 +120,7 @@ export interface NeoTables extends AgentTables {
   memory_entry: MemoryEntry;
   extension_state: ExtensionStateTable;
   extension_settings: ExtensionSettingsTable;
+  extension_install: { id: string; directory: string; version: string };
   vault_secret: VaultSecretTable;
 }
 
@@ -130,6 +131,8 @@ export interface DatabaseProvider {
   setEnabled(id: string, enabled: boolean): Promise<void>;
   getExtensionSettings?(id: string): Promise<Record<string, unknown> | undefined>;
   setExtensionSettings?(id: string, values: Record<string, unknown>): Promise<void>;
+  getExtensionInstall?(id: string): Promise<{ directory: string; version: string } | undefined>;
+  setExtensionInstall?(id: string, value: { directory: string; version: string }): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -164,6 +167,10 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
       .addColumn('id', 'text', (column) => column.primaryKey())
       .addColumn('data', 'text', (column) => column.notNull())
       .execute();
+    await this.db.schema.createTable('extension_install').ifNotExists()
+      .addColumn('id', 'text', (column) => column.primaryKey())
+      .addColumn('directory', 'text', (column) => column.notNull())
+      .addColumn('version', 'text', (column) => column.notNull()).execute();
     await this.db.schema.createTable('vault_secret').ifNotExists()
       .addColumn('id', 'text', (column) => column.primaryKey())
       .addColumn('scope_kind', 'text', (column) => column.notNull())
@@ -208,6 +215,14 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
     const data = JSON.stringify(values);
     await this.db.insertInto('extension_settings').values({ id, data })
       .onConflict((conflict) => conflict.column('id').doUpdateSet({ data })).execute();
+  }
+
+  async getExtensionInstall(id: string) {
+    return this.db.selectFrom('extension_install').select(['directory', 'version']).where('id', '=', id).executeTakeFirst();
+  }
+  async setExtensionInstall(id: string, value: { directory: string; version: string }) {
+    await this.db.insertInto('extension_install').values({ id, ...value })
+      .onConflict((conflict) => conflict.column('id').doUpdateSet(value)).execute();
   }
 
   async getVaultSecret(id: string): Promise<VaultStoredSecret | undefined> {

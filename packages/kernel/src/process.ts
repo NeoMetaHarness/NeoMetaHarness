@@ -102,8 +102,8 @@ export class ExtensionProcess {
     });
   }
 
-  async initialize(id: string): Promise<ProcessInitialization> {
-    const result = await this.call('initialize', { id });
+  async initialize(id: string, storage: { dataDir?: string; projectionDir?: string } = {}): Promise<ProcessInitialization> {
+    const result = await this.call('initialize', { id, ...storage });
     if (!result || typeof result !== 'object') throw new Error(`Invalid initialize response from ${id}`);
     const data = result as ProcessInitialization;
     if (!Array.isArray(data.routes) || !Array.isArray(data.contributions)) throw new Error(`Missing registrations from ${id}`);
