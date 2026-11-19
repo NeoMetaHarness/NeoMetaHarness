@@ -218,7 +218,8 @@ export class DshAgentRuntime {
     private readonly modelHub?: () => ModelResolver | undefined,
     private readonly computerMcp?: ComputerMcpBridge) {}
 
-  async create(input: { workspaceId: string; cwd: string; computerId?: string; role?: ModelRole; profile?: string }): Promise<{ sessionId: string; pid: number }> {
+  async create(input: { workspaceId: string; cwd: string; computerId?: string; role?: ModelRole; profile?: string;
+    plugins?: { memory?: boolean; soul?: boolean; skills?: boolean; report?: boolean } }): Promise<{ sessionId: string; pid: number }> {
     if (this.closing) throw new Error('DSH runtime is stopped');
     if (!isAbsolute(input.cwd)) throw new Error('DSH workspace cwd must be absolute');
     const scope = { kind: 'engine' as const, workspaceId: input.workspaceId, subjectId: 'engine-dsh' };
@@ -246,9 +247,10 @@ export class DshAgentRuntime {
     await mkdir(this.dataDir, { recursive: true });
     const stateDir = join(this.dataDir, randomUUID());
     await mkdir(stateDir);
-    const memoryBinding = await this.memory?.binding(sessionId, input.workspaceId);
+    const memoryBinding = input.plugins?.memory === false ? undefined
+      : await this.memory?.binding(sessionId, input.workspaceId);
     try {
-      await this.skills?.dshReady(sessionId, join(stateDir, 'home'));
+      if (input.plugins?.skills !== false) await this.skills?.dshReady(sessionId, join(stateDir, 'home'));
     } catch (error) {
       this.skills?.forgetDsh(sessionId);
       this.memory?.forget(sessionId);
