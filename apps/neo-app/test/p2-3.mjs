@@ -50,22 +50,29 @@ async function startGateway(dbFile, hermesHome, modelUrl) {
   let errors = '';
   child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
   let token = '';
-  const port = await new Promise((done, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Gateway startup timed out: ${errors}`)), 20000);
-    const lines = createInterface({ input: child.stdout });
-    const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
-    const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
-    lines.on('line', (line) => {
-      if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
-      if (line.startsWith('GATEWAY_READY ')) {
-        const payload = JSON.parse(line.slice('GATEWAY_READY '.length));
-        if (payload.desktopToken) token = payload.desktopToken;
-        success(payload.port);
-      }
+  let port;
+  try {
+    port = await new Promise((done, reject) => {
+      const timer = setTimeout(() => fail(new Error(`Gateway startup timed out: ${errors}`)), 45000);
+      const lines = createInterface({ input: child.stdout });
+      const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
+      const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
+      lines.on('line', (line) => {
+        if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
+        if (line.startsWith('GATEWAY_READY ')) {
+          const payload = JSON.parse(line.slice('GATEWAY_READY '.length));
+          if (payload.desktopToken) token = payload.desktopToken;
+          success(payload.port);
+        }
+      });
+      child.once('error', fail);
+      child.once('exit', (code) => fail(new Error(`Gateway exited ${code}: ${errors}`)));
     });
-    child.once('error', fail);
-    child.once('exit', (code) => fail(new Error(`Gateway exited ${code}: ${errors}`)));
-  });
+  } catch (error) {
+    if (process.platform === 'win32') spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+    else child.kill();
+    throw error;
+  }
   return { port, token, child, errors: () => errors, async close() {
     if (child.exitCode !== null) return;
     const exit = new Promise((done) => child.once('exit', done));
