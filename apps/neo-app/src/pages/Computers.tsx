@@ -26,6 +26,7 @@ export default function Computers() {
   const [local, setLocal] = useState({ available: false, enabled: false });
   const [acting, setActing] = useState<string | null>(null);
   const [target, setTarget] = useState('');
+  const [hermesProfile, setHermesProfile] = useState('default');
   const [engine, setEngine] = useState<'hermes' | 'dsh'>('hermes');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -161,6 +162,25 @@ export default function Computers() {
           const added = await http.computers.attach({ providerId: 'computer-headless-chrome', target: `chrome-${crypto.randomUUID()}` });
           setSelected(added.id);
         })}>Attach Chrome</Button>
+        <form className="computers-vnc" aria-label="Attach Hermes bot screen" onSubmit={event => {
+          event.preventDefault();
+          const profile = hermesProfile.trim();
+          if (!/^[a-z][a-z0-9_-]{0,47}$/.test(profile)) { setError('Invalid Hermes profile'); return; }
+          void perform(async () => {
+            const available = await http.extensions.list();
+            if (available.find(({ id }) => id === 'computer-hermes-screen')?.status !== 'running') {
+              await http.extensions.enable({ id: 'computer-hermes-screen' });
+            }
+            const added = await http.computers.attach({ providerId: 'computer-hermes-screen', target: `hermes-screen:${profile}` });
+            setSelected(added.id);
+          });
+        }}>
+          <label>Hermes bot profile<input aria-label="Hermes bot profile" data-testid="hermes-screen-profile" value={hermesProfile}
+            onChange={event => setHermesProfile(event.target.value)} placeholder="default" required /></label>
+          <Button type="submit" label="Attach Hermes bot screen" data-testid="attach-hermes-screen" isDisabled={busy || !hermesProfile.trim()}>
+            Attach Hermes bot screen
+          </Button>
+        </form>
         <VncAttach busy={busy} attach={target => void perform(async () => {
           const available = await http.extensions.list();
           if (available.find(({ id }) => id === 'computer-vnc')?.status !== 'running') {
