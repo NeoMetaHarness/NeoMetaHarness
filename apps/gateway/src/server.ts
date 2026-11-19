@@ -690,7 +690,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
         assignments: os.x['skills-registry'].assignments.handler(async ({ context }) => {
           authorize('x.skills-registry.assignments', context);
-          return invokeSkills('assignments', {}) as Promise<{ name: string; engine: 'hermes' | 'dsh'; targetId: string }[]>;
+          return invokeSkills('assignments', {}) as Promise<{ name: string; engine: 'hermes' | 'dsh' | 'superagent'; targetId: string }[]>;
         }),
         checks: {
           set: os.x['skills-registry'].checks.set.handler(async ({ input, context }) => {

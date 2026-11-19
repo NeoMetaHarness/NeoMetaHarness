@@ -13,7 +13,7 @@ const marker = '.neo-skill-registry.json';
 const validName = /^[a-z][a-z0-9_-]{0,79}$/;
 const validIdentity = /^[a-z][a-z0-9_-]{0,79}\/[a-z][a-z0-9_-]{0,79}$/;
 type Trust = 'untrusted' | 'observed' | 'confirmed';
-type Engine = 'hermes' | 'dsh';
+type Engine = 'hermes' | 'dsh' | 'superagent';
 type Assignment = { name: string; engine: Engine; targetId: string };
 export type Autonomy = 'suggest' | 'auto-low' | 'auto';
 const autonomyRank: Record<Autonomy, number> = { suggest: 0, 'auto-low': 1, auto: 2 };
@@ -112,7 +112,7 @@ export class SkillRegistry implements SkillProjection {
       const parsed: unknown = JSON.parse(await readFile(this.assignmentsFile, 'utf8'));
       if (!Array.isArray(parsed)) throw new Error('Invalid skill assignment storage');
       this.assignments = parsed.filter((item): item is Assignment => typeof item === 'object' && item !== null
-        && (validIdentity.test((item as Assignment).name) || validName.test((item as Assignment).name)) && (item as Assignment).engine in { hermes: 1, dsh: 1 }
+        && (validIdentity.test((item as Assignment).name) || validName.test((item as Assignment).name)) && (item as Assignment).engine in { hermes: 1, dsh: 1, superagent: 1 }
         && typeof (item as Assignment).targetId === 'string'
         && /^[a-zA-Z0-9_-]{1,100}$/.test((item as Assignment).targetId));
     }
@@ -503,7 +503,7 @@ export class SkillRegistry implements SkillProjection {
   async assign(input: { name: string; engine: Engine; targetId: string; assigned: boolean }): Promise<{ assigned: boolean }> {
     return this.serialize(async () => {
     safeIdentity(input.name);
-    if (input.engine !== 'dsh' && input.engine !== 'hermes') throw new Error('Unknown engine');
+    if (input.engine !== 'dsh' && input.engine !== 'hermes' && input.engine !== 'superagent') throw new Error('Unknown engine');
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(input.targetId)) throw new Error('Invalid target');
     if (input.assigned && !this.approved(await this.record(input.name))) throw new Error('Skill evaluation must pass before assignment');
     const next = this.assignments.filter((row) => row.name !== input.name || row.engine !== input.engine || row.targetId !== input.targetId);
@@ -522,7 +522,7 @@ export class SkillRegistry implements SkillProjection {
   listAssignments(): Assignment[] { return [...this.assignments]; }
 
   ceiling(engine: Engine, targetId: string): { ceiling: Autonomy } {
-    if (engine !== 'dsh' && engine !== 'hermes') throw new Error('Unknown engine');
+    if (engine !== 'dsh' && engine !== 'hermes' && engine !== 'superagent') throw new Error('Unknown engine');
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(targetId)) throw new Error('Invalid target');
     return { ceiling: this.ceilings[this.key(engine, targetId)] ?? 'suggest' };
   }

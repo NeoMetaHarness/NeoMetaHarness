@@ -349,6 +349,28 @@ async function trial(previewPort) {
       assert.ok(botBInput.includes('neo-learned-workflow'), `Bot B model request lacks skill. ${botBInput.slice(0, 2500)}`);
       console.log('P4-3_STAGE bot B model saw projected skill');
 
+      await page.evaluate(`(() => {
+        const select = document.querySelector('[data-testid=registry-engine]');
+        select.value = 'superagent';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      await page.eventually('document.querySelector("[data-testid=registry-target]")?.value === "default"', 'superagent target default');
+      await page.evaluate(`(() => {
+        const select = document.querySelector('[data-testid=registry-ceiling]');
+        select.value = 'auto-low';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      await page.evaluate('document.querySelector("[data-testid=registry-ceiling-save]").click()');
+      await page.eventually('document.body?.innerText?.includes("Autonomy ceiling set to auto-low")', 'superagent ceiling saved');
+      await page.eventually('!(document.querySelector("[data-testid=registry-assign]")?.disabled || document.querySelector("[data-testid=registry-assign]")?.getAttribute("aria-disabled") === "true")', 'assign enabled for superagent');
+      await page.evaluate('document.querySelector("[data-testid=registry-assign]").click()');
+      await page.eventually('document.querySelector("[data-testid=registry-assign]")?.textContent === "Unassign"', 'superagent assigned in UI');
+      const superagentAssignments = await registry.assignments();
+      assert.ok(superagentAssignments.some((item) => item.name === skill.name && item.engine === 'superagent' && item.targetId === 'default'), 'superagent assignment registered via RPC');
+      const ceilingRecord = await registry.ceiling.get({ engine: 'superagent', targetId: 'default' });
+      assert.equal(ceilingRecord.ceiling, 'auto-low', 'superagent ceiling verified via RPC');
+      console.log('P4-3_STAGE superagent skill assignment and ceiling verified');
+
       const dsh = await rpc.x['engine-dsh'].create({ workspaceId: 'default', cwd: temporary });
       const dshRoot = join(temporary, 'extensions', 'engine-dsh');
       const dshDirs = await (await import('node:fs/promises')).readdir(dshRoot);

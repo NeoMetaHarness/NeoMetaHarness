@@ -28,7 +28,7 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
   const [diff, setDiff] = useState('');
   const [from, setFrom] = useState(1);
   const [to, setTo] = useState(1);
-  const [targetEngine, setTargetEngine] = useState<'hermes' | 'dsh'>('hermes');
+  const [targetEngine, setTargetEngine] = useState<'hermes' | 'dsh' | 'superagent'>('hermes');
   const [targetId, setTargetId] = useState('default');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -131,8 +131,12 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
         {diff && <pre data-testid="registry-diff">{diff}</pre>}
         <h3>Assign skill</h3>
         <label>Engine <select data-testid="registry-engine" value={targetEngine}
-          onChange={(event) => { const engine = event.target.value as 'hermes' | 'dsh'; setTargetEngine(engine); setTargetId(engine === 'hermes' ? profile : ''); }}>
-          <option value="hermes">Hermes bot</option><option value="dsh">DSH session</option>
+          onChange={(event) => {
+            const engine = event.target.value as 'hermes' | 'dsh' | 'superagent';
+            setTargetEngine(engine);
+            setTargetId(engine === 'hermes' ? profile : engine === 'superagent' ? 'default' : '');
+          }}>
+          <option value="hermes">Hermes bot</option><option value="dsh">DSH session</option><option value="superagent">Superagent</option>
         </select></label>
         <label>Bot or session ID <input data-testid="registry-target" value={targetId} list="registry-profiles"
           onChange={(event) => setTargetId(event.target.value)} /></label>
