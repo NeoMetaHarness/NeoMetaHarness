@@ -126,6 +126,9 @@ try {
   assert.notEqual((await rpc.computers.capture({ id: target })).png, capture.png);
   await eventually(async () => JSON.stringify(await pixel(3, 3)) === '[20,210,50,255]', 'viewer reflects bot click');
   assert.equal((await act({ action: 'type', text: 'a' })).status, 200);
+  // P3-7's shared safety layer blocks key chords by default; the default must hold, and an admin can opt in.
+  assert.equal((await act({ action: 'key', keys: 'Ctrl+Left' })).status, 403);
+  await rpc.computers.policy.set({ id: target, allowDestructiveKeys: true, navigationOrigins: [] });
   assert.equal((await act({ action: 'key', keys: 'Ctrl+Left' })).status, 200);
   await eventually(async () => JSON.stringify(await pixel(0, 0)) === '[250,220,10,255]', 'viewer reflects key input');
   const notices = [], abort = new AbortController();
