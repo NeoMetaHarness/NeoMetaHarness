@@ -196,6 +196,29 @@ export default function Inbox() {
         if (review.skill) section.append(textNode('p', `Skill proposal: ${review.skill}`));
         report.append(section);
       }
+      if (item.report.playbook) {
+        const playbook = item.report.playbook;
+        const section = document.createElement('div');
+        section.className = 'inbox-report-group';
+        section.dataset.testid = 'inbox-playbook';
+        section.append(textNode('strong', 'Playbook suggestion'),
+          textNode('p', `Skill: ${playbook.skill}`),
+          textNode('p', `Evidence: ${playbook.tickets.length} successful episodes`),
+          textNode('p', 'Review and assign this untrusted skill in the Skills Registry.'));
+        report.append(section);
+      }
+      if (item.episode) {
+        const section = document.createElement('div');
+        section.className = 'inbox-report-group';
+        section.dataset.testid = 'inbox-episode';
+        section.append(textNode('strong', 'Episode'),
+          textNode('p', `Goal: ${item.episode.goal}`),
+          textNode('p', `Outcome: ${item.episode.outcome}`),
+          textNode('p', `Steps: ${item.episode.steps.join(' → ')}`),
+          textNode('p', `Tools: ${item.episode.tools.join(', ') || 'None'}`),
+          textNode('p', `Trace: ${item.episode.traceId}`));
+        report.append(section);
+      }
       for (const [title, entries] of [['Tests run', item.report.tests], ['Risks', item.report.risks]] as const) {
         const group = document.createElement('div');
         group.className = 'inbox-report-group';

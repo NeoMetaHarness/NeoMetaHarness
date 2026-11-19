@@ -596,6 +596,7 @@ export const inboxReportSchema = z.object({
     worked: z.string(), failed: z.string(), reusable: z.boolean(),
     procedure: z.string().optional(), skill: z.string().optional(),
   }).optional(),
+  playbook: z.object({ skill: z.string(), provenance: z.string(), tickets: z.array(z.string()) }).optional(),
 });
 /** Workspace accept mode for inferred Source work (`@neo` comments, failing checks). */
 export const acceptModeSchema = z.enum(['observe', 'act-with-approval', 'act']);

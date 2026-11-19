@@ -1,5 +1,5 @@
 import type { ComputerMcpBridge } from '@neometaharness/kernel';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { z } from 'zod';
@@ -86,6 +86,7 @@ class SuperagentService {
   private readonly inflight = new Set<Promise<void>>();
   private readonly assignments = new Map<string, string>();
   private readonly terminalReports = new Set<string>();
+  private playbookQueue: Promise<void> = Promise.resolve();
   private readonly upstreamItems = new Map<string, string>();
   private github?: GitHubSource;
   private workerReady?: Promise<void>;
@@ -249,7 +250,47 @@ class SuperagentService {
       ...(complete.status === 'ready' && complete.postmortem?.reusable && complete.postmortem.procedure?.trim()
         ? { procedure: complete.postmortem.procedure.trim() } : {}),
     };
-    return this.update(item, { ...patch, episode });
+    const finished = this.update(item, { ...patch, episode });
+    if (finished.status === 'ready' && episode.procedure) {
+      try {
+        await this.proposePlaybook(finished);
+      } catch (error) {
+        const current = this.items.get(item.id);
+        if (current?.report && !this.closed) {
+          this.update(current, { report: { ...current.report, risks: [...current.report.risks,
+            `Playbook proposal pending: ${error instanceof Error ? error.message : String(error)}`] } });
+        }
+      }
+    }
+    return this.items.get(item.id) ?? finished;
+  }
+
+  private async proposePlaybook(item: InboxItem): Promise<void> {
+    const task = this.playbookQueue.then(async () => {
+      if (this.closed || !item.episode?.procedure) return;
+      const normalize = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+      const procedure = normalize(item.episode.procedure);
+      const matches = [...this.items.values()].filter((entry) => entry.episode?.outcome === 'ready'
+        && entry.episode.procedure && normalize(entry.episode.procedure) === procedure);
+      if (matches.length < 2) return;
+      const digest = createHash('sha256').update(procedure).digest('hex').slice(0, 16);
+      if (matches.some((entry) => entry.report?.playbook?.provenance === `superagent:playbook:${digest}`)) return;
+      const registry = this.registry();
+      if (!registry) return;
+      const name = `playbook-${digest}`;
+      const provenance = `superagent:playbook:${digest}`;
+      const tickets = matches.map((entry) => entry.id).sort();
+      const content = `---\nname: ${name}\ndescription: Procedure repeated across successful Neo Inbox episodes\nautonomy: suggest\nprovenance: ${provenance}\n---\n\n# Procedure\n\n${item.episode.procedure}\n\n# Evidence\n\n${tickets.map((id) => `- Inbox ticket ${id}`).join('\n')}\n`;
+      const skill = await registry.import({ name, content, sourceProfile: 'superagent' },
+        { kind: 'agent', path: provenance });
+      const current = this.items.get(item.id);
+      if (current?.report && !this.closed) {
+        this.update(current, { report: { ...current.report,
+          playbook: { skill: skill.name, provenance, tickets } } });
+      }
+    });
+    this.playbookQueue = task.catch(() => {});
+    await task;
   }
 
   attachGithub(source: GitHubSource): void { this.github = source; }
@@ -284,7 +325,7 @@ class SuperagentService {
         source: 'neo/github', github, requesterRole: 'owner', mode: 'observe', status: 'failed',
         kind: 'failure', report: { status: 'failed', summary, changes: [], tests: [], risks: [summary], options: [] },
         createdAt: now, updatedAt: now };
-      this.update(item, {});
+      await this.finish(item, item.report!);
       // The failure is the record; the follow-up work is proposed or started per accept mode.
       if (!event.botId) return;
       text = `Investigate failing check "${event.name}" in ${event.repo} (${event.conclusion}): ${event.url}`;
@@ -523,9 +564,10 @@ class SuperagentService {
       if (role !== 'admin' && role !== 'owner') throw new Error('GitHub publishing requires admin approval');
       if (input.decision === 'deny') {
         const reason = `GitHub reply denied: ${input.reason.trim()}`;
-        return this.update(item, { status: 'blocked', kind: undefined,
-          approval: { destructive: true, reason, decision: 'denied' },
-          report: { status: 'blocked', summary: reason, changes: [], tests: [], risks: [reason], options: [] } });
+        const denied = this.update(item, { kind: undefined,
+          approval: { destructive: true, reason, decision: 'denied' } });
+        return this.finish(denied, { status: 'blocked', summary: reason,
+          changes: [], tests: [], risks: [reason], options: [] });
       }
       if (item.mode !== 'act' || !item.github?.issue || item.github.posted || item.report?.status !== 'ready') {
         throw new Error('GitHub reply needs an unposted act report');
@@ -668,6 +710,7 @@ class SuperagentService {
     for (const listener of this.listeners) listener();
     await this.worker.close();
     await Promise.allSettled([...this.inflight]);
+    await this.playbookQueue;
     for (const unregister of this.unregisterSources) unregister();
   }
 }
