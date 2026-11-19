@@ -12,20 +12,19 @@ From the repository root:
 pnpm install
 pnpm installer:check
 pnpm --dir apps/neo-app build
-pnpm installer:prepare
 ```
 
 `installer:prepare` deploys the Gateway and each packaged extension using pnpm, then copies the host Node executable to the architecture-suffixed Tauri sidecar path. Generated files live under `apps/neo-app/src-tauri/installer-payload/` and `apps/neo-app/src-tauri/binaries/`. Both are ignored by Git. Node license text is included with the runtime (set `NMH_NODE_LICENSE` if using a nonstandard Node distribution). Re-run preparation on each target platform, especially when native Node dependencies are involved. Pinned external engines such as Hermes need their documented runtime prerequisites after installation.
 
-Build from `apps/neo-app/src-tauri` with the Tauri CLI, using the bundles appropriate for the local OS:
+Development `cargo build` and WebView tests use the default Tauri config and do not require staged binaries. Build installers from `apps/neo-app/src-tauri` with the bundle-only Tauri config override, using the bundles appropriate for the local OS:
 
 ```sh
-cargo tauri build --bundles nsis,msi     # Windows
-cargo tauri build --bundles dmg          # macOS
-cargo tauri build --bundles appimage,deb # Linux
+cargo tauri build --config tauri.bundle.conf.json --bundles nsis,msi     # Windows
+cargo tauri build --config tauri.bundle.conf.json --bundles dmg          # macOS
+cargo tauri build --config tauri.bundle.conf.json --bundles appimage,deb # Linux
 ```
 
-The `beforeBuildCommand` prepares the frontend and bundled sidecar automatically. Test the resulting installer on the target OS with a clean user profile. Gateway binds to loopback, uses desktop-mode authorization, and stores its data in the OS application data directory. The executable can also be run from the development checkout, where the shell uses the local gateway source.
+The bundle-only override runs `installer:prepare` from `beforeBuildCommand`, preparing the frontend and packaged sidecar automatically. Run `pnpm installer:prepare` manually only to inspect the generated payload. Test the resulting installer on the target OS with a clean user profile. Gateway binds to loopback, uses desktop-mode authorization, and stores its data in the OS application data directory. The executable can also be run from the development checkout, where the shell uses the local gateway source.
 
 ### Updates and signing
 

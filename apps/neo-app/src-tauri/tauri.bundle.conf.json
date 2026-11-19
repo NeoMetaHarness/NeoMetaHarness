@@ -1,0 +1,22 @@
+{
+  "build": {
+    "beforeBuildCommand": "pnpm build && pnpm --config.strict-dep-builds=false --config.verifyDepsBeforeRun=false --dir ../.. installer:prepare"
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": false,
+    "targets": [
+      "nsis",
+      "msi",
+      "dmg",
+      "appimage",
+      "deb"
+    ],
+    "externalBin": [
+      "binaries/neo-gateway"
+    ],
+    "resources": {
+      "installer-payload/": "gateway/"
+    }
+  }
+}
