@@ -344,8 +344,9 @@
     },
     "P4-8": {
       "title": "Registry engine picker includes superagent",
-      "status": "in_progress",
-      "owner": "antigravity"
+      "status": "done",
+      "owner": "antigravity",
+      "evidence": "Pushed 13a8c19. skills-registry test, test:p4-3 x2, test:p4-7, test:p6-3, app typecheck, gateway, toggle PASS."
     }
   },
   "p3_tasks": {
@@ -404,6 +405,11 @@
       "title": "computer-hermes-screen: bot screen via Hermes seams",
       "status": "in_progress",
       "owner": "sol-b"
+    },
+    "P3-10": {
+      "title": "computer-orgo provider and P3 exit swap",
+      "status": "in_progress",
+      "owner": "sol-a"
     }
   },
   "p5_tasks": {
@@ -481,21 +487,23 @@
     },
     "P7-6": {
       "title": "Installers (Win/macOS/Linux) and install docs",
-      "status": "in_progress",
+      "status": "done",
       "owner": "sol-a",
-      "note": "Returned 2026-11-20: cargo build fails, bundled gateway sidecar binary missing; fix to bundle-only config."
+      "evidence": "Pushed 16e7e47 (5 commits). installer:check PASS x2; cargo build clean; gateway, toggle PASS.",
+      "follow_up": "Updater public key is a placeholder; real signing key and actual installer builds per OS still to verify before v1.0."
     },
     "P7-7": {
       "title": "Docs site (static, local build)",
       "status": "done",
       "owner": "antigravity",
       "evidence": "Pushed 2db3db9. docs:build + docs:check + apps/docs test PASS x2.",
-      "follow_up": "docs:build rewrites the committed generated apps/docs/src/content.ts (tree dirty after build); returned to antigravity."
+      "follow_up": "Assigned as P7-7b to antigravity: docs build dirties generated content.ts; remove unused skills-registry ceiling/get alias."
     },
     "P7-8": {
       "title": "Onboarding under 15 minutes (v1 exit)",
-      "status": "in_progress",
-      "owner": "sol-a"
+      "status": "done",
+      "owner": "sol-a",
+      "evidence": "Pushed a9a53fc. test:p7-8 PASS x2 (WebView onboarding, scripted first reply); p1-8, p1-9, installer:check, gateway, toggle PASS."
     }
   },
   "p6_tasks": {
@@ -545,6 +553,11 @@
       "title": "P6 exit scenarios end to end",
       "status": "in_progress",
       "owner": "sol61"
+    },
+    "P6-8": {
+      "title": "neo upstream as a super-agent routine",
+      "status": "in_progress",
+      "owner": "opus"
     }
   }
 }
