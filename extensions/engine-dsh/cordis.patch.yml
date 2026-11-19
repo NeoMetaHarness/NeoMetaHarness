@@ -13,3 +13,5 @@
       name: './neo-memory-plugin.mjs'
     - id: neo-soul
       name: './neo-soul-plugin.mjs'
+    - id: neo-skills
+      name: './neo-skills-plugin.mjs'

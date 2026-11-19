@@ -266,12 +266,16 @@ export class DshAgentRuntime {
     if (!memoryBinding || input.plugins?.soul === false) {
       patch = patch.replace(/    - id: neo-soul\r?\n      name: '\.\/neo-soul-plugin\.mjs'\r?\n/, '');
     }
+    if (input.plugins?.skills === false) {
+      patch = patch.replace(/    - id: neo-skills\r?\n      name: '\.\/neo-skills-plugin\.mjs'\r?\n/, '');
+    }
     for (const name of ['@deepseek-ai/dsh-computer-use', '@deepseek-ai/dsh-browser-use']) {
       patch = patch.replace(`name: '${name}'`, `name: '${import.meta.resolve(name)}'`);
     }
     const localPlugins = ['neo-providers.mjs', 'neo-computer-tool.mjs',
       ...(memoryBinding && input.plugins?.memory !== false ? ['neo-memory-plugin.mjs'] : []),
-      ...(memoryBinding && input.plugins?.soul !== false ? ['neo-soul-plugin.mjs'] : [])];
+      ...(memoryBinding && input.plugins?.soul !== false ? ['neo-soul-plugin.mjs'] : []),
+      ...(input.plugins?.skills !== false ? ['neo-skills-plugin.mjs'] : [])];
     for (const name of localPlugins) {
       patch = patch.replace(`name: './${name}'`, `name: '${new URL(`../${name}`, import.meta.url).href}'`);
     }
