@@ -67,6 +67,7 @@ export default {
     databaseFile,
     extensionsDir,
     mode: 'server',
+    signup: 'open',
   });
 
   const base = `http://127.0.0.1:${gateway.port}`;
@@ -162,7 +163,7 @@ export default {
     assert.equal(updatedViewerGet.values.greeting, 'Bonjour');
     assert.equal(updatedViewerGet.values.retries, 10);
     assert.deepEqual(updatedViewerGet.values.apiKey, { set: true });
-    assert.equal((updatedViewerGet.values as any).apiKey.secret, undefined);
+    assert.equal((updatedViewerGet.values.apiKey as { set?: boolean; secret?: unknown })?.secret, undefined);
 
     // 7. Running extension sees the new values and sees decrypted secret in vault!
     const routeUpdatedRes = await fetch(`${base}/x/test-settings-ext/hello`, {

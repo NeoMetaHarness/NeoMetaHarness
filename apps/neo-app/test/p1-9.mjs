@@ -261,13 +261,10 @@ async function trial(number, previewPort) {
         await page.evaluate(`
           (() => {
             const el = document.querySelector(${JSON.stringify(selector)});
-            const lastValue = el.value;
+            if (!el) throw new Error('Element not found: ' + ${JSON.stringify(selector)});
             const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
             setter.call(el, ${JSON.stringify(val)});
-            const tracker = el._valueTracker;
-            if (tracker) tracker.setValue(lastValue + '_diff');
             el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
           })()
         `);
       };
@@ -284,7 +281,13 @@ async function trial(number, previewPort) {
       await page.eventually('!(document.querySelector("[data-testid=settings-save-sample-ts]")?.disabled || document.querySelector("[data-testid=settings-save-sample-ts]")?.getAttribute("aria-disabled") === "true")', 'settings save button ready');
 
       // Click save button
-      await page.evaluate('document.querySelector("[data-testid=settings-save-sample-ts]").click(); true');
+      await page.evaluate(`
+        const btn = document.querySelector("[data-testid=settings-save-sample-ts]");
+        if (btn) btn.click();
+        const form = document.querySelector("[data-testid=settings-form-sample-ts]");
+        if (form) form.requestSubmit();
+        true;
+      `);
 
       // Wait for save confirmation
       await page.eventually(

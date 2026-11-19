@@ -458,15 +458,15 @@ const baseNeoContract = {
         extension: z.string(),
         values: z.record(z.string(), z.unknown()),
         schema: z.record(z.string(), z.unknown()).optional(),
-      }).passthrough()),
+      })),
     set: oc.input(z.object({
       extension: z.string().min(1),
-      values: z.record(z.string(), z.unknown()).optional(),
-    }).passthrough())
+      values: z.record(z.string(), z.unknown()),
+    }))
       .output(z.object({
         extension: z.string(),
         values: z.record(z.string(), z.unknown()),
-      }).passthrough()),
+      })),
   },
   vault: {
     list: oc.input(z.object({ scope: vaultScopeSchema })).output(z.array(vaultMetadataSchema)),

@@ -992,9 +992,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         const { sanitized, schema } = await kernel.getSettings(input.extension);
         return {
           extension: input.extension,
-          schema: schema as any,
+          schema,
           values: sanitized,
-          ...sanitized,
         };
       }),
       set: os.settings.set.handler(async ({ input, context }) => {
@@ -1003,15 +1002,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         if (!kernel.hasExtension(input.extension)) {
           throw new ORPCError('NOT_FOUND', { message: `Extension ${input.extension} not found` });
         }
-        const rawValues = (input as any).values ?? (() => {
-          const { extension: _, ...rest } = input as any;
-          return rest;
-        })();
+        const rawValues = input.values;
         const sanitized = await kernel.saveSettings(input.extension, rawValues);
         return {
           extension: input.extension,
           values: sanitized,
-          ...sanitized,
         };
       }),
     },

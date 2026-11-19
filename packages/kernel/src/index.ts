@@ -147,7 +147,7 @@ export class NeoKernel {
       status: entry.status,
       ...(entry.reason ? { reason: entry.reason } : {}),
       routes: this.routesFor(id),
-      ...(manifest?.settings ? { settings: manifest.settings as any } : {}),
+      ...(manifest?.settings ? { settings: manifest.settings } : {}),
     };
   }
 

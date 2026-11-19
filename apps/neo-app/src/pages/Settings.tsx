@@ -258,7 +258,7 @@ function ExtensionSchemaForm({
   };
 
   if (loading) {
-    return <div data-testid={`settings-loading-${extension}`}>Loading {extension} settings...</div>;
+    return <div data-testid={`settings-loading-${extension}`}>Loading ${extension} settings...</div>;
   }
 
   return (

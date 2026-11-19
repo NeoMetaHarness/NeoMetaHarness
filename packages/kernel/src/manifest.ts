@@ -17,6 +17,7 @@ export interface SettingPropertySchema {
 }
 
 export interface ExtensionSettingsSchema {
+  [key: string]: unknown;
   type?: 'object';
   properties: Record<string, SettingPropertySchema>;
   required?: string[];
