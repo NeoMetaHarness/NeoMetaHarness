@@ -62,6 +62,7 @@ try {
   await rpc.computers.local.set({ enabled: true });
   await rpc.computers.attach({ providerId: 'computer-local', target: 'local-desktop' });
   await rpc.computers.assign({ engine: 'hermes', targetId: 'scripted-p38', computerId: 'local-desktop' });
+  await rpc.computers.policy.set({ id: 'local-desktop', allowDestructiveKeys: true, navigationOrigins: [] });
   const binding = gateway.computers.binding('hermes', 'scripted-p38');
   const act = (action) => fetch(binding.endpoint, { method: 'POST', headers: {
     authorization: `Bearer ${binding.token}`, 'content-type': 'application/json',
