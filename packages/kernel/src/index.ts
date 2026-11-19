@@ -1,3 +1,4 @@
+import { ExtensionGeneration } from './generation.js';
 import { Context } from '@deepseek-ai/cordis';
 import { readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -13,7 +14,7 @@ export { SkillsBridge, type SkillProjection } from './skills.js';
 export { dependencyProblem, loadManifest, resolveOrder, validateSettings } from './manifest.js';
 export type { ExtensionManifest, LocatedExtension, ExtensionSettingsSchema, SettingPropertySchema, SettingPropertyType } from './manifest.js';
 
-export type RouteHandler = (input: { method: string; body?: unknown }) => unknown | Promise<unknown>;
+export type RouteHandler = (input: { method: string; body?: unknown; signal?: AbortSignal }) => unknown | Promise<unknown>;
 export type Health = { ok: boolean; pid?: number };
 
 export interface ExtensionContext {
@@ -22,6 +23,8 @@ export interface ExtensionContext {
   effect(register: () => () => void | Promise<void>): void;
   route(path: string, handler: RouteHandler): void;
   contribute(kind: string, value: { id: string; [key: string]: unknown }): void;
+  /** Close owned sockets/connections when retiring, before request drain. */
+  onDrain(close: () => void | Promise<void>): () => void;
   health(check: () => Health | Promise<Health>): void;
 }
 
@@ -87,27 +90,24 @@ export class GatewayEvents {
   }
 }
 
-interface RunningExtension {
-  dispose(): Promise<void>;
-  health(): Promise<Health>;
-}
-
 interface Entry {
   desired: boolean;
   status: ExtensionStatus['status'];
   reason?: string;
-  running?: RunningExtension;
+  running?: ExtensionGeneration;
 }
 
 /** A small Cordis facade. Each Cordis activation owns its routes, contributions and services. */
 export class NeoKernel {
   readonly events = new GatewayEvents();
-  private readonly cordis = new Context();
   private readonly discovered = new Map<string, LocatedExtension>();
   private readonly entries = new Map<string, Entry>();
-  private readonly routes = new Map<string, RouteHandler>();
-  private readonly contributions = new Map<string, { id: string; [key: string]: unknown }>();
-  private readonly activeSettings = new Map<string, Record<string, unknown>>();
+  private readonly active = new Map<string, ExtensionGeneration>();
+  private snapshot = {
+    routes: new Map<string, { generation: ExtensionGeneration; handler: RouteHandler }>(),
+    contributions: new Map<string, { id: string; [key: string]: unknown }>(),
+    services: new Map<string, unknown>(),
+  };
   private operation: Promise<unknown> = Promise.resolve();
   private order: string[] = [];
 
@@ -152,7 +152,7 @@ export class NeoKernel {
   }
 
   async health(id: string): Promise<Health | undefined> {
-    return this.entries.get(id)?.running?.health();
+    return this.entries.get(id)?.running?.check();
   }
 
   enable(id: string): Promise<ExtensionStatus> { return this.setEnabled(id, true); }
@@ -195,7 +195,7 @@ export class NeoKernel {
     for (const id of [...this.order].reverse()) {
       const entry = this.entries.get(id)!;
       if (entry.running && !eligible.get(id)) {
-        await entry.running.dispose();
+        await this.retire(id, entry.running);
         entry.running = undefined;
       }
     }
@@ -212,7 +212,7 @@ export class NeoKernel {
           .map((dependency) => `Dependency ${dependency} is not running`)[0];
       if (runtimeProblem) {
         if (entry.running) {
-          await entry.running.dispose();
+          await this.retire(id, entry.running);
           entry.running = undefined;
         }
         this.setStatus(id, 'degraded', runtimeProblem);
@@ -220,7 +220,9 @@ export class NeoKernel {
       }
       if (!entry.running) {
         try {
-          entry.running = await this.start(id);
+          const generation = await this.start(id);
+          try { this.publish(id, generation); entry.running = generation; }
+          catch (error) { await generation.dispose(0); throw error; }
         } catch (error) {
           this.setStatus(id, 'degraded', (error as Error).message);
           continue;
@@ -230,27 +232,51 @@ export class NeoKernel {
     }
   }
 
-  private addRoute(id: string, path: string, handler: RouteHandler): () => void {
-    if (!/^[a-z][a-z0-9/-]*$/.test(path) || path.includes('//') || path.includes('..')) throw new Error(`Invalid route ${path}`);
-    const route = `/x/${id}/${path}`;
-    if (this.routes.has(route)) throw new Error(`Duplicate route ${route}`);
-    this.routes.set(route, handler);
-    return () => { this.routes.delete(route); };
+  private compile(active: ReadonlyMap<string, ExtensionGeneration>) {
+    const routes = new Map<string, { generation: ExtensionGeneration; handler: RouteHandler }>();
+    const contributions = new Map<string, { id: string; [key: string]: unknown }>();
+    const services = new Map<string, unknown>();
+    for (const generation of active.values()) {
+      for (const [path, handler] of generation.routes) {
+        if (routes.has(path)) throw new Error(`Duplicate route ${path}`);
+        routes.set(path, { generation, handler });
+      }
+      for (const [key, value] of generation.contributions) {
+        if (contributions.has(key)) throw new Error(`Duplicate contribution ${key}`);
+        contributions.set(key, value);
+      }
+      for (const [name, value] of generation.services) {
+        if (services.has(name)) throw new Error(`Duplicate service ${name}`);
+        services.set(name, value);
+      }
+    }
+    return { routes, contributions, services };
   }
 
-  private addContribution(id: string, kind: string, value: { id: string; [key: string]: unknown }): () => void {
-    const key = `${kind}:${value.id}`;
-    if (this.contributions.has(key)) throw new Error(`Duplicate contribution ${key}`);
-    this.contributions.set(key, value);
-    return () => { this.contributions.delete(key); };
+  private publish(id: string, generation: ExtensionGeneration) {
+    const next = new Map(this.active).set(id, generation);
+    const snapshot = this.compile(next);
+    this.active.set(id, generation);
+    this.snapshot = snapshot; // One synchronous pointer swap publishes all registrations.
+    generation.changed = () => {
+      if (this.active.get(id) === generation) this.snapshot = this.compile(this.active);
+    };
   }
 
-  contributionIds(): string[] { return [...this.contributions.keys()]; }
+  private async retire(id: string, generation: ExtensionGeneration) {
+    if (this.active.get(id) === generation) {
+      this.active.delete(id); this.snapshot = this.compile(this.active);
+    }
+    await generation.dispose();
+  }
 
+  contributionIds(): string[] { return [...this.snapshot.contributions.keys()]; }
   async invokeRoute(path: string, method: string, body?: unknown): Promise<unknown | undefined> {
-    const handler = this.routes.get(path);
-    return handler?.({ method, body });
+    const route = this.snapshot.routes.get(path);
+    return route?.generation.invoke(route.handler, method, body);
   }
+  hasRoute(path: string): boolean { return this.snapshot.routes.has(path); }
+  routesFor(id: string): string[] { return [...this.snapshot.routes.keys()].filter((route) => route.startsWith(`/x/${id}/`)); }
 
   hasExtension(id: string): boolean {
     return this.discovered.has(id);
@@ -265,8 +291,12 @@ export class NeoKernel {
     sanitized: Record<string, unknown>;
     schema?: ExtensionSettingsSchema;
   }> {
-    const discovered = this.discovered.get(id);
-    const schema = discovered?.manifest.settings;
+    return this.readSettings(id, this.discovered.get(id)?.manifest.settings);
+  }
+
+  private async readSettings(id: string, schema?: ExtensionSettingsSchema): Promise<{
+    values: Record<string, unknown>; sanitized: Record<string, unknown>; schema?: ExtensionSettingsSchema;
+  }> {
     const defaults: Record<string, unknown> = {};
     if (schema?.properties) {
       for (const [key, prop] of Object.entries(schema.properties)) {
@@ -341,7 +371,7 @@ export class NeoKernel {
 
     const { values, sanitized } = await this.getSettings(id);
 
-    const runningSettings = this.activeSettings.get(id);
+    const runningSettings = this.active.get(id)?.settings;
     if (runningSettings) {
       for (const key of Object.keys(runningSettings)) {
         if (!(key in values)) delete runningSettings[key];
@@ -353,81 +383,62 @@ export class NeoKernel {
     return sanitized;
   }
 
-  hasRoute(path: string): boolean { return this.routes.has(path); }
-
-  routesFor(id: string): string[] {
-    const prefix = `/x/${id}/`;
-    return [...this.routes.keys()].filter((route) => route.startsWith(prefix));
-  }
-
-  private async start(id: string): Promise<RunningExtension> {
-    const { manifest, directory } = this.discovered.get(id)!;
+  private async start(id: string, located = this.discovered.get(id)!): Promise<ExtensionGeneration> {
+    const { manifest, directory } = located;
+    const generation = new ExtensionGeneration(id);
+    generation.settingsSchema = structuredClone(manifest.settings);
+    Object.assign(generation.settings, structuredClone((await this.readSettings(id, manifest.settings)).values));
     if (manifest.runtime.type === 'cordis') {
-      const entryUrl = pathToFileURL(resolve(directory, manifest.runtime.entry)).href;
-      const module = await import(entryUrl) as { default: NeoExtension };
-      if (typeof module.default?.activate !== 'function') throw new Error(`Missing activate() in ${id}`);
-      const { values: initialSettings } = await this.getSettings(id);
-      const settingsObj = { ...initialSettings };
-      this.activeSettings.set(id, settingsObj);
-      let check: () => Health | Promise<Health> = () => ({ ok: true });
-      const fiber = await this.cordis.plugin({
-        name: `neo:${id}`,
-        apply: async (cordisContext) => {
-          const ctx: ExtensionContext = {
-            provide: (name, value) => { cordisContext.provide(name, value); },
-            inject: <T>(name: string) => {
-              if (name === 'settings') {
-                return settingsObj as T;
-              }
-              return (cordisContext.reflect.get(name) ?? this.services[name]) as T | undefined;
-            },
-            effect: (register) => { cordisContext.effect(register); },
-            route: (path, handler) => { cordisContext.effect(() => this.addRoute(id, path, handler)); },
-            contribute: (kind, value) => { cordisContext.effect(() => this.addContribution(id, kind, value)); },
-            health: (handler) => { check = handler; },
-          };
-          await module.default.activate(ctx);
-        },
-      });
-      return {
-        dispose: async () => {
-          this.activeSettings.delete(id);
-          await fiber.dispose();
-        },
-        health: async () => check(),
-      };
+      const scope = new Context();
+      generation.cleanup = () => scope.fiber.dispose();
+      try {
+        const entryUrl = pathToFileURL(resolve(directory, manifest.runtime.entry)).href;
+        const module = await import(entryUrl) as { default: NeoExtension };
+        if (typeof module.default?.activate !== 'function') throw new Error(`Missing activate() in ${id}`);
+        await scope.plugin({
+          name: `neo:${id}`,
+          apply: async (owner) => {
+            const ctx: ExtensionContext = {
+              provide: (name, value) => generation.provide(name, value),
+              inject: <T>(name: string) => (name === 'settings' ? generation.settings : generation.services.get(name) ?? this.snapshot.services.get(name) ?? this.services[name]) as T | undefined,
+              effect: (register) => { owner.effect(register); },
+              route: (path, handler) => { owner.effect(() => generation.route(path, handler)); },
+              contribute: (kind, value) => { owner.effect(() => generation.contribute(kind, value)); },
+              onDrain: (close) => generation.onDrain(close),
+              health: (check) => { generation.check = async () => check(); },
+            };
+            await module.default.activate(ctx);
+          },
+        });
+      } catch (error) { await generation.dispose(0); throw error; }
+      return generation;
     }
     if (manifest.runtime.type === 'process') {
       const runtime = new ExtensionProcess(manifest.runtime.command, directory);
-      const cleanups: (() => void)[] = [];
+      generation.cleanup = () => runtime.stop();
+      generation.check = () => runtime.health();
       try {
         const registered = await runtime.initialize(id);
         for (const route of registered.routes) {
           if (typeof route.path !== 'string') throw new Error(`Invalid route from ${id}`);
-          cleanups.push(this.addRoute(id, route.path, ({ method, body }) => runtime.call('route.invoke', { path: route.path, method, body })));
+          generation.route(route.path, ({ method, body }) => runtime.call('route.invoke', { path: route.path, method, body }));
         }
         for (const contribution of registered.contributions) {
           if (typeof contribution.id !== 'string' || typeof contribution.kind !== 'string') throw new Error(`Invalid contribution from ${id}`);
-          cleanups.push(this.addContribution(id, contribution.kind, contribution));
+          generation.contribute(contribution.kind, contribution);
         }
         await runtime.health();
-        return {
-          dispose: async () => { for (const cleanup of cleanups.reverse()) cleanup(); await runtime.stop(); },
-          health: () => runtime.health(),
-        };
-      } catch (error) {
-        for (const cleanup of cleanups.reverse()) cleanup();
-        await runtime.stop();
-        throw error;
-      }
+      } catch (error) { await generation.dispose(0); throw error; }
     }
-    return { dispose: async () => {}, health: async () => ({ ok: true }) };
+    return generation;
   }
 
   async close(): Promise<void> {
     await this.operation;
-    for (const id of [...this.order].reverse()) await this.entries.get(id)?.running?.dispose();
-    await this.cordis.fiber.dispose();
+    for (const id of [...this.order].reverse()) {
+      const generation = this.entries.get(id)?.running;
+      if (generation) await this.retire(id, generation);
+    }
     await this.db.close();
   }
 }
