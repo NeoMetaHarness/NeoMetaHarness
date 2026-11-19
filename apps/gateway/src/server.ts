@@ -219,9 +219,13 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       throw error;
     }
   };
-  const onboardingStatus = (context: GatewayAuthContext) => {
+  const onboardingStatus = async (context: GatewayAuthContext) => {
     const completedAt = readOnboardingCompletion();
-    return { completed: completedAt !== null, completedAt, ownerName: context.user?.name ?? context.user?.email ?? 'Workspace owner', mode };
+    const workspace = context.workspaceId ? await kyselyDb.selectFrom('organization')
+      .select('name').where('id', '=', context.workspaceId).executeTakeFirst() : undefined;
+    return { completed: completedAt !== null, completedAt,
+      ownerName: context.user?.name ?? context.user?.email ?? 'Workspace owner',
+      workspaceName: workspace?.name ?? 'Default Workspace', mode };
   };
 
   const authNodeHandler = toNodeHandler(auth);
