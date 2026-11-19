@@ -67,7 +67,7 @@ async function openWebview(port) {
   const field = (selector, value) => evaluate(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!element) throw new Error('Missing field ${selector}');
-    const prototype = element.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    const prototype = element.tagName === 'SELECT' ? HTMLSelectElement.prototype : element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, ${JSON.stringify(value)});
     element.dispatchEvent(new Event(element.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }));
   })()`);
@@ -104,12 +104,35 @@ const home = await mkdtemp(join(tmpdir(), 'nmh-p1-8-'));
 const statusFile = join(home, 'ready.json');
 const cdpPort = await availablePort();
 const model = createServer((request, response) => {
-  if (request.url !== '/v1/models' || request.headers.authorization !== 'Bearer scripted-key') {
+  if (request.headers.authorization !== 'Bearer scripted-key') {
     response.writeHead(401).end();
     return;
   }
-  response.writeHead(200, { 'content-type': 'application/json' });
-  response.end(JSON.stringify({ data: [{ id: 'scripted-model' }] }));
+  if (request.url === '/v1/models') {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ data: [{ id: 'scripted-model' }] }));
+    return;
+  }
+  if (request.method === 'POST' && request.url === '/v1/chat/completions') {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      if (!body.stream) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: 'Hello from your first bot.' }, finish_reason: 'stop' }] }));
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      for (const delta of [{ role: 'assistant', content: '' }, { content: 'Hello from your first bot.' }, {}]) {
+        response.write('data: ' + JSON.stringify({ id: 'scripted-completion', object: 'chat.completion.chunk',
+          model: 'scripted-model', choices: [{ index: 0, delta, finish_reason: Object.keys(delta).length ? null : 'stop' }] }) + '\n\n');
+      }
+      response.end('data: [DONE]\n\n');
+    });
+    return;
+  }
+  response.writeHead(404).end();
 });
 await new Promise((done) => model.listen(0, '127.0.0.1', done));
 const modelPort = model.address().port;
@@ -164,6 +187,11 @@ try {
   await view.evaluate('document.querySelector("[data-testid=onboarding-bot-create]").click()');
   await view.wait('!!document.querySelector("[data-testid=onboarding-created-bot]")', 'bot created');
   assert.equal(await view.evaluate('document.querySelector("[data-testid=onboarding-created-bot]").textContent'), 'first_helper');
+  await view.evaluate('document.querySelector("[data-testid=onboarding-channel-next]").click()');
+  await view.wait('!!document.querySelector("[data-testid=onboarding-chat-message]")', 'first chat stage');
+  await view.evaluate('document.querySelector("[data-testid=onboarding-chat-send]").click()');
+  await view.wait('document.querySelector("[data-testid=onboarding-chat-reply]")?.textContent?.includes("Hello from your first bot.")', 'scripted first reply');
+  await view.wait('!!document.querySelector("[data-testid=onboarding-finish]")', 'chat completed');
   await view.evaluate('document.querySelector("[data-testid=onboarding-finish]").click()');
   await view.wait('location.pathname === "/extensions" && !document.querySelector("[data-testid=onboarding-reminder]")', 'setup completed');
   const completed = await rpc.onboarding.get();

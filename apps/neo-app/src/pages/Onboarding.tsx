@@ -133,7 +133,9 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
     try {
       const enabled = await api.extensions.enable({ id: 'engine-hermes' });
       if (enabled.status !== 'running') throw new Error(enabled.reason || 'Hermes engine unavailable');
-      const created = await api.x['engine-hermes'].profiles.create({ name: botName.trim() });
+      const existing = await api.x['engine-hermes'].profiles.list();
+      const created = existing.profiles.find((profile) => profile.name === botName.trim())
+        ?? await api.x['engine-hermes'].profiles.create({ name: botName.trim() });
       setCreatedBot(created.name);
       advance('channel');
     } catch (reason) { setError(`Cannot create bot: ${String(reason)}`); }
