@@ -22,7 +22,8 @@
     "test:p1-2": "pnpm --dir apps/neo-app test:p1-2",
     "test:p1-5": "pnpm --dir apps/neo-app test:p1-5",
     "test:p4-7": "pnpm --dir apps/neo-app test:p4-7",
-    "test:p1-8": "pnpm --dir apps/neo-app test:p1-8"
+    "test:p1-8": "pnpm --dir apps/neo-app test:p1-8",
+    "test:p2-8": "pnpm --dir apps/neo-app build && pnpm --dir extensions/models-router-panda typecheck && pnpm --dir extensions/models exec tsx test/router.test.ts && pnpm --dir extensions/models-router-panda test && pnpm --dir extensions/models-router-panda exec tsx test/gateway.test.ts"
   },
   "devDependencies": {
     "ajv": "8.17.1",
