@@ -10,6 +10,7 @@
   },
   "scripts": {
     "test:p3-4": "pnpm --dir apps/neo-app build && pnpm --dir extensions/computer-vnc typecheck && pnpm --dir extensions/computer-vnc test && pnpm --dir apps/gateway exec tsx ../../apps/neo-app/test/p3-4.mjs",
+    "deploy:check": "node scripts/deploy-check.mjs && node --test scripts/test/deploy.test.mjs",
     "check": "node scripts/check.mjs",
     "upstream:check": "node scripts/upstream.mjs",
     "org:scaffold": "node scripts/org/scaffold.mjs",
@@ -19,6 +20,7 @@
     "test:p1-5": "pnpm --dir apps/neo-app test:p1-5"
   },
   "devDependencies": {
+    "ajv": "8.17.1",
     "yaml": "^2.8.1"
   }
 }

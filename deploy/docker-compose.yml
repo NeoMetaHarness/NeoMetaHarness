@@ -38,6 +38,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: [CMD, /app/.venv/bin/python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     restart: unless-stopped
   honcho-deriver:
     profiles: [memory]
@@ -46,7 +52,7 @@ services:
     env_file: [./config/honcho.env]
     depends_on:
       honcho:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
     restart: unless-stopped
