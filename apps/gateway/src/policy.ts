@@ -115,6 +115,11 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.channels.status': 'viewer',
   'x.channels.connect': 'admin',
   'x.channels.disconnect': 'admin',
+  // WhatsApp sender allowlist: phone numbers are personal data, roles are authority.
+  'x.channels.senders': 'admin',
+  'x.channels.allow': 'admin',
+  'x.channels.revoke': 'admin',
+  'x.channels.approve': 'admin',
 
   // x.models
   'x.models-router-panda.settings.get': 'admin',

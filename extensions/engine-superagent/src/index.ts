@@ -609,9 +609,11 @@ export default defineExtension({
     ctx.route('cron/create', ({ body }) => service.cronCreate(body));
     ctx.route('cron/delete', ({ body }) => service.cronDelete(body as { id: string }));
     if (process.env.NODE_ENV === 'test') ctx.route('cron/fire', ({ body }) => service.cronFire(body as { id: string }));
-    if (process.env.NODE_ENV === 'test' && channel instanceof FakeChannelSource) {
-      ctx.route('channel/emit', async ({ body }) => { await channel.emit(body as ChannelMessage); return { ok: true }; });
-      ctx.route('channel/replies', () => channel.replies);
+    // Test hooks: the fake source, or the gateway's channel bus (emit + undelivered replies).
+    const testChannel = channel as Partial<{ emit(message: ChannelMessage): Promise<void>; replies: unknown[] }> | undefined;
+    if (process.env.NODE_ENV === 'test' && typeof testChannel?.emit === 'function' && Array.isArray(testChannel.replies)) {
+      ctx.route('channel/emit', async ({ body }) => { await testChannel.emit!(body as ChannelMessage); return { ok: true }; });
+      ctx.route('channel/replies', () => testChannel.replies);
     }
     ctx.route('events', ({ body }) => {
       const { since, signal } = body as { since: number; signal?: AbortSignal };

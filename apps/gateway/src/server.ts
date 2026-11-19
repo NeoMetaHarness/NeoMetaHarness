@@ -42,6 +42,7 @@ import {
 } from '@neometaharness/auth';
 import { toNodeHandler } from 'better-auth/node';
 import { coalesceText } from './coalesce.js';
+import { ChannelBus } from './channel-bus.js';
 import { createAgentGateway } from './agents.js';
 import { backupSource } from './backup-source.js';
 import {
@@ -271,9 +272,13 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   const extensionDataDir = join(dirname(resolve(options.databaseFile)), 'extensions');
   const backupStorage = backupSource(db, extensionDataDir,
     options.vaultKeyFile ?? join(dirname(resolve(options.databaseFile)), 'vault-keys', 'master.key'));
+  // Channel platforms publish into, and the Inbox subscribes to, this one bus.
+  const channelBus = new ChannelBus();
   const kernel = new NeoKernel(db, {
     backupSource: backupStorage,
     backupProtectedPaths: [dataDir, dirname(resolve(options.databaseFile)), resolve(options.extensionsDir ?? defaultExtensions)],
+    channelSource: channelBus,
+    channelBus,
     computers,
     vault,
     auth,
@@ -606,6 +611,22 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         status: os.x.channels.status.handler(async ({ input, context }) => {
           requireViewer(context);
           return invokeChannels('status', input) as Promise<any>;
+        }),
+        senders: os.x.channels.senders.handler(async ({ input, context }) => {
+          requireAdminOrOwner(context);
+          return invokeChannels('senders', input) as Promise<any>;
+        }),
+        allow: os.x.channels.allow.handler(async ({ input, context }) => {
+          requireAdminOrOwner(context);
+          return invokeChannels('allow', input) as Promise<any>;
+        }),
+        revoke: os.x.channels.revoke.handler(async ({ input, context }) => {
+          requireAdminOrOwner(context);
+          return invokeChannels('revoke', input) as Promise<any>;
+        }),
+        approve: os.x.channels.approve.handler(async ({ input, context }) => {
+          requireAdminOrOwner(context);
+          return invokeChannels('approve', input) as Promise<any>;
         }),
       },
       'skills-registry': {
@@ -1045,6 +1066,33 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       const path = url.pathname;
+
+      const channelInbound = /^\/internal\/channels\/([a-z][a-z0-9-]{0,31})\/inbound$/.exec(path);
+      if (channelInbound) {
+        // Engine callback (a channel platform's Hermes plugin). The platform owns
+        // and checks its per-profile vault token; no platform attached means 404.
+        const platform = channelBus.platform(channelInbound[1]!);
+        if (!platform) { res.writeHead(404).end(); return; }
+        if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += (chunk as Buffer).length;
+          if (size > 65_536) { res.writeHead(413).end(); return; }
+          chunks.push(chunk as Buffer);
+        }
+        let body: unknown;
+        try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { res.writeHead(400).end(); return; }
+        try {
+          const result = await platform.inbound({ authorization: req.headers.authorization, body });
+          res.writeHead(result.status, { 'content-type': 'application/json' }).end(JSON.stringify(result.body ?? {}));
+        } catch (error) {
+          console.error('Channel inbound failed:', error instanceof Error ? error.message : error);
+          res.writeHead(500).end();
+        }
+        return;
+      }
 
       if (path === '/internal/memory/context' || path === '/internal/memory/write') {
         if (!kernel.hasRoute('/x/memory-local/list')) { res.writeHead(404).end(); return; }

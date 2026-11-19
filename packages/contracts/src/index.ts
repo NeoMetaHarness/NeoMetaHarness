@@ -393,16 +393,35 @@ export const channelsPlatformSchema = z.object({
   id: z.string(), name: z.string(), description: z.string().optional(),
   enabled: z.boolean(), configured: z.boolean(), gatewayRunning: z.boolean(),
   error: z.string().optional(),
+  /** WhatsApp: a linked device session exists (QR pairing is done in Hermes). */
+  paired: z.boolean().optional(),
 });
+/** WhatsApp sender: a phone number in international form, digits only. */
+const channelSender = z.string().regex(/^\d{6,20}$/);
+/** Neo role a channel sender acts with in the Inbox; never owner. */
+const channelSenderRole = z.enum(['viewer', 'member', 'admin']);
+const channelSenders = z.object({ senders: z.array(z.object({ senderId: z.string(), role: channelSenderRole })) });
 export const channelsContract = {
   list: oc.input(z.object({ profile: z.string().min(1) }))
     .output(z.object({ platforms: z.array(channelsPlatformSchema) })),
-  connect: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('telegram'), token: z.string().min(1).max(4096) }))
-    .output(z.object({ connected: z.boolean() })),
-  disconnect: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('telegram') }))
+  connect: oc.input(z.discriminatedUnion('platform', [
+    z.object({ profile: z.string().min(1), platform: z.literal('telegram'), token: z.string().min(1).max(4096) }),
+    // WhatsApp has no API token (device pairing); Inbox reports are filed for this bot.
+    z.object({ profile: z.string().min(1), platform: z.literal('whatsapp'), botId: z.string().min(1).max(200) }),
+  ])).output(z.object({ connected: z.boolean() })),
+  disconnect: oc.input(z.object({ profile: z.string().min(1), platform: z.enum(['telegram', 'whatsapp']) }))
     .output(z.object({ disconnected: z.boolean() })),
   status: oc.input(z.object({ profile: z.string().min(1) }))
     .output(z.object({ platforms: z.array(channelsPlatformSchema) })),
+  senders: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('whatsapp') })).output(channelSenders),
+  allow: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('whatsapp'),
+    senderId: channelSender, role: channelSenderRole })).output(channelSenders),
+  revoke: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('whatsapp'), senderId: channelSender }))
+    .output(channelSenders),
+  /** Approve a Hermes DM pairing code (8 chars, Hermes' alphabet) and admit that sender with a role. */
+  approve: oc.input(z.object({ profile: z.string().min(1), platform: z.literal('whatsapp'),
+    code: z.string().regex(/^[A-HJ-NP-Z2-9]{8}$/), role: channelSenderRole }))
+    .output(z.object({ senderId: z.string(), role: channelSenderRole })),
 };
 
 const baseNeoContract = {
