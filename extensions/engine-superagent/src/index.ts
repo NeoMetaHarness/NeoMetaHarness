@@ -1,4 +1,4 @@
-import type { ComputerMcpBridge } from '@neometaharness/kernel';
+import type { ComputerMcpBridge, SkillsBridge } from '@neometaharness/kernel';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
@@ -240,7 +240,8 @@ class SuperagentService {
       modelRole: 'eval', latencyMs: 0, outcome: complete.status });
     const episode: InboxItem['episode'] = {
       goal: item.text.slice(0, 1000),
-      steps: [...new Set([...prior.slice().reverse().map((entry) => entry.chosenAction), 'ticket.complete'])],
+      steps: [...new Set([...prior.slice().reverse().map((entry) => entry.chosenAction),
+        ...(this.assignments.has(item.id) ? ['delegate'] : []), 'ticket.complete'])],
       tools: [...new Set([
         ...prior.filter((entry) => !entry.model_id.startsWith('policy:')).map((entry) => entry.model_id),
         ...(this.assignments.has(item.id) ? ['hermes-worker'] : []),
@@ -754,7 +755,8 @@ export default defineExtension({
     const service = new SuperagentService(models,
       new DecisionLog(join(dataDir, 'engine-superagent', 'traces')),
       () => ctx.inject<SkillImporter>('skillRegistry'),
-      new PresetWorkerHost(models, ctx.inject<ComputerMcpBridge>('computerMcpBridge')));
+      new PresetWorkerHost(models, ctx.inject<ComputerMcpBridge>('computerMcpBridge'),
+        ctx.inject<SkillsBridge>('skillsBridge')));
     const github = new PollingGitHubSource(join(dataDir, 'engine-superagent', 'github.json'),
       vault, (event) => service.ingestGithub(event), fetch,
       process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_GITHUB_API_URL

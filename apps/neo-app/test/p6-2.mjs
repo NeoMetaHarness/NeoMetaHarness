@@ -297,6 +297,47 @@ async function trial(previewPort) {
     assert.match(skill.content, /autonomy: suggest/);
     console.log('P6-2_SKILL PASS provenance=superagent:ticket autonomy=suggest trust=untrusted');
 
+    if (process.env.NMH_P67 === '1') {
+      assert.equal(cronReport.episode.goal, job.text);
+      assert.equal(cronReport.episode.outcome, 'ready');
+      assert.ok(cronReport.episode.steps.includes('ticket.complete'));
+      assert.ok(cronReport.episode.tools.length > 0);
+      assert.ok(cronReport.episode.traceId);
+      const firstTrace = (await rpc.inbox.decisions.list({ ticketId: cronReport.id }))
+        .find((entry) => entry.trace_id === cronReport.episode.traceId);
+      assert.equal(firstTrace?.chosenAction, 'ticket.complete');
+      console.log('P6-7_EPISODE PASS goal=stored steps=stored tools=stored outcome=ready trace=linked');
+
+      assert.deepEqual(await rpc.inbox.cron.fire({ id: job.id }), { ok: true });
+      const second = await eventually(async () => (await rpc.inbox.list()).find((entry) =>
+        entry.id !== cronReport.id && entry.source === 'neo/cron' && entry.text === job.text
+          && entry.status === 'ready' && entry.report?.playbook), 'second episode and playbook');
+      const proposal = second.report.playbook;
+      assert.deepEqual(proposal.tickets.sort(), [cronReport.id, second.id].sort());
+      assert.equal(second.episode.procedure, cronReport.episode.procedure);
+      const registryApi = rpc.x['skills-registry'];
+      const playbook = await registryApi.get({ name: proposal.skill });
+      assert.equal(playbook.metadata.trust, 'untrusted');
+      assert.equal(playbook.metadata.autonomy, 'suggest');
+      assert.equal(playbook.metadata.provenance, proposal.provenance);
+      assert.match(playbook.content, /Validate the request, delegate to the bot/);
+      console.log('P6-7_PLAYBOOK PASS threshold=2 trust=untrusted autonomy=suggest provenance=recorded');
+
+      await registryApi.override({ name: proposal.skill, reason: 'P6-7 scripted fixture approved for projection' });
+      const hermesProfile = `neo_${bot.id.replaceAll('-', '').toLowerCase()}`;
+      await registryApi.assign({ name: proposal.skill, engine: 'hermes', targetId: hermesProfile, assigned: true });
+      await registryApi.assign({ name: proposal.skill, engine: 'dsh', targetId: 'superagent', assigned: true });
+      const basename = proposal.skill.split('/').at(-1);
+      assert.ok(existsSync(join(temporary, 'hermes-home', 'profiles', hermesProfile, 'skills', basename, 'SKILL.md')),
+        'Hermes profile must receive approved playbook');
+      assert.ok(existsSync(join(temporary, 'extensions', 'engine-superagent', 'dsh', 'skills', basename, 'SKILL.md')),
+        'Superagent DSH worker must receive approved playbook');
+      const assignments = await registryApi.assignments();
+      assert.ok(assignments.some((entry) => entry.name === proposal.skill && entry.engine === 'hermes'));
+      assert.ok(assignments.some((entry) => entry.name === proposal.skill && entry.engine === 'dsh'));
+      console.log('P6-7_PROJECT PASS Hermes=projected DSH=projected superagent-worker=projected');
+    }
+
     const traces = await rpc.inbox.decisions.list({ ticketId: cronReport.id });
     for (const action of ['eval', 'accept', 'delegate', 'postmortem']) {
       assert.ok(traces.some((trace) => trace.chosenAction === action), `Missing ${action} decision`);
@@ -328,6 +369,11 @@ async function trial(previewPort) {
     await page.eventually('!!document.querySelector(".inbox-page")', 'lazy Inbox');
     await page.eventually('!![...document.querySelectorAll(".inbox-item")].find(row => row.querySelector(".inbox-request")?.textContent?.includes("reusable Monday") && row.querySelector("[data-testid=inbox-postmortem]")?.textContent?.includes("Reusable procedure suggested"))', 'rendered post-mortem card');
     console.log('P6-2_CARD PASS postmortem=visible lazy_inbox=true');
+    if (process.env.NMH_P67 === '1') {
+      await page.eventually('!!document.querySelector("[data-testid=inbox-playbook]")', 'playbook report card');
+      await page.eventually('!!document.querySelector("[data-testid=inbox-episode]")', 'episode report card');
+      console.log('P6-7_CARD PASS playbook=visible episode=visible');
+    }
 
     const channelMsg = { id: 'channel-1', channelId: 'telegram:test', senderId: 'member-1',
       botId: bot.id, memberRole: 'member', text: '@neo do channel research', mode: 'act' };
@@ -385,6 +431,7 @@ try {
     else preview.kill();
   }
   console.log('P6-2 PASS authenticated=true scripted=true build_first=true');
+  if (process.env.NMH_P67 === '1') console.log('P6-7 PASS authenticated=true scripted=true build_first=true');
 } catch (error) {
   console.error('P6-2 FAIL', error instanceof Error ? error.stack : error);
   process.exitCode = 1;

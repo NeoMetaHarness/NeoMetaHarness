@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { ComputerMcpBridge } from '@neometaharness/kernel';
+import type { ComputerMcpBridge, SkillsBridge } from '@neometaharness/kernel';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +23,8 @@ export interface WorkerHost {
 }
 
 export class PresetWorkerHost implements WorkerHost {
-  constructor(private readonly models: ModelFactory, private readonly computers?: ComputerMcpBridge) {}
+  constructor(private readonly models: ModelFactory, private readonly computers?: ComputerMcpBridge,
+    private readonly skills?: SkillsBridge) {}
   private readonly context = new Context();
   private registration?: { dispose(): Promise<void> };
   private active = new Set<{ dispose(): Promise<void> }>();
@@ -34,6 +35,7 @@ export class PresetWorkerHost implements WorkerHost {
   async start(home: string, gatewayUrl: string, tokenFile?: string): Promise<void> {
     this.home = home;
     await mkdir(home, { recursive: true });
+    await this.skills?.dshReady('superagent', home);
     this.context.baseUrl = import.meta.url;
     await this.context.plugin(Loader);
     await mountAgentLoopTestDependencies(this.context);
@@ -120,6 +122,7 @@ export class PresetWorkerHost implements WorkerHost {
     await Promise.allSettled([...this.active].map((worker) => worker.dispose()));
     for (const profile of this.computerProfiles) await this.computers?.forget('superagent', profile);
     this.computerProfiles.clear();
+    this.skills?.forgetDsh('superagent');
     await this.registration?.dispose();
     await this.context.fiber.dispose();
   }
