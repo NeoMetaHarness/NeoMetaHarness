@@ -90,6 +90,8 @@ export interface GatewayOptions {
   authorizeVault?: (operation: VaultOperation, scope: VaultScope) => boolean | Promise<boolean>;
   /** Driver factory injection for isolated host implementations and fake-driver tests. */
   computerLocalDriverFactory?: import('../../../extensions/computer-local/src/provider.js').LocalDriverFactory;
+  /** Injection for the fake Hermes screen in isolated gateway tests. */
+  hermesScreenBridge?: import('../../../extensions/computer-hermes-screen/src/provider.js').HermesScreenBridge;
   /**
    * Server-mode HTTP sign-up. 'invite' (default; NEO_SIGNUP overrides): the first
    * account needs the one-time setup token, later ones a pending invitation.
@@ -290,6 +292,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     computers,
     computerMcpBridge,
     computerLocalDriverFactory: options.computerLocalDriverFactory,
+    hermesScreen: options.hermesScreenBridge,
     vault,
     auth,
     memoryRecords: (db as any).memories,
