@@ -152,6 +152,9 @@ interface Computer {
 
 **Projection into engines:** the provider registers itself in Hermes (the computer-use / browser / screen backend for the bot's profile) and in DSH (`ctx.computerUse` and `ctx.browserUse` provider seams). The same computer then works for a Hermes bot, a DSH session or the super agent. Verified in [spike c](../spikes/P0-3c-hermes-screen/README.md): Hermes `computer_use` backend plugins (`register_computer_use_provider`, selected per profile by `computer_use.backend`) receive real agent tool calls, on Windows too. Hermes Bot Screen itself is Linux-only, and its viewer socket is private, so **Neo serves its own viewer** from `Computer.screen()`; it never reaches into Hermes internals.
 
+
+The optional `computers-mcp` extension also projects the assigned computer as MCP tools into isolated Hermes profiles, DSH sessions and superagent workers. Its per-profile vault capabilities resolve through the same computer registry, so human leases, the kill switch, key/navigation policy and action audit events apply across providers. See the [MCP projection and safety baseline](../extensions/computers-mcp/README.md) for the pinned engine seams and lifecycle behavior.
+
 ## 7. Skills fabric (learned skills; how the super agent improves)
 
 ```mermaid

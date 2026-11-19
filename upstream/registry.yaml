@@ -9,7 +9,7 @@ upstreams:
     channel: npm-latest          # developer preview, breaking changes expected
     bump: weekly
     role: [coding-runtime, orchestrator-host]
-    seams: [cordis-plugin, profile-patch, acp-profile, sdk-jsonrpc, agent-instructions, computer-use-provider, browser-use-provider, skill]
+    seams: [cordis-plugin, profile-patch, acp-profile, sdk-jsonrpc, agent-instructions, computer-use-provider, browser-use-provider, mcp-client-stdio, skill]
   dsh-superagent:
     upstream: deepseek-ai/dsh-superagent-prototype
     lang: ts
@@ -23,7 +23,7 @@ upstreams:
     channel: stable-release
     bump: nightly
     role: [agent-runtime]
-    seams: [api-server-v1, cli, dashboard-backend-api, dashboard-backend-plugin, plugin-loader, memory-provider-plugin, platform-plugin, model-provider-plugin, computer-use, bot-screen, skills-dir, cron, kanban, acp-adapter]
+    seams: [api-server-v1, cli, dashboard-backend-api, dashboard-backend-plugin, plugin-loader, memory-provider-plugin, platform-plugin, model-provider-plugin, computer-use, bot-screen, mcp-client-stdio, skills-dir, cron, kanban, acp-adapter]
   t3code:
     upstream: pingdotgg/t3code
     lang: ts
