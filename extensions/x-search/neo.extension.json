@@ -1,0 +1,15 @@
+{
+  "id": "x-search",
+  "version": "0.1.0",
+  "displayName": "xAI X Search",
+  "kind": ["tool"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" },
+  "settings": {
+    "type": "object",
+    "properties": {
+      "apiKey": { "type": "string", "title": "xAI API key", "secret": true },
+      "baseUrl": { "type": "string", "title": "xAI API origin", "default": "https://api.x.ai" },
+      "model": { "type": "string", "title": "Search model", "default": "grok-4.7" }
+    }
+  }
+}
