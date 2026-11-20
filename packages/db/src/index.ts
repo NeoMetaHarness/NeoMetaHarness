@@ -48,6 +48,13 @@ interface ExtensionSettingsTable {
   data: string;
 }
 
+/** Extension settings per workspace (P1-13). `extension_settings` holds only pre-P1-13 legacy rows. */
+interface ExtensionWorkspaceSettingsTable {
+  extension_id: string;
+  workspace_id: string;
+  data: string;
+}
+
 export type VaultScopeKind = 'workspace' | 'bot' | 'engine';
 
 export interface VaultStoredSecret {
@@ -128,6 +135,7 @@ export interface NeoTables extends AgentTables {
   extension_state: ExtensionStateTable;
   extension_settings: ExtensionSettingsTable;
   extension_install: ExtensionInstall;
+  extension_workspace_settings: ExtensionWorkspaceSettingsTable;
   vault_secret: VaultSecretTable;
 }
 
@@ -136,12 +144,18 @@ export interface DatabaseProvider {
   migrate(): Promise<void>;
   getEnabled(id: string): Promise<boolean>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
+  /** Legacy, workspace-less settings (before P1-13). Read only to migrate them. */
   getExtensionSettings?(id: string): Promise<Record<string, unknown> | undefined>;
   setExtensionSettings?(id: string, values: Record<string, unknown>): Promise<void>;
   listExtensionInstalls?(): Promise<ExtensionInstall[]>;
   getExtensionInstall?(id: string): Promise<Omit<ExtensionInstall, 'id'> | undefined>;
   setExtensionInstall?(id: string, value: Omit<ExtensionInstall, 'id'>): Promise<void>;
   deleteExtensionInstall?(id: string): Promise<void>;
+  listLegacyExtensionSettings?(): Promise<{ id: string; values: Record<string, unknown> }[]>;
+  deleteLegacyExtensionSettings?(id: string): Promise<void>;
+  /** One extension's stored settings in one workspace. */
+  getWorkspaceSettings?(id: string, workspaceId: string): Promise<Record<string, unknown> | undefined>;
+  setWorkspaceSettings?(id: string, workspaceId: string, values: Record<string, unknown>): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -185,6 +199,12 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
     if (!installs?.columns.some(column => column.name === 'integrity')) {
       await this.db.schema.alterTable('extension_install').addColumn('integrity', 'text').execute();
     }
+    await this.db.schema.createTable('extension_workspace_settings').ifNotExists()
+      .addColumn('extension_id', 'text', (column) => column.notNull())
+      .addColumn('workspace_id', 'text', (column) => column.notNull())
+      .addColumn('data', 'text', (column) => column.notNull())
+      .addPrimaryKeyConstraint('extension_workspace_settings_pk', ['extension_id', 'workspace_id'])
+      .execute();
     await this.db.schema.createTable('vault_secret').ifNotExists()
       .addColumn('id', 'text', (column) => column.primaryKey())
       .addColumn('scope_kind', 'text', (column) => column.notNull())
@@ -243,6 +263,31 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
   }
   async deleteExtensionInstall(id: string) {
     await this.db.deleteFrom('extension_install').where('id', '=', id).execute();
+  }
+
+  async listLegacyExtensionSettings(): Promise<{ id: string; values: Record<string, unknown> }[]> {
+    const rows = await this.db.selectFrom('extension_settings').selectAll().execute();
+    return rows.flatMap((row) => {
+      try { return [{ id: row.id, values: JSON.parse(row.data) as Record<string, unknown> }]; }
+      catch { return []; }
+    });
+  }
+
+  async deleteLegacyExtensionSettings(id: string): Promise<void> {
+    await this.db.deleteFrom('extension_settings').where('id', '=', id).execute();
+  }
+
+  async getWorkspaceSettings(id: string, workspaceId: string): Promise<Record<string, unknown> | undefined> {
+    const row = await this.db.selectFrom('extension_workspace_settings').select('data')
+      .where('extension_id', '=', id).where('workspace_id', '=', workspaceId).executeTakeFirst();
+    if (!row) return undefined;
+    try { return JSON.parse(row.data); } catch { return undefined; }
+  }
+
+  async setWorkspaceSettings(id: string, workspaceId: string, values: Record<string, unknown>): Promise<void> {
+    const data = JSON.stringify(values);
+    await this.db.insertInto('extension_workspace_settings').values({ extension_id: id, workspace_id: workspaceId, data })
+      .onConflict((conflict) => conflict.columns(['extension_id', 'workspace_id']).doUpdateSet({ data })).execute();
   }
 
   async getVaultSecret(id: string): Promise<VaultStoredSecret | undefined> {

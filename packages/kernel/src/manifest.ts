@@ -128,3 +128,54 @@ export function dependencyProblem(extension: ExtensionManifest, extensions: Read
     }
   }
 }
+
+/** A settings value the schema refuses; the Gateway reports it as a bad request. */
+export class SettingsValidationError extends Error {}
+
+/**
+ * Validate (and lightly coerce) values against an extension's settings schema before they are stored.
+ * - Unknown keys and wrong types are refused: the string "false" is not a boolean, "abc" is not a number.
+ * - Numbers and integers also accept a numeric string ("10" becomes 10); integers must be whole.
+ * - enum, minimum and maximum are enforced.
+ * - null clears a stored value (the default applies again). A secret takes a string; '' leaves it unchanged.
+ * Returns the values to write; null marks a key to clear.
+ */
+export function coerceSettingValues(id: string, schema: ExtensionSettingsSchema | undefined,
+  values: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const fail = (key: string, problem: string): never => {
+    throw new SettingsValidationError(`Invalid setting '${key}' for ${id}: ${problem}`);
+  };
+  for (const [key, raw] of Object.entries(values)) {
+    const property = schema?.properties?.[key];
+    if (!property) fail(key, 'not declared in the settings schema');
+    if (raw === null) { result[key] = null; continue; }
+    if (property!.secret) {
+      if (typeof raw !== 'string') fail(key, 'a secret must be a string');
+      if (raw !== '') result[key] = raw;
+      continue;
+    }
+    let value: unknown = raw;
+    switch (property!.type) {
+      case 'boolean':
+        if (typeof value !== 'boolean') fail(key, `expected a boolean, got ${JSON.stringify(raw)}`);
+        break;
+      case 'number':
+      case 'integer':
+        if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) value = Number(value);
+        if (typeof value !== 'number' || !Number.isFinite(value)) fail(key, `expected a number, got ${JSON.stringify(raw)}`);
+        if (property!.type === 'integer' && !Number.isInteger(value)) fail(key, 'expected a whole number');
+        if (property!.minimum !== undefined && (value as number) < property!.minimum) fail(key, `below the minimum ${property!.minimum}`);
+        if (property!.maximum !== undefined && (value as number) > property!.maximum) fail(key, `above the maximum ${property!.maximum}`);
+        break;
+      case 'string':
+        if (typeof value !== 'string') fail(key, `expected a string, got ${JSON.stringify(raw)}`);
+        break;
+      default:
+        break;
+    }
+    if (property!.enum && !property!.enum.includes(value as string | number)) fail(key, `must be one of ${JSON.stringify(property!.enum)}`);
+    result[key] = value;
+  }
+  return result;
+}
