@@ -219,7 +219,8 @@
     },
     "P1-12": {
       "title": "Perf budgets wired into neo check",
-      "status": "not_started"
+      "status": "in_progress",
+      "owner": "antigravity"
     }
   },
   "p2_tasks": {
@@ -374,7 +375,8 @@
     },
     "P4-9": {
       "title": "Honcho dreaming + report, standing intents",
-      "status": "not_started"
+      "status": "in_progress",
+      "owner": "opus"
     }
   },
   "p3_tasks": {
@@ -541,13 +543,15 @@
     },
     "P7-9": {
       "title": "Security review of extensions added since P7-2",
-      "status": "in_progress",
-      "owner": "opus"
+      "status": "done",
+      "owner": "opus",
+      "evidence": "Opus audit 2026-11-20: 3 High, 4 Medium, 9 Low/Info across p210/p212/p310/p311 and main; all dispatched to owners for fixes before merge."
     },
     "P7-10": {
       "title": "User docs for features added 2026-11-20 (docs site)",
-      "status": "in_progress",
-      "owner": "antigravity"
+      "status": "done",
+      "owner": "antigravity",
+      "evidence": "Pushed 6c22e82 + PM fix 1c3c864 (local consent is owner-only). docs:build x2 clean tree, docs:check, apps/docs test, gateway, toggle, check PASS; role claims checked against policy.ts."
     },
     "P7-11": {
       "title": "v1.0 public release",
@@ -606,8 +610,9 @@
     },
     "P6-8": {
       "title": "neo upstream as a super-agent routine",
-      "status": "in_progress",
-      "owner": "opus"
+      "status": "done",
+      "owner": "opus",
+      "evidence": "Pushed 963c42e (4 commits). test:p6-8 PASS x2; superagent, app typecheck, upstream:check PASS; full regression 58/58."
     }
   }
 }
