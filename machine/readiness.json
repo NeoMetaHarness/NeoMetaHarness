@@ -212,6 +212,14 @@
       "status": "in_progress",
       "owner": "sol61",
       "note": "Returned 2026-11-20: makes test:p6-4 flaky (GitHub 429 poll resolves instead of rejecting; 3/4 fail vs main 3/3 pass)."
+    },
+    "P1-11": {
+      "title": "Desktop auto-updater (Tauri updater): real signing key and update flow",
+      "status": "not_started"
+    },
+    "P1-12": {
+      "title": "Perf budgets wired into neo check",
+      "status": "not_started"
     }
   },
   "p2_tasks": {
@@ -363,6 +371,10 @@
       "status": "done",
       "owner": "antigravity",
       "evidence": "Pushed 13a8c19. skills-registry test, test:p4-3 x2, test:p4-7, test:p6-3, app typecheck, gateway, toggle PASS."
+    },
+    "P4-9": {
+      "title": "Honcho dreaming + report, standing intents",
+      "status": "not_started"
     }
   },
   "p3_tasks": {
@@ -531,6 +543,15 @@
       "title": "Security review of extensions added since P7-2",
       "status": "in_progress",
       "owner": "opus"
+    },
+    "P7-10": {
+      "title": "User docs for features added 2026-11-20 (docs site)",
+      "status": "in_progress",
+      "owner": "antigravity"
+    },
+    "P7-11": {
+      "title": "v1.0 public release",
+      "status": "not_started"
     }
   },
   "p6_tasks": {
