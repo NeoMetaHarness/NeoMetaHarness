@@ -10,7 +10,7 @@ async function action(action) {
     if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== '/internal/apps-mcp/action') throw Error();
     const response = await fetch(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20000),
       headers: { authorization: `Bearer ${binding.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ engine: binding.engine, profile: binding.profile, action }) });
+      body: JSON.stringify({ engine: binding.engine, profile: binding.profile, workspace: binding.workspace, action }) });
     if (!response.ok) throw Error();
     const data = await response.json();
     const pending = action.operation === 'run' && data.status !== 'completed';
@@ -24,6 +24,6 @@ async function action(action) {
 }
 const provider = z.string().default('composio');
 server.registerTool('toolkits', { description: 'List connected-app toolkits.', inputSchema: z.object({ provider }) }, args => action({ operation: 'toolkits', ...args }));
-server.registerTool('connect', { description: 'Create an OAuth link; the human completes authorization. API keys stay in Neo vault.', inputSchema: z.object({ provider, toolkit: z.string(), authConfigId: z.string(), callbackUrl: z.string().url() }) }, args => action({ operation: 'connect', ...args }));
+server.registerTool('connect', { description: 'Account creation requires an authenticated human through neo.apps.connect in the App. After OAuth, the owner grants this engine/profile access. Engines cannot create accounts or choose callbacks.', inputSchema: z.object({ provider, toolkit: z.string(), authConfigId: z.string() }).strict() }, async () => ({ content: [{ type: 'text', text: JSON.stringify({ summary: 'An authenticated human must connect the account and explicitly grant this profile access.', kind: 'question', question: 'Use neo.apps.connect in the authenticated App to obtain the OAuth link, finish authorization, then use neo.apps.grant for this engine/profile. No connection or action has executed.' }) }] }));
 server.registerTool('run', { description: 'Run an action using a Neo-connected account. Workspace accept mode applies; destructive or unknown actions require Inbox approval. Pending approval means nothing has executed.', inputSchema: z.object({ provider, accountId: z.string(), action: z.string(), arguments: z.record(z.string(), z.unknown()) }) }, args => action({ operation: 'run', ...args }));
 serveStdio(() => server);

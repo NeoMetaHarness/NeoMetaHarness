@@ -747,13 +747,15 @@ export const appActionSchema = z.object({ provider: z.string().min(1).max(64), a
 export const appsContract = {
   toolkits: oc.input(z.object({ provider: z.string().default('composio') })).output(z.array(z.object({ id: z.string(), name: z.string() }))),
   connect: oc.input(z.object({ provider: z.string().default('composio'), toolkit: z.string().min(1).max(200),
-    authConfigId: z.string().min(1).max(200), callbackUrl: z.string().url().max(4096) }))
+    authConfigId: z.string().min(1).max(200) }))
     .output(z.object({ id: z.string(), toolkit: z.string(), redirectUrl: z.string().url() })),
   run: oc.input(appActionSchema).output(z.unknown()),
+  grant: oc.input(z.object({ provider: z.string().default('composio'), accountId: z.string().min(1).max(200),
+    engine: z.enum(['hermes', 'dsh', 'superagent']), profile: z.string().min(1).max(200), enabled: z.boolean() })).output(z.object({ ok: z.boolean() })),
 };
 export const appsOperationSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('toolkits'), provider: z.string().default('composio') }),
-  z.object({ operation: z.literal('connect'), provider: z.string().default('composio'), toolkit: z.string().min(1).max(200), authConfigId: z.string().min(1).max(200), callbackUrl: z.string().url() }),
+  z.object({ operation: z.literal('connect'), provider: z.string().default('composio'), toolkit: z.string().min(1).max(200), authConfigId: z.string().min(1).max(200) }).strict(),
   appActionSchema.extend({ operation: z.literal('run') }),
 ]);
 export const inboxItemSchema = z.object({
@@ -772,7 +774,7 @@ export const inboxItemSchema = z.object({
     changelog: z.string().url().nullable() }).optional(),
   /** A memory dream report whose proposals this item accepts or approves. */
   dream: z.object({ id: z.string(), workspace: z.string(), proposals: z.number().int() }).optional(),
-  appAction: z.object({ provider: z.string(), accountId: z.string(), action: z.string() }).optional(),
+  appAction: z.object({ provider: z.string(), accountId: z.string(), action: z.string(), workspaceId: z.string().optional(), arguments: z.record(z.string(), z.unknown()).optional() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).optional(),
   mode: z.enum(['observe', 'act']),
   status: z.enum(['suggestion', 'running', 'ready', 'question', 'approval', 'blocked', 'failed', 'dismissed']),

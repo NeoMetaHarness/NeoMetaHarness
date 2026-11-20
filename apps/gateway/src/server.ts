@@ -111,6 +111,8 @@ export interface GatewayOptions {
   searchHttpClient?: { request(url: string, init: RequestInit): Promise<Response> };
   /** Only for isolated Boat tests. Production uses the default pinned TLS transport. */
   computerBoatHttp?: import('../../../extensions/computer-boat/src/provider.js').BoatHttp;
+  /** Trusted host injection for scripted connected-app providers; not configurable over RPC. */
+  appsHttpClient?: typeof fetch;
   /**
    * Server-mode HTTP sign-up. 'invite' (default; NEO_SIGNUP overrides): the first
    * account needs the one-time setup token, later ones a pending invitation.
@@ -277,7 +279,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   let gatewayPort = 0;
   const computerMcpBridge = new ComputerMcpBridge();
   const appsRegistry = new AppsRegistry();
-  const appsMcpBridge = new McpProjectionBridge();
+  const appsMcpBridge = new McpProjectionBridge({ requireWorkspace: true });
   const computers = new ComputerRegistry(
     () => {
       if (!gatewayPort) throw new Error('Computer Gateway is not listening');
@@ -346,6 +348,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     },
     computerMcpBridge,
     appsRegistry, appsMcpBridge,
+    appsHttpClient: options.appsHttpClient,
     computerLocalDriverFactory: options.computerLocalDriverFactory,
     hermesScreen: options.hermesScreenBridge,
     orgoClient: options.orgoClient,
@@ -481,6 +484,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       throw new ORPCError('SERVICE_UNAVAILABLE', { message: 'Superagent extension is disabled' });
     }
     return kernel.invokeRoute(path, 'RPC', body);
+  };
+  const appInboxView = (item: InboxItem, context: GatewayAuthContext): InboxItem | undefined => {
+    if (!item.appAction) return item;
+    if (!item.appAction.workspaceId || item.appAction.workspaceId !== context.workspaceId) return undefined;
+    if (context.role !== 'viewer') return { ...item, text: `${item.text}\nArguments: ${JSON.stringify(item.appAction.arguments ?? {})}` };
+    const { arguments: _arguments, ...appAction } = item.appAction;
+    return { ...item, appAction };
+  };
+  const appInboxScope = async (id: string, context: GatewayAuthContext) => {
+    const item = (await invokeInbox('list', {}) as InboxItem[]).find(item => item.id === id);
+    if (item?.appAction && !appInboxView(item, context)) throw new ORPCError('FORBIDDEN', { message: 'Inbox workspace access denied' });
+    return item;
   };
   const invokeMemory = async (route: string, body: unknown) => {
     const path = `/x/memory-local/${route}`;
@@ -680,8 +695,25 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     },
     apps: {
       toolkits: os.apps.toolkits.handler(async ({ input, context }) => { authorize('apps.toolkits', context); return appsRegistry.toolkits(input.provider); }),
-      connect: os.apps.connect.handler(async ({ input, context }) => { authorize('apps.connect', context); return appsRegistry.connect(input.provider, { ...input, userId: context.user!.id }); }),
-      run: os.apps.run.handler(async ({ input, context }) => { authorize('apps.run', context); return appsRegistry.run(input); }),
+      connect: os.apps.connect.handler(async ({ input, context }) => {
+        authorize('apps.connect', context);
+        if (!context.workspaceId) throw new ORPCError('FORBIDDEN');
+        return appsRegistry.connect(input.provider, { ...input, userId: context.user!.id, workspaceId: context.workspaceId, callbackUrl: `http://127.0.0.1:${gatewayPort}/` });
+      }),
+      run: os.apps.run.handler(async ({ input, context }) => {
+        authorize('apps.run', context);
+        if (!context.workspaceId) throw new ORPCError('FORBIDDEN');
+        return appsRegistry.run(input, { kind: 'user', userId: context.user!.id, workspaceId: context.workspaceId });
+      }),
+      grant: os.apps.grant.handler(async ({ input, context }) => {
+        authorize('apps.grant', context);
+        if (!context.workspaceId) throw new ORPCError('FORBIDDEN');
+        const actor = { kind: 'user' as const, userId: context.user!.id, workspaceId: context.workspaceId };
+        // Check ownership before assigning any scope to an engine profile.
+        await appsRegistry.grant(input.provider, input.accountId, input, input.enabled, actor,
+          () => appsMcpBridge.bindWorkspace(input.engine, input.profile, actor.workspaceId));
+        return { ok: true };
+      }),
     },
     agents: agentApi.router,
     inbox: {

@@ -689,8 +689,9 @@ class SuperagentService {
     if (this.closed) throw new Error('Inbox is disabled');
     const mode = this.acceptModes.get(); const now = Date.now();
     const item: InboxItem = { id: randomUUID(), botId: 'neo-apps', source: 'neo/apps',
-      text: `${input.summary}\nArguments: ${JSON.stringify(input.request.arguments)}`, appAction: {
-        provider: input.request.provider, accountId: input.request.accountId, action: input.request.action },
+      text: `${input.request.action}\nArgument keys: ${Object.keys(input.request.arguments).join(', ')}`, appAction: {
+        provider: input.request.provider, accountId: input.request.accountId, action: input.request.action,
+        workspaceId: input.actor.workspaceId, arguments: structuredClone(input.request.arguments) },
       mode: mode === 'observe' ? 'observe' : 'act', acceptMode: mode, destructive: input.destructive,
       status: mode === 'observe' ? 'suggestion' : 'approval', kind: mode === 'observe' ? 'suggestion' : 'approval',
       approval: { destructive: input.destructive, reason: 'Review this connected-app action before execution' }, createdAt: now, updatedAt: now };

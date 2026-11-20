@@ -21,6 +21,7 @@ export class AppsProjection implements McpProjection {
   ready(engine: McpEngine, profile: string, home: string, workspace: string): Promise<McpConfig> {
     const work = this.pending.then(async () => {
       if (!this.active) throw new Error('Apps MCP projection disabled');
+      if (!workspace || workspace === 'default' || !profile) throw new Error('Explicit Apps MCP workspace required');
       const key = this.key(engine, profile);
       const previous = this.consumers.get(key);
       if (previous && (previous.home !== home || previous.workspace !== workspace)) throw new Error('Apps MCP profile scope changed');
@@ -36,7 +37,7 @@ export class AppsProjection implements McpProjection {
         await mkdir(join(home, 'neo-apps-mcp'), { recursive: true });
         const temp = `${file}.${randomUUID()}.tmp`;
         try {
-          await writeFile(temp, JSON.stringify({ endpoint: `${this.gateway()}/internal/apps-mcp/action`, engine, profile, token }), { mode: 0o600 });
+          await writeFile(temp, JSON.stringify({ endpoint: `${this.gateway()}/internal/apps-mcp/action`, engine, profile, workspace, token }), { mode: 0o600 });
           await restrictPrivatePath(temp); await rename(temp, file);
         } finally { await rm(temp, { force: true }); }
         if (engine === 'hermes') await this.hermes(consumer, true);
@@ -85,18 +86,20 @@ export class AppsProjection implements McpProjection {
   async action(input: { authorization?: string; payload?: unknown }): Promise<{ status: number; body: unknown }> {
     const denied = { status: 403, body: { error: 'Apps MCP capability denied' } };
     if (!this.active || !input.payload || typeof input.payload !== 'object') return denied;
-    const payload = input.payload as { engine?: unknown; profile?: unknown; action?: unknown };
+    const payload = input.payload as { engine?: unknown; profile?: unknown; workspace?: unknown; action?: unknown };
     const match = /^Bearer ([a-f0-9]{64})$/.exec(input.authorization ?? '');
     if (!match || typeof payload.engine !== 'string' || typeof payload.profile !== 'string') return denied;
     const consumer = this.consumers.get(this.key(payload.engine as McpEngine, payload.profile));
-    if (!consumer || !timingSafeEqual(Buffer.from(match[1]!, 'hex'), Buffer.from(consumer.token, 'hex'))) return denied;
+    if (!consumer || payload.workspace !== consumer.workspace || !timingSafeEqual(Buffer.from(match[1]!, 'hex'), Buffer.from(consumer.token, 'hex'))) return denied;
+    const expected = await this.vault.get(this.scope(consumer), 'NEO_APPS_MCP_TOKEN');
+    if (!expected || !/^[a-f0-9]{64}$/.test(expected) || !timingSafeEqual(Buffer.from(match[1]!, 'hex'), Buffer.from(expected, 'hex'))) return denied;
     const action = appsOperationSchema.safeParse(payload.action);
     if (!action.success) return { status: 400, body: { error: 'Invalid apps operation' } };
     try {
       const args = action.data;
+      if (args.operation === 'connect') throw new Error('Connect accounts through the authenticated App, then grant this profile access');
       const body = args.operation === 'toolkits' ? await this.apps.toolkits(args.provider)
-        : args.operation === 'connect' ? await this.apps.connect(args.provider, { ...args, userId: `neo:${consumer.engine}:${consumer.profile}` })
-        : await this.apps.run(args);
+        : await this.apps.run(args, { kind: 'engine', engine: consumer.engine, profile: consumer.profile, workspaceId: consumer.workspace });
       return { status: 200, body };
     } catch { return { status: 403, body: { error: 'Apps operation unavailable or awaiting a valid policy service' } }; }
   }

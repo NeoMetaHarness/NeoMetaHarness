@@ -1,27 +1,33 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { randomUUID, createHash } from 'node:crypto';
-import type { AppsProvider, AppAction, AppAccount } from '@neometaharness/kernel';
-export type ComposioSettings = { endpoint?: string; apiKey?: string };
+import { createHash } from 'node:crypto';
+import type { AppsProvider, AppAction, AppsActor, AppEngineGrant } from '@neometaharness/kernel';
+import { AccountStore } from './accounts.js';
+import { createEgressFetch, validateEgressUrl } from '@neometaharness/kernel';
+export type ComposioSettings = { endpoint?: string; apiKey?: string; allowPrivateNetwork?: boolean };
+// Local policy, never expanded by remote tags. Unknown action identifiers require approval.
+const READ_ONLY = new Set(['GITHUB_GET_A_REPOSITORY', 'GITHUB_LIST_REPOSITORIES_FOR_THE_AUTHENTICATED_USER', 'GMAIL_FETCH_EMAILS', 'GMAIL_GET_EMAIL']);
 /** Composio v3.1 REST boundary: /toolkits, /connected_accounts, /tools/{slug}, /tools/execute/{slug}.
  * https://docs.composio.dev/reference/api-reference -- no vendor SDK or engine modifications. */
 export class ComposioProvider implements AppsProvider {
   readonly id = 'composio';
-  private accounts: AppAccount[] = [];
+  readonly accounts: AccountStore;
   private active = true;
   private readonly shutdown = new AbortController();
   private readonly approvals = new WeakMap<object, { fingerprint: string; version: string }>();
+  private readonly http: typeof fetch;
   constructor(private readonly settings: () => ComposioSettings, private readonly file: string,
-    private readonly http: typeof fetch = fetch) {}
-  async load() { try { this.accounts = JSON.parse(await readFile(this.file, 'utf8')); if (!Array.isArray(this.accounts)) throw Error(); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Invalid connected account store'); } }
+    http?: typeof fetch, private readonly callbackOrigin: () => string = () => { throw new Error('Neo callback origin required'); }) {
+    this.accounts = new AccountStore(file); this.http = createEgressFetch(() => this.settings().allowPrivateNetwork === true, http);
+  }
+  load() { return this.accounts.load(); }
+  async authorize(input: AppAction, actor: AppsActor) { this.accounts.authorize(input.accountId, actor); }
+  grant(accountId: string, grant: AppEngineGrant, enabled: boolean, actor: AppsActor) { return this.accounts.grant(accountId, grant, enabled, actor); }
   private config() {
     if (!this.active) throw new Error('Composio is disabled');
     const settings = this.settings();
-    const url = new URL(settings.endpoint || 'https://backend.composio.dev');
-    if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(url.hostname))) || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('Invalid Composio endpoint');
+    const url = validateEgressUrl(settings.endpoint || 'https://backend.composio.dev', settings.allowPrivateNetwork === true);
+    if (url.search || url.pathname !== '/') throw new Error('Invalid Composio endpoint');
     if (!settings.apiKey) throw new Error('Configure the Composio API key in extension settings');
-    return { endpoint: url.origin, apiKey: settings.apiKey };
+    return { endpoint: url.origin, apiKey: settings.apiKey, allowPrivateNetwork: settings.allowPrivateNetwork === true };
   }
   private fingerprint() { return createHash('sha256').update(JSON.stringify(this.config())).digest('hex'); }
   private async request(path: string, body?: unknown, signal?: AbortSignal): Promise<any> {
@@ -47,28 +53,27 @@ export class ComposioProvider implements AppsProvider {
     }
     throw new Error('Composio toolkit pagination exceeded its safety limit');
   }
-  async connect(input: { toolkit: string; authConfigId: string; userId: string; callbackUrl: string }) {
+  async connect(input: { toolkit: string; authConfigId: string; userId: string; workspaceId: string; callbackUrl: string }) {
+    if (!input.userId || !input.workspaceId || input.workspaceId === 'default') throw new Error('Apps principal required');
     const callback = new URL(input.callbackUrl);
-    if ((callback.protocol !== 'https:' && !(callback.protocol === 'http:' && callback.hostname === '127.0.0.1')) || callback.username || callback.password) throw new Error('Invalid OAuth callback URL');
+    if (callback.href !== new URL('/', this.callbackOrigin()).href) throw new Error('OAuth callback must be the Neo Gateway origin');
     // Resolve toolkit membership on the service, never trust a caller-supplied account id.
     const auth = await this.request('auth_configs/' + encodeURIComponent(input.authConfigId));
     if (auth.toolkit?.slug !== input.toolkit) throw new Error('Auth configuration does not match toolkit');
-    const data = await this.request('connected_accounts/link', { auth_config_id: input.authConfigId, user_id: input.userId, callback_url: input.callbackUrl });
+    const entity = createHash('sha256').update(JSON.stringify([input.workspaceId, input.userId])).digest('hex');
+    const data = await this.request('connected_accounts/link', { auth_config_id: input.authConfigId, user_id: `neo-${entity}`, callback_url: input.callbackUrl });
     const url = new URL(data.redirect_url);
     if (url.protocol !== 'https:' || url.username || url.password || typeof data.connected_account_id !== 'string' || !data.connected_account_id) throw new Error('Invalid Composio OAuth response');
     const account = { id: data.connected_account_id, toolkit: input.toolkit };
-    this.accounts.push(account); await mkdir(dirname(this.file), { recursive: true });
-    const pending = this.file + '.' + randomUUID() + '.tmp';
-    try { await writeFile(pending, JSON.stringify(this.accounts), { mode: 0o600 }); await rename(pending, this.file); }
-    finally { await rm(pending, { force: true }); }
+    await this.accounts.add(input.workspaceId, { ...account, ownerUserId: input.userId });
     return { ...account, redirectUrl: url.href };
   }
-  async describe(input: AppAction) {
+  async describe(input: AppAction, actor: AppsActor) {
     const fingerprint = this.fingerprint();
-    const account = this.accounts.find(a => a.id === input.accountId); if (!account) throw new Error('Account was not connected through Neo');
+    const account = this.accounts.authorize(input.accountId, actor);
     const tool = await this.request('tools/' + encodeURIComponent(input.action));
     if (tool.slug !== input.action || tool.toolkit?.slug !== account.toolkit) throw new Error('Action does not match connected toolkit');
-    const destructive = !Array.isArray(tool.tags) || !tool.tags.includes('readOnlyHint') || tool.tags.includes('destructiveHint');
+    const destructive = !READ_ONLY.has(input.action) || (Array.isArray(tool.tags) && tool.tags.includes('destructiveHint'));
     if (typeof tool.version !== 'string' || !tool.version) throw new Error('Action version is missing');
     if (fingerprint !== this.fingerprint()) throw new Error('Composio settings changed during review');
     this.approvals.set(input, { fingerprint, version: tool.version });

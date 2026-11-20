@@ -7,6 +7,18 @@ export interface ComputerMcpProjection {
   removeAll(): Promise<void>;
 }
 export class McpProjectionBridge {
+  private readonly workspaces = new Map<string, string>();
+  private readonly unscoped = new Map<string, { engine: ComputerEngine; profile: string; home: string }>();
+  constructor(private readonly options: { requireWorkspace?: boolean } = {}) {}
+  async bindWorkspace(engine: ComputerEngine, profile: string, workspace: string) {
+    if (!workspace || workspace === 'default' || !profile) throw new Error('Explicit MCP workspace required');
+    const key = JSON.stringify([engine, profile]);
+    const previous = this.workspaces.get(key) ?? this.consumers.get(key)?.workspace;
+    if (previous && previous !== workspace) throw new Error('MCP profile belongs to another workspace');
+    this.workspaces.set(key, workspace);
+    const waiting = this.unscoped.get(key);
+    if (waiting) { this.unscoped.delete(key); await this.ready(engine, profile, waiting.home, workspace); }
+  }
   private projection?: ComputerMcpProjection;
   private readonly consumers = new Map<string, { engine: ComputerEngine; profile: string; home: string; workspace: string }>();
   async attach(projection: ComputerMcpProjection) {
@@ -19,14 +31,23 @@ export class McpProjectionBridge {
     if (this.projection !== projection) return;
     this.projection = undefined; await projection.removeAll();
   }
-  async ready(engine: ComputerEngine, profile: string, home: string, workspace: string): Promise<ComputerMcpConfig | undefined> {
+  async ready(engine: ComputerEngine, profile: string, home: string, workspace?: string): Promise<ComputerMcpConfig | undefined> {
+    const key = JSON.stringify([engine, profile]);
+    if (this.options.requireWorkspace) {
+      workspace ??= this.workspaces.get(key);
+      if (!workspace || workspace === 'default') { this.unscoped.set(key, { engine, profile, home }); return undefined; }
+      await this.bindWorkspace(engine, profile, workspace);
+    }
+    workspace ??= 'default';
     this.consumers.set(JSON.stringify([engine, profile, workspace]), { engine, profile, home, workspace });
     return this.projection?.ready(engine, profile, home, workspace);
   }
   async forgetEngine(engine: ComputerEngine) {
+    for (const [key, value] of this.unscoped) if (value.engine === engine) this.unscoped.delete(key);
     for (const value of [...this.consumers.values()]) if (value.engine === engine) await this.forget(engine, value.profile, value.workspace);
   }
   async forget(engine: ComputerEngine, profile: string, workspace?: string) {
+    this.unscoped.delete(JSON.stringify([engine, profile]));
     for (const [key, value] of [...this.consumers]) {
       if (value.engine !== engine || value.profile !== profile || (workspace && value.workspace !== workspace)) continue;
       this.consumers.delete(key);

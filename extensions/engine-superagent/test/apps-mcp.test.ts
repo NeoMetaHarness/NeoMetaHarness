@@ -30,18 +30,21 @@ class ScriptedApps extends LlmAdapter {
     yield { type: 'finish', reason: { kind: 'stop' } };
   }
 }
-const home = await mkdtemp(join(tmpdir(), 'neo-worker-apps-')); const registry = new AppsRegistry(); const bridge = new McpProjectionBridge();
+const home = await mkdtemp(join(tmpdir(), 'neo-worker-apps-')); const registry = new AppsRegistry(); const bridge = new McpProjectionBridge({ requireWorkspace: true });
 let executed = 0;
-const detach = registry.register({ id: 'fake', toolkits: async () => [{ id: 'fake', name: 'Fake app' }], connect: async () => ({ id: 'fake-account', toolkit: 'fake', redirectUrl: 'https://fake.test/auth' }), describe: async request => ({ destructive: request.action === 'DELETE', summary: 'Fake action' }), execute: async () => { executed++; return { output: 'fake-result' }; } });
+const detach = registry.register({ id: 'fake', authorize: async (_request, actor) => { assert.equal(actor.workspaceId, 'workspace-test'); assert.equal(actor.kind, 'engine'); }, toolkits: async () => [{ id: 'fake', name: 'Fake app' }], connect: async () => ({ id: 'fake-account', toolkit: 'fake', redirectUrl: 'https://fake.test/auth' }), describe: async request => ({ destructive: request.action === 'DELETE', summary: 'Fake action' }), execute: async () => { executed++; return { output: 'fake-result' }; } });
 const gate = registry.attachGate({ async submit(input) { return input.destructive ? { status: 'approval', inboxId: 'fake-inbox' } : { status: 'completed', result: await input.execute() }; } });
 let projection: AppsProjection;
 const server = createServer(async (req, res) => { const chunks = []; for await (const chunk of req) chunks.push(chunk); const result = await projection.action({ authorization: req.headers.authorization, payload: JSON.parse(Buffer.concat(chunks).toString()) }); res.writeHead(result.status, { 'content-type': 'application/json' }).end(JSON.stringify(result.body)); });
 await new Promise<void>(done => server.listen(0, '127.0.0.1', done)); const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-projection = new AppsProjection({ put: async () => {}, delete: async () => true } as unknown as VaultService, registry, () => base);
+const secrets = new Map<string, string>();
+projection = new AppsProjection({ put: async (scope: unknown, name: string, value: string) => { secrets.set(JSON.stringify([scope, name]), value); }, get: async (scope: unknown, name: string) => secrets.get(JSON.stringify([scope, name])), delete: async (scope: unknown, name: string) => secrets.delete(JSON.stringify([scope, name])) } as unknown as VaultService, registry, () => base);
 const models: ModelFactory = async (_role, input) => ({ adapter: new ScriptedApps(input.text === 'delete'), provider: `fake-${randomUUID()}`, model: 'scripted' });
 const host = new PresetWorkerHost(models, undefined, undefined, bridge);
 try {
-  await bridge.attach(projection); await host.start(home, base);
+  assert.equal(await bridge.ready('superagent', 'no-owner', home + '-unscoped'), undefined);
+  assert.equal(secrets.size, 0, 'Unscoped profiles never mint a default-workspace token');
+  await bridge.attach(projection); await bridge.bindWorkspace('superagent', 'fake-bot', 'workspace-test'); await host.start(home, base);
   const read = await host.delegate('fake-bot', 'read'); assert.match(read.summary, /fake-result/); assert.equal(executed, 1);
   const pending = await host.delegate('fake-bot', 'delete'); assert.equal(pending.kind, 'question'); assert.match(pending.question!, /Nothing has executed/); assert.equal(executed, 1);
   console.log('APPS_PRESET_WORKER PASS pinned_DSH_loop=true real_MCP=true multiple_tools=true final_result=true approval_question=true no_destructive_execution=true');

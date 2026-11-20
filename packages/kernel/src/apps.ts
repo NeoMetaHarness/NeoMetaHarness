@@ -2,14 +2,18 @@
 export type AppToolkit = { id: string; name: string };
 export type AppAccount = { id: string; toolkit: string };
 export type AppAction = { provider: string; accountId: string; action: string; arguments: Record<string, unknown> };
+export type AppsActor = { workspaceId: string } & ({ kind: 'user'; userId: string } | { kind: 'engine'; engine: 'hermes' | 'dsh' | 'superagent'; profile: string });
+export type AppEngineGrant = { engine: 'hermes' | 'dsh' | 'superagent'; profile: string };
 export interface AppsProvider {
   id: string;
   toolkits(): Promise<AppToolkit[]>;
-  connect(input: { toolkit: string; authConfigId: string; userId: string; callbackUrl: string }): Promise<AppAccount & { redirectUrl: string }>;
-  describe(input: AppAction): Promise<{ destructive: boolean; summary: string }>;
-  execute(input: AppAction, signal: AbortSignal): Promise<unknown>;
+  connect(input: { toolkit: string; authConfigId: string; userId: string; workspaceId: string; callbackUrl: string }): Promise<AppAccount & { redirectUrl: string }>;
+  authorize(input: AppAction, actor: AppsActor): Promise<void>;
+  grant?(accountId: string, grant: AppEngineGrant, enabled: boolean, actor: AppsActor): Promise<void>;
+  describe(input: AppAction, actor: AppsActor): Promise<{ destructive: boolean; summary: string }>;
+  execute(input: AppAction, signal: AbortSignal, actor: AppsActor): Promise<unknown>;
 }
-export type AppApproval = { request: AppAction; destructive: boolean; summary: string; execute(): Promise<unknown> };
+export type AppApproval = { request: AppAction; actor: AppsActor; destructive: boolean; summary: string; execute(): Promise<unknown> };
 export interface AppsApprovalGate { submit(input: AppApproval): Promise<unknown> }
 export class AppsRegistry {
   private readonly providers = new Map<string, AppsProvider>();
@@ -24,17 +28,29 @@ export class AppsRegistry {
   private provider(id: string) { const value = this.providers.get(id); if (!value) throw new Error('Apps provider disabled or unavailable'); return value; }
   async toolkits(provider: string) { return this.provider(provider).toolkits(); }
   async connect(provider: string, input: Parameters<AppsProvider['connect']>[0]) { return this.provider(provider).connect(input); }
-  async run(request: AppAction) {
+  async grant(provider: string, accountId: string, grant: AppEngineGrant, enabled: boolean, actor: AppsActor, beforeGrant?: () => Promise<void>) {
+    const target = this.provider(provider); if (!target.grant) throw new Error('Apps provider does not support grants');
+    if (actor.kind !== 'user') throw new Error('Only account owners can grant access');
+    await target.authorize({ provider, accountId, action: 'grant', arguments: {} }, actor);
+    if (enabled) await beforeGrant?.();
+    await target.grant(accountId, grant, enabled, actor);
+  }
+  async run(request: AppAction, actor: AppsActor) {
+    if (!actor?.workspaceId || actor.workspaceId === 'default' || (actor.kind === 'user' ? !actor.userId : !actor.profile)) throw new Error('Apps principal required');
     const copy = structuredClone(request);
+    const principal = structuredClone(actor);
     const provider = this.provider(copy.provider);
     const gate = this.gate; if (!gate) throw new Error('Apps actions require an enabled Inbox approval service');
-    const detail = await provider.describe(copy);
+    await provider.authorize(copy, principal);
+    const detail = await provider.describe(copy, principal);
     const serialized = JSON.stringify(copy);
-    return gate.submit({ request: copy, ...detail, execute: async () => {
-      if (JSON.stringify(copy) !== serialized) throw new Error('Apps action changed after approval');
+    const review = structuredClone(copy);
+    return gate.submit({ request: review, actor: structuredClone(principal), ...detail, execute: async () => {
+      if (JSON.stringify(review) !== serialized || JSON.stringify(copy) !== serialized) throw new Error('Apps action changed after approval');
       if (this.providers.get(copy.provider) !== provider || this.gate !== gate) throw new Error('Apps action approval expired; request it again');
+      await provider.authorize(copy, principal);
       const controller = new AbortController(); this.pending.set(controller, provider);
-      try { return await provider.execute(copy, controller.signal); }
+      try { return await provider.execute(copy, controller.signal, principal); }
       finally { this.pending.delete(controller); }
     } });
   }

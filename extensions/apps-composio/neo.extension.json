@@ -22,7 +22,8 @@
         "secret": true,
         "title": "Composio API key",
         "description": "Stored encrypted in the vault; never projected to engines."
-      }
+      },
+      "allowPrivateNetwork": { "type": "boolean", "default": false, "title": "Allow private Composio networks", "description": "Admin-only egress exception. HTTPS is still required." }
     }
   }
 }

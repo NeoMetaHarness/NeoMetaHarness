@@ -18,6 +18,7 @@ export function destructiveToolApproval(tool: string, detail: string): boolean {
 /** Shared resources require deployment ownership on a server. Keep the original desktop roles. */
 const DEPLOYMENT_PROCEDURE_DESKTOP_POLICY: Readonly<Record<string, PolicyLevel>> = {
   // Hermes runtime, profiles, and dashboard
+
   'x.engine-hermes.skills.list': 'viewer',
   'x.engine-hermes.skills.hub': 'viewer',
   'x.engine-hermes.skills.preview': 'viewer',
