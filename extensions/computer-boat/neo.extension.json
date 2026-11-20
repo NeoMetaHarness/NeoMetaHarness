@@ -8,7 +8,8 @@
     "type": "object",
     "properties": {
       "baseUrl": { "type": "string", "title": "Boat API base URL", "default": "https://boat.dev/api/v1" },
-      "apiKey": { "type": "string", "title": "Boat API key", "secret": true }
+      "apiKey": { "type": "string", "title": "Boat API key", "secret": true },
+      "allowPrivateNetwork": { "type": "boolean", "title": "Allow private network hosts (administrator only)", "default": false }
     }
   }
 }

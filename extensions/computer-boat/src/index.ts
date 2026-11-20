@@ -1,21 +1,24 @@
 import { defineExtension } from '@neometaharness/kernel';
 import type { ComputerRegistry } from '@neometaharness/computers';
-import { BoatComputerProvider, type BoatSettings } from './provider.js';
+import { BoatComputerProvider, type BoatSettings, type BoatHttp } from './provider.js';
+import type { EgressResolver } from '@neometaharness/kernel';
 
 export default defineExtension({
   activate(ctx) {
     const computers = ctx.inject<ComputerRegistry>('computers');
     const settings = ctx.inject<BoatSettings>('settings');
     if (!computers || !settings) throw new Error('Boat requires computer registry and settings');
-    const provider = new BoatComputerProvider(() => settings);
+    const provider = new BoatComputerProvider(() => settings,
+      ctx.inject<BoatHttp>('computerBoatHttp') ?? fetch,
+      ctx.inject<EgressResolver>('computerBoatResolveHost'));
     ctx.effect(() => {
       const unregister = computers.registerProvider('computer-boat', provider);
       return async () => { await unregister(); await provider.close(); };
     });
     ctx.route('snapshot', async ({ body }) => {
-      const id = (body as { id?: unknown } | undefined)?.id;
-      if (typeof id !== 'string') throw new Error('Managed computer ID required');
-      return provider.saveSnapshot(id);
+      const { id, workspaceId } = (body as { id?: unknown; workspaceId?: unknown } | undefined) ?? {};
+      if (typeof id !== 'string' || typeof workspaceId !== 'string') throw new Error('Authenticated workspace and managed computer required');
+      return provider.saveSnapshot(id, workspaceId);
     });
     ctx.health(() => ({ ok: true }));
   },

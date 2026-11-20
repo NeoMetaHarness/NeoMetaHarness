@@ -7,6 +7,8 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
+import { approveHttpsEgress } from '@neometaharness/kernel';
+import { BoatComputerProvider } from '../../../extensions/computer-boat/src/provider.js';
 import { startGateway } from '../src/server.js';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -50,8 +52,15 @@ try {
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Boat fake listener unavailable');
+  const fakeBoatHttp = (url: string, init: RequestInit) => {
+    assert.equal(new URL(url).host, 'fake-boat.example');
+    assert.equal(init.redirect, 'error', 'Boat must refuse HTTP redirects');
+    assert.ok(init.signal, 'Boat requests must have a timeout signal');
+    return fetch(`http://127.0.0.1:${address.port}${new URL(url).pathname}`, init);
+  };
   gateway = await startGateway({ databaseFile: join(root, 'neo.sqlite'), dataDir: root,
-    extensionsDir: resolve('..', '..', 'extensions'), mode: 'desktop' });
+    extensionsDir: resolve('..', '..', 'extensions'), mode: 'desktop',
+    computerBoatHttp: fakeBoatHttp, computerBoatResolveHost: async () => ['8.8.8.8'] });
   const base = `http://127.0.0.1:${gateway.port}`;
   const token = gateway.desktopToken;
   assert.ok(token);
@@ -59,7 +68,7 @@ try {
   const anonymous = createORPCClient<Client>(new RPCLink({ url: base }));
   const workspaceId = (await gateway.auth.kysely.selectFrom('organization').select('id').executeTakeFirstOrThrow()).id;
   const settings = await rpc.settings.set({ extension: 'computer-boat', values: {
-    baseUrl: `http://127.0.0.1:${address.port}/api/v1`, apiKey: 'fake-boat-api-key',
+    baseUrl: 'https://fake-boat.example/api/v1', apiKey: 'fake-boat-api-key',
   } });
   assert.deepEqual(settings.values.apiKey, { set: true }, 'key is stored in vault and redacted from settings');
   assert.equal((await rpc.extensions.enable({ id: 'computer-boat' })).status, 'running');
@@ -111,9 +120,73 @@ try {
   assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).status, 200);
   assert.ok(calls.every(call => call.authorized), 'only isolated fake server receives key');
   assert.ok(calls.every(call => !JSON.stringify(call.body).includes('fake-boat-api-key')), 'key never travels in bodies');
+  const separateProvider = new BoatComputerProvider(
+    () => ({ baseUrl: 'https://fake-boat.example/api/v1', apiKey: 'fake-boat-api-key' }),
+    fakeBoatHttp, async () => ['8.8.8.8'],
+  );
+  await separateProvider.provision({ id: 'neo-0123456789abcdef01234567' }, { workspaceId: 'workspace-A' });
+  await assert.rejects(separateProvider.saveSnapshot('neo-0123456789abcdef01234567', 'workspace-B'),
+    /Unknown Boat computer in workspace/, 'other workspace cannot save the source snapshot');
+  await assert.rejects(separateProvider.provision({ id: 'neo-0123456789abcdef01234568', forkOf: 'neo-0123456789abcdef01234567' }, { workspaceId: 'workspace-B' }),
+    /same workspace/, 'other workspace cannot fork the source');
+  assert.equal(calls.filter(call => call.path === '/api/v1/saved-snapshots').length, 1);
+  await separateProvider.terminate('neo-0123456789abcdef01234567');
+  await assert.rejects(approveHttpsEgress('http://fake-boat.example', false, async () => ['8.8.8.8']), /HTTPS/);
+  for (const address of ['127.0.0.1', '10.1.1.1', '172.16.2.3', '192.168.2.3', '169.254.169.254', '::1', 'fc00::1', 'fe80::1']) {
+    await assert.rejects(approveHttpsEgress('https://fake-boat.example', false, async () => [address]),
+      /forbidden/, `blocked egress address ${address}`);
+  }
+  assert.ok(await approveHttpsEgress('https://fake-boat.example', true, async () => ['192.168.1.2']));
   console.log('P3-11 PASS authenticated=true vaulted-settings=true fake-boat-server=true provision+fork+snapshot=true capture+input=true lease+kill+audit-path=true disable-cleanup=true siblings-healthy=true');
 } finally {
   if (gateway) await gateway.close();
   await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done()));
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
+// Authorization precedes extension availability. A viewer sees 403 in both states.
+const authRoot = await mkdtemp(join(tmpdir(), 'neo-p311-auth-'));
+const authGateway = await startGateway({
+  databaseFile: join(authRoot, 'neo.sqlite'), dataDir: authRoot,
+  extensionsDir: resolve('..', '..', 'extensions'), mode: 'server', signup: 'open',
+});
+try {
+  const authBase = `http://127.0.0.1:${authGateway.port}`;
+  const signup = async (email: string) => {
+    const response = await fetch(`${authBase}/auth/sign-up/email`, { method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, name: email, password: 'Password!12345' }) });
+    assert.equal(response.status, 200);
+    return response.json() as Promise<{ user: { id: string } }>;
+  };
+  await signup('boat-owner@neo.local');
+  const viewer = await signup('boat-viewer@neo.local');
+  const login = async (email: string) => {
+    const response = await fetch(`${authBase}/auth/sign-in/email`, { method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password: 'Password!12345' }) });
+    assert.equal(response.status, 200);
+    return (await response.json() as { token: string }).token;
+  };
+  const ownerToken = await login('boat-owner@neo.local');
+  const viewerToken = await login('boat-viewer@neo.local');
+  const created = await fetch(`${authBase}/auth/organization/create`, { method: 'POST',
+    headers: { authorization: `Bearer ${ownerToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Boat Workspace', slug: 'boat-workspace' }) });
+  assert.equal(created.status, 200);
+  const workspace = await created.json() as { id: string };
+  await authGateway.auth.api.addMember({ body: {
+    organizationId: workspace.id, userId: viewer.user.id, role: 'viewer',
+  }, headers: new Headers({ authorization: `Bearer ${ownerToken}` }) });
+  const ownerRpc = createORPCClient<Client>(new RPCLink({ url: authBase, headers: { authorization: `Bearer ${ownerToken}` } }));
+  const snapshot = () => fetch(`${authBase}/x/computer-boat/snapshot`, { method: 'POST', headers: {
+    authorization: `Bearer ${viewerToken}`, 'content-type': 'application/json',
+  }, body: JSON.stringify({ id: 'neo-0123456789abcdef01234567' }) });
+  assert.equal((await snapshot()).status, 403, 'viewer receives 403 with Boat disabled');
+  await ownerRpc.extensions.enable({ id: 'computer-boat' });
+  assert.equal((await snapshot()).status, 403, 'viewer receives 403 with Boat enabled');
+  console.log('P3-11 AUTH PASS viewer=403 enabled+disabled');
+} finally {
+  await authGateway.close();
+  await rm(authRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

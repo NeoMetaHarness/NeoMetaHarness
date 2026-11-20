@@ -1,22 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { Capture, Computer, ComputerAttachContext, ComputerInput, ComputerProvider, LeaseHolder } from '@neometaharness/computers';
+import { approveHttpsEgress, systemEgressResolver, type EgressResolver } from '@neometaharness/kernel';
+import { Agent } from 'undici';
 
-export interface BoatSettings { baseUrl?: string; apiKey?: string }
+export interface BoatSettings { baseUrl?: string; apiKey?: string; allowPrivateNetwork?: boolean }
 export type BoatHttp = (url: string, init: RequestInit) => Promise<Response>;
-type Instance = { sandboxId: string; workspaceId: string; url: string; key: string; blocked: boolean; current?: AbortController };
+type Instance = { sandboxId: string; workspaceId: string; url: string; key: string; blocked: boolean; dispatcher?: Agent; current?: AbortController };
 const managedId = /^neo-[0-9a-f]{24}$/;
 const sandboxId = /^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
 const sizes = new Set(['small', 'default', 'large', 'xlarge']);
 const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-
-function apiBase(value: string): string {
-  const url = new URL(value);
-  if (url.username || url.password || url.search || url.hash ||
-      (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) {
-    throw new Error('Boat API URL requires HTTPS or local loopback HTTP');
-  }
-  return url.href.replace(/\/$/, '');
-}
 
 /** Encode an argument-only Python program so input text never becomes shell syntax. */
 function pythonCommand(program: string): string {
@@ -49,17 +42,25 @@ export class BoatComputerProvider implements ComputerProvider {
   private readonly instances = new Map<string, Instance>();
   private disposed = false;
 
-  constructor(private readonly settings: () => BoatSettings, private readonly http: BoatHttp = fetch) {}
+  constructor(
+    private readonly settings: () => BoatSettings,
+    private readonly http: BoatHttp = fetch,
+    private readonly resolveHost: EgressResolver = systemEgressResolver,
+  ) {}
 
   attach(): never { throw new Error('Boat computers must be created through computers.provision'); }
 
   private async request<T>(instance: Instance, method: string, path: string, body?: object, signal?: AbortSignal, idempotency?: string): Promise<T> {
-    const response = await this.http(instance.url + path, {
+    const request: RequestInit = {
       method,
+      redirect: 'error',
       headers: { Authorization: `Bearer ${instance.key}`, ...(body ? { 'Content-Type': 'application/json' } : {}), ...(idempotency ? { 'Idempotency-Key': idempotency } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
-      ...(signal ? { signal } : {}),
-    });
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+    };
+    // Production TLS keeps the original hostname for certificate validation and pins the vetted DNS answer.
+    const options = instance.dispatcher ? { ...request, dispatcher: instance.dispatcher } as unknown as RequestInit : request;
+    const response = await this.http(instance.url + path, options);
     if (!response.ok) throw new Error(`Boat API ${method} ${path.split('?')[0]} returned HTTP ${response.status}`);
     return await response.json() as T;
   }
@@ -69,8 +70,15 @@ export class BoatComputerProvider implements ComputerProvider {
     if (!context?.workspaceId || typeof spec.id !== 'string' || !managedId.test(spec.id)) throw new Error('Authenticated managed computer required');
     const config = this.settings();
     if (!config.apiKey || typeof config.apiKey !== 'string') throw new Error('Boat API key must be configured in extension settings');
-    const url = apiBase(config.baseUrl ?? 'https://boat.dev/api/v1');
-    const instance: Instance = { sandboxId: '', workspaceId: context.workspaceId, url, key: config.apiKey, blocked: false };
+    const endpoint = await approveHttpsEgress(config.baseUrl ?? 'https://boat.dev/api/v1',
+      config.allowPrivateNetwork === true, this.resolveHost);
+    const instance: Instance = { sandboxId: '', workspaceId: context.workspaceId, url: endpoint.url,
+      key: config.apiKey, blocked: false };
+    if (this.http === fetch) {
+      instance.dispatcher = new Agent({ connect: {
+        lookup: (_hostname, _options, callback) => callback(null, endpoint.address, endpoint.family),
+      } });
+    }
     const options: Record<string, unknown> = { labels: { 'neo-computer': spec.id } };
     if (spec.type !== undefined) {
       if (typeof spec.type !== 'string' || !sizes.has(spec.type)) throw new Error('Invalid Boat sandbox size');
@@ -81,13 +89,18 @@ export class BoatComputerProvider implements ComputerProvider {
       options.ttlSeconds = spec.ttlSeconds;
     }
     const source = typeof spec.forkOf === 'string' ? this.instances.get(spec.forkOf) : undefined;
-    if (spec.forkOf !== undefined && (!source || source.workspaceId !== context.workspaceId || source.url !== url)) {
+    if (spec.forkOf !== undefined && (!source || source.workspaceId !== context.workspaceId || source.url !== endpoint.url)) {
       throw new Error('Boat fork source must be a managed computer in the same workspace and API');
     }
     const path = source ? `/sandboxes/${source.sandboxId}/fork` : '/sandboxes';
-    const response = await this.request<{ sandbox?: { id?: string }; id?: string }>(instance, 'POST', path, options, undefined, spec.id);
+    let response: { sandbox?: { id?: string }; id?: string };
+    try { response = await this.request(instance, 'POST', path, options, undefined, spec.id); }
+    catch (error) { await instance.dispatcher?.close(); throw error; }
     const remote = response.sandbox?.id ?? response.id;
-    if (!remote || !sandboxId.test(remote)) throw new Error('Boat returned invalid sandbox ID');
+    if (!remote || !sandboxId.test(remote)) {
+      await instance.dispatcher?.close();
+      throw new Error('Boat returned invalid sandbox ID');
+    }
     instance.sandboxId = remote;
     if (this.disposed) { await this.request(instance, 'DELETE', `/sandboxes/${remote}`).catch(() => {}); throw new Error('Boat provider disabled'); }
     this.instances.set(spec.id, instance);
@@ -107,6 +120,7 @@ export class BoatComputerProvider implements ComputerProvider {
       screen: async () => {
         const result = await this.request<{ desktopUrl?: string; provisioning?: boolean }>(instance, 'POST', `${path}/desktop`);
         if (result.provisioning || !result.desktopUrl) throw new Error('Boat desktop is still provisioning');
+        // This is a bearer-capability WebRTC URL. Only the internal viewer consumes screen(); never publish it on a route.
         return { protocol: 'webrtc', url: result.desktopUrl };
       },
       lease: (holder: LeaseHolder) => { instance.blocked = holder === 'human'; if (instance.blocked) instance.current?.abort(); },
@@ -132,9 +146,11 @@ export class BoatComputerProvider implements ComputerProvider {
     };
   }
 
-  async saveSnapshot(id: string): Promise<unknown> {
+  async saveSnapshot(id: string, workspaceId: string): Promise<unknown> {
     const instance = this.instances.get(id);
-    if (!instance || this.disposed) throw new Error('Unknown Boat computer');
+    if (!workspaceId || !instance || instance.workspaceId !== workspaceId || this.disposed) {
+      throw new Error('Unknown Boat computer in workspace');
+    }
     const name = `neo-${randomUUID()}`;
     return this.request(instance, 'POST', '/saved-snapshots', { sandboxId: instance.sandboxId, name });
   }
@@ -146,7 +162,8 @@ export class BoatComputerProvider implements ComputerProvider {
     instance.current?.abort();
     this.instances.delete(id);
     // Stop saves a snapshot for an affordable handover. Kill permanently deletes the sandbox.
-    await this.request(instance, force ? 'DELETE' : 'POST', `/sandboxes/${instance.sandboxId}${force ? '' : '/stop'}`);
+    try { await this.request(instance, force ? 'DELETE' : 'POST', `/sandboxes/${instance.sandboxId}${force ? '' : '/stop'}`); }
+    finally { await instance.dispatcher?.close(); }
   }
   release(id: string): Promise<void> { return this.cleanup(id, false); }
   terminate(id: string): Promise<void> { return this.cleanup(id, true); }

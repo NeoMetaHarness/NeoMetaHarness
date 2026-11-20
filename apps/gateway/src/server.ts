@@ -108,6 +108,9 @@ export interface GatewayOptions {
   voiceHttpClient?: { request(url: string, init: RequestInit): Promise<Response> };
   /** Injectable X Search transport for scripted provider tests. */
   searchHttpClient?: { request(url: string, init: RequestInit): Promise<Response> };
+  /** Only for isolated Boat tests. Production uses the default pinned TLS transport. */
+  computerBoatHttp?: import('../../../extensions/computer-boat/src/provider.js').BoatHttp;
+  computerBoatResolveHost?: import('@neometaharness/kernel').EgressResolver;
   /**
    * Server-mode HTTP sign-up. 'invite' (default; NEO_SIGNUP overrides): the first
    * account needs the one-time setup token, later ones a pending invitation.
@@ -343,6 +346,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     computerLocalDriverFactory: options.computerLocalDriverFactory,
     hermesScreen: options.hermesScreenBridge,
     orgoClient: options.orgoClient,
+    computerBoatHttp: options.computerBoatHttp,
+    computerBoatResolveHost: options.computerBoatResolveHost,
     vault,
     auth,
     memoryRecords: (db as any).memories,
