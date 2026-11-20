@@ -15,16 +15,10 @@ import { XSearchService } from '../src/index.js';
 const root = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const home = await mkdtemp(join(tmpdir(), 'neo-x-search-'));
 const apiKey = 'FAKE_XAI_KEY_FOR_TEST_9876';
-const { assertSafeProviderUrl, createSafeProviderClient } = await import('@neometaharness/egress');
-await assertSafeProviderUrl(new URL('https://provider.example'), { resolveHost: async () => ['8.8.8.8'] });
-for (const blockedIp of ['127.0.0.1', '169.254.169.254', '10.0.0.8', '::1', 'fe80::1', '::ffff:127.0.0.1']) {
-  await assert.rejects(assertSafeProviderUrl(new URL('https://provider.example'), { resolveHost: async () => [blockedIp] }), /Private provider endpoint is disabled/);
-}
-const poisonedOfficial = createSafeProviderClient({ resolveHost: async () => ['169.254.169.254'] });
-try {
-  await assert.rejects(poisonedOfficial.request('https://api.x.ai/v1/responses', { method: 'POST' }),
-    /fetch failed|Private provider endpoint is disabled/);
-} finally { await poisonedOfficial.close(); }
+const { validateEgressUrl } = await import('@neometaharness/egress');
+assert.equal(validateEgressUrl('https://api.x.ai').host, 'api.x.ai');
+assert.throws(() => validateEgressUrl('https://169.254.169.254'), /denied/);
+assert.throws(() => validateEgressUrl('http://127.0.0.1', true), /HTTPS/);
 let requestCount = 0;
 let recordedBody: any;
 let statusCode = 200;
@@ -62,7 +56,12 @@ for (const id of ['x-search', 'sample-ts']) {
     `export { default } from ${JSON.stringify(pathToFileURL(join(source, 'src', 'index.ts')).href)};`);
 }
 
-const options = { databaseFile: join(home, 'gateway.db'), dataDir: home, extensionsDir, mode: 'desktop' as const };
+const options = {
+  databaseFile: join(home, 'gateway.db'), dataDir: home, extensionsDir, mode: 'desktop' as const,
+  searchHttpClient: {
+    request: (_url: string, init: RequestInit) => fetch(`${endpoint}/v1/responses`, init),
+  },
+};
 let gateway: Awaited<ReturnType<typeof startGateway>> | undefined;
 function rpcClient(token?: string) {
   return createORPCClient<ContractRouterClient<typeof neoContract>>(new RPCLink({
@@ -84,7 +83,7 @@ try {
   await assert.rejects(rpcClient().x['x-search'].status(), (e: any) => e.code === 'UNAUTHORIZED');
   await assert.rejects(rpc.x['x-search'].search({ query: 'test' }), (e: any) => e.code === 'NOT_FOUND');
 
-  const saved = await rpc.settings.set({ extension: 'x-search', values: { apiKey, baseUrl: endpoint, model: 'grok-4.7', allowPrivateNetwork: true } });
+  const saved = await rpc.settings.set({ extension: 'x-search', values: { apiKey, baseUrl: 'https://api.x.ai', model: 'grok-4.7', allowPrivateNetwork: false } });
   assert.deepEqual(saved.values.apiKey, { set: true });
   const settings = await rpc.settings.get({ extension: 'x-search' });
   assert.deepEqual(settings.values.apiKey, { set: true });
@@ -92,8 +91,8 @@ try {
 
   assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
   assert.equal((await rpc.extensions.enable({ id: 'x-search' })).status, 'running');
-  await assert.rejects(new XSearchService({ apiKey, baseUrl: endpoint }).search({ query: 'blocked' }), /Private provider endpoint is disabled/);
-  await assert.rejects(new XSearchService({ apiKey, baseUrl: 'http://1.1.1.1' }, { request: async () => { throw new Error('unexpected fetch'); } }).search({ query: 'blocked' }), /Provider endpoint requires HTTPS/);
+  await assert.rejects(new XSearchService({ apiKey, baseUrl: 'https://127.0.0.1' }).search({ query: 'blocked' }), /denied/);
+  await assert.rejects(new XSearchService({ apiKey, baseUrl: 'http://1.1.1.1', allowPrivateNetwork: true }, { request: async () => { throw new Error('unexpected fetch'); } }).search({ query: 'blocked' }), /Invalid X Search endpoint configuration/);
   assert.deepEqual(await rpc.x['x-search'].status(), { providerId: 'xai', configured: true });
   assert.ok(gateway.kernel.contributionIds().includes('tools:x-search.search'));
   const result = await rpc.x['x-search'].search({
@@ -108,6 +107,8 @@ try {
   assert.equal(recordedBody.model, 'grok-4.7');
   assert.equal(recordedBody.input[0].content, 'What happened today?');
   await assert.rejects(rpc.x['x-search'].search({ query: 'invalid date', fromDate: '2026-11-20', toDate: '2026-11-01' }));
+  await assert.rejects(rpc.x['x-search'].search({ query: 'invalid calendar date', fromDate: '2026-99-99' }));
+  await assert.rejects(rpc.x['x-search'].search({ query: 'invalid leap date', fromDate: '2026-02-29' }));
   assert.equal(requestCount, 1);
   statusCode = 429;
   await assert.rejects(rpc.x['x-search'].search({ query: 'rate limited' }), (e: any) =>
@@ -125,6 +126,25 @@ try {
   await assert.rejects(injected.search({ query: 'broken connection' }), (e: Error) =>
     e.message === 'X Search request failed');
 
+  const bounded = new XSearchService({ apiKey }, {
+    request: async () => new Response(JSON.stringify({
+      output_text: `${'a'.repeat(40_000)}${apiKey}`,
+      citations: [
+        'javascript:alert(1)', 'ftp://example.com/x', `https://x.com/${'b'.repeat(2100)}`,
+        ...Array.from({ length: 36 }, (_, i) => `https://x.com/post/${i}`),
+      ],
+    }), { headers: { 'content-type': 'application/json' } }),
+  });
+  const boundedResult = await bounded.search({ query: 'bounded response' });
+  assert.equal(boundedResult.text.length, 32_000);
+  assert.equal(boundedResult.citations.length, 32);
+  assert.ok(boundedResult.citations.every((url) => url.startsWith('https://')));
+  assert.ok(!JSON.stringify(boundedResult).includes(apiKey));
+  await assert.rejects(new XSearchService({ apiKey }, {
+    request: async () => new Response('x'.repeat(1_000_001), {
+      headers: { 'content-type': 'application/json' },
+    }),
+  }).search({ query: 'oversized response' }), /invalid response/);
   const viewer = { user: { id: 'viewer' }, role: 'viewer', workspaceId: 'default' };
   assert.doesNotThrow(() => authorize('x.x-search.status', viewer as any));
   assert.throws(() => authorize('x.x-search.search', viewer as any), (e: any) => e.code === 'FORBIDDEN');

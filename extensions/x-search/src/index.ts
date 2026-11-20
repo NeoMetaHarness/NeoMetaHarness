@@ -1,5 +1,5 @@
 import { defineExtension } from '@neometaharness/kernel';
-import { assertSafeProviderUrl, createSafeProviderClient } from '@neometaharness/egress';
+import { createEgressFetch, validateEgressUrl } from '@neometaharness/egress';
 import { xSearchInput, type NeoSearchService, type XSearchInput, type XSearchOutput } from '@neometaharness/contracts';
 
 export interface SearchHttpClient {
@@ -18,7 +18,7 @@ export interface SearchSettings {
 function searchEndpoint(origin: string): URL {
   let url: URL;
   try { url = new URL(origin); } catch { throw new Error('Invalid X Search endpoint configuration'); }
-  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
     throw new Error('Invalid X Search endpoint configuration');
   }
   if (url.pathname !== '/' && url.pathname !== '/v1' && url.pathname !== '/v1/') {
@@ -28,7 +28,7 @@ function searchEndpoint(origin: string): URL {
 }
 
 function validCitation(value: unknown): string | undefined {
-  if (typeof value !== 'string') return;
+  if (typeof value !== 'string' || value.length > 2048) return;
   try {
     const url = new URL(value);
     if (url.protocol === 'http:' || url.protocol === 'https:') return url.href;
@@ -45,13 +45,41 @@ type SearchResponse = {
   usage?: { server_side_tool_usage_details?: { x_posts_fetched?: number; x_users_fetched?: number } };
 };
 
+const MAX_SEARCH_TEXT = 32_000;
+const MAX_SEARCH_CITATIONS = 32;
+const MAX_SEARCH_RESPONSE_BYTES = 1_000_000;
+
+async function readSearchJson(response: Response): Promise<SearchResponse> {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_SEARCH_RESPONSE_BYTES) throw new Error('X Search response too large');
+  if (!response.headers.get('content-type')?.toLowerCase().includes('application/json') || !response.body) {
+    throw new Error('X Search response must be JSON');
+  }
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_SEARCH_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error('X Search response too large');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally { reader.releaseLock(); }
+  return JSON.parse(Buffer.concat(chunks, size).toString('utf8')) as SearchResponse;
+}
+
 function parseSearchResponse(data: SearchResponse, apiKey: string): XSearchOutput {
   const contents = Array.isArray(data.output)
     ? data.output.filter((item) => item.type === 'message').flatMap((item) => item.content ?? [])
     : [];
   const text = (data.output_text || contents
     .filter((item) => item.type === 'output_text')
-    .map((item) => item.text ?? '').join('\n\n')).replaceAll(apiKey, '[redacted]');
+    .map((item) => item.text ?? '').join('\n\n')).replaceAll(apiKey, '[redacted]').slice(0, MAX_SEARCH_TEXT);
   const citations = [
     ...(Array.isArray(data.citations) ? data.citations : []),
     ...contents.flatMap((item) => (item.annotations ?? [])
@@ -60,7 +88,7 @@ function parseSearchResponse(data: SearchResponse, apiKey: string): XSearchOutpu
   const usage = data.usage?.server_side_tool_usage_details;
   return {
     text,
-    citations: [...new Set(citations)],
+    citations: [...new Set(citations)].slice(0, MAX_SEARCH_CITATIONS),
     usage: {
       postsFetched: Math.max(0, Math.trunc(usage?.x_posts_fetched ?? 0)),
       usersFetched: Math.max(0, Math.trunc(usage?.x_users_fetched ?? 0)),
@@ -69,15 +97,19 @@ function parseSearchResponse(data: SearchResponse, apiKey: string): XSearchOutpu
 }
 
 export class XSearchService implements NeoSearchService {
-  private readonly httpClient: SearchHttpClient;
+  private readonly guardedFetch: typeof fetch;
   constructor(
     private readonly settings: SearchSettings,
-    httpClient?: SearchHttpClient,
+    private readonly httpClient?: SearchHttpClient,
   ) {
-    this.httpClient = httpClient ?? createSafeProviderClient({ allowPrivateNetwork: settings.allowPrivateNetwork });
+    const injected = httpClient
+      ? (async (url: string | URL | Request, init?: RequestInit) =>
+        httpClient.request(String(url), init ?? {})) as typeof fetch
+      : undefined;
+    this.guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected);
   }
 
-  dispose(): void { void this.httpClient.close?.().catch(() => undefined); }
+  dispose(): void { void this.httpClient?.close?.().catch(() => undefined); }
 
   get configured(): boolean {
     return Boolean(this.settings.apiKey?.trim());
@@ -91,7 +123,7 @@ export class XSearchService implements NeoSearchService {
     const key = this.settings.apiKey?.trim();
     if (!key) throw new Error('X Search API key is not configured');
     const endpoint = searchEndpoint(this.settings.baseUrl ?? 'https://api.x.ai');
-    await assertSafeProviderUrl(endpoint, { allowPrivateNetwork: this.settings.allowPrivateNetwork });
+    validateEgressUrl(endpoint, this.settings.allowPrivateNetwork === true);
     const tool: Record<string, unknown> = { type: 'x_search' };
     if (input.allowedHandles) tool.allowed_x_handles = input.allowedHandles;
     if (input.excludedHandles) tool.excluded_x_handles = input.excludedHandles;
@@ -99,7 +131,7 @@ export class XSearchService implements NeoSearchService {
     if (input.toDate) tool.to_date = input.toDate;
     let response: Response;
     try {
-      response = await this.httpClient.request(endpoint.href, {
+      response = await this.guardedFetch(endpoint.href, {
         method: 'POST',
         redirect: 'error',
         headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
@@ -110,7 +142,7 @@ export class XSearchService implements NeoSearchService {
     }
     if (!response.ok) throw new Error(`X Search upstream returned HTTP ${response.status}`);
     try {
-      return parseSearchResponse(await response.json() as SearchResponse, key);
+      return parseSearchResponse(await readSearchJson(response), key);
     } catch {
       throw new Error('X Search returned an invalid response');
     }

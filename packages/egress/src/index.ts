@@ -6,9 +6,7 @@
  */
 import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { lookup } from 'node:dns';
-import { lookup as lookupAsync } from 'node:dns/promises';
 import { request } from 'node:https';
-import { Agent, fetch as undiciFetch } from 'undici';
 
 const blocked = new BlockList();
 for (const [address, prefix] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
@@ -132,80 +130,4 @@ export function createEgressFetch(allowPrivateNetwork: () => boolean, injected?:
       outgoing.end(outgoingBody);
     });
   }) as typeof fetch;
-}
-
-/** Options for credential-bearing provider APIs that also accept streaming multipart bodies. */
-export interface ProviderEgressOptions {
-  allowPrivateNetwork?: boolean;
-  resolveHost?: (hostname: string) => Promise<string[]>;
-}
-
-function isPublicProviderAddress(address: string): boolean {
-  try { assertPublicEgressAddress(address); return true; }
-  catch { return false; }
-}
-
-function validateProviderAddresses(addresses: string[], allowPrivate: boolean): void {
-  if (!addresses.length || addresses.some(address => !isIP(address))) {
-    throw new Error('Provider endpoint has no valid network address');
-  }
-  if (!allowPrivate && addresses.some(address => !isPublicProviderAddress(address))) {
-    throw new Error('Private provider endpoint is disabled');
-  }
-}
-
-/** Preflight validation. The transport also validates DNS inside its socket lookup. */
-export async function assertSafeProviderUrl(url: URL, options: ProviderEgressOptions = {}): Promise<void> {
-  if (url.username || url.password || url.hash || url.search || !['https:', 'http:'].includes(url.protocol)) {
-    throw new Error('Unsafe provider endpoint');
-  }
-  const host = url.hostname.replace(/^\[|\]$/g, '');
-  const allowPrivate = options.allowPrivateNetwork === true;
-  if (url.protocol === 'https:' && host === 'api.x.ai') return;
-  const resolve = options.resolveHost ?? (async (hostname: string) =>
-    (await lookupAsync(hostname, { all: true })).map(entry => entry.address));
-  let addresses: string[];
-  try { addresses = isIP(host) ? [host] : await resolve(host); }
-  catch { throw new Error('Provider endpoint DNS resolution failed'); }
-  validateProviderAddresses(addresses, allowPrivate);
-  if (url.protocol !== 'https:' && !(allowPrivate && addresses.every(address => !isPublicProviderAddress(address)))) {
-    throw new Error('Provider endpoint requires HTTPS');
-  }
-}
-
-/** Every connected socket is bound to an address checked by the shared egress policy. */
-export function createSafeProviderClient(options: ProviderEgressOptions = {}): {
-  request(url: string, init: RequestInit): Promise<Response>;
-  close(): Promise<void>;
-} {
-  const allowPrivate = options.allowPrivateNetwork === true;
-  const resolve = options.resolveHost ?? (async (hostname: string) =>
-    (await lookupAsync(hostname, { all: true })).map(entry => entry.address));
-  const dispatcher = new Agent({
-    connect: {
-      lookup(hostname, lookupOptions, callback) {
-        void resolve(hostname).then(addresses => {
-          validateProviderAddresses(addresses, allowPrivate);
-          const family = typeof lookupOptions === 'object' ? lookupOptions.family : lookupOptions;
-          const candidates = addresses.filter(address => !family || isIP(address) === family);
-          if (!candidates.length) throw new Error('Provider endpoint address family unavailable');
-          const selected = candidates[0]!;
-          if (typeof lookupOptions === 'object' && lookupOptions.all) {
-            callback(null, [{ address: selected, family: isIP(selected) }]);
-          } else {
-            callback(null, selected, isIP(selected));
-          }
-        }).catch(error => {
-          callback(error instanceof Error ? error : new Error('Provider endpoint DNS resolution failed'), '', 4);
-        });
-      },
-    },
-  });
-  return {
-    async request(url, init) {
-      await assertSafeProviderUrl(new URL(url), options);
-      return undiciFetch(url, { ...init, redirect: 'error', dispatcher } as Parameters<typeof undiciFetch>[1]) as Promise<Response>;
-    },
-    close: () => dispatcher.close(),
-  };
 }

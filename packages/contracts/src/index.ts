@@ -504,14 +504,14 @@ export const xSearchInput = z.object({
   query: z.string().trim().min(1).max(2000),
   allowedHandles: z.array(z.string().regex(/^[a-zA-Z0-9_]{1,15}$/)).max(20).optional(),
   excludedHandles: z.array(z.string().regex(/^[a-zA-Z0-9_]{1,15}$/)).max(20).optional(),
-  fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  fromDate: z.string().date().optional(),
+  toDate: z.string().date().optional(),
 }).refine((value) => !(value.allowedHandles && value.excludedHandles), {
   message: 'Allowed and excluded handles cannot be combined',
 });
 export const xSearchOutput = z.object({
-  text: z.string(),
-  citations: z.array(z.string().url()),
+  text: z.string().max(32000),
+  citations: z.array(z.string().url().max(2048).refine((value) => /^https?:\/\//i.test(value))).max(32),
   usage: z.object({ postsFetched: z.number().int().nonnegative(), usersFetched: z.number().int().nonnegative() }),
 });
 export type XSearchInput = z.infer<typeof xSearchInput>;

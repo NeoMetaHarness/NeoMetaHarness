@@ -8,9 +8,6 @@
     "test": "tsx test/egress.test.ts",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "undici": "8.11.2"
-  },
   "devDependencies": {
     "@types/node": "22.18.13",
     "tsx": "4.20.6",

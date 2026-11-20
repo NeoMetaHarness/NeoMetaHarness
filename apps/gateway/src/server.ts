@@ -106,6 +106,8 @@ export interface GatewayOptions {
   hermesScreenBridge?: import('../../../extensions/computer-hermes-screen/src/provider.js').HermesScreenBridge;
   orgoClient?: import('../../../extensions/computer-orgo/src/provider.js').OrgoClient;
   voiceHttpClient?: { request(url: string, init: RequestInit): Promise<Response> };
+  /** Injectable X Search transport for scripted provider tests. */
+  searchHttpClient?: { request(url: string, init: RequestInit): Promise<Response> };
   /**
    * Server-mode HTTP sign-up. 'invite' (default; NEO_SIGNUP overrides): the first
    * account needs the one-time setup token, later ones a pending invitation.
@@ -324,6 +326,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     // Read-only deployment mode, for extensions whose background work differs per mode (memory-honcho's nightly pass).
     deploymentMode: mode,
     voiceHttpClient: options.voiceHttpClient,
+    searchHttpClient: options.searchHttpClient,
     backupSource: backupStorage,
     backupProtectedPaths: [dataDir, dirname(resolve(options.databaseFile)), resolve(options.extensionsDir ?? defaultExtensions)],
     channelSource: channelBus,
