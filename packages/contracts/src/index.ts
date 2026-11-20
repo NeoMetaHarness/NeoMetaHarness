@@ -398,6 +398,37 @@ export const skillsRegistryContract = {
   },
 };
 
+// Provider-neutral voice capability. Extensions provide this as the `neo.voice` service.
+export const voiceTranscribeInput = z.object({
+  audioBase64: z.string().min(1).max(12_000_000),
+  mimeType: z.string().regex(/^audio\/[a-z0-9.+-]+$/i),
+  language: z.string().min(2).max(40).optional(),
+});
+export const voiceTranscribeOutput = z.object({
+  text: z.string(), language: z.string().optional(), duration: z.number().nonnegative().optional(),
+});
+export const voiceSynthesizeInput = z.object({
+  text: z.string().min(1).max(60_000),
+  voice: z.string().min(1).max(128).optional(), language: z.string().min(2).max(40).optional(),
+});
+export const voiceSynthesizeOutput = z.object({
+  audioBase64: z.string(), mimeType: z.string(),
+});
+export type VoiceTranscribeInput = z.infer<typeof voiceTranscribeInput>;
+export type VoiceTranscribeOutput = z.infer<typeof voiceTranscribeOutput>;
+export type VoiceSynthesizeInput = z.infer<typeof voiceSynthesizeInput>;
+export type VoiceSynthesizeOutput = z.infer<typeof voiceSynthesizeOutput>;
+export interface NeoVoiceService {
+  readonly providerId: string;
+  transcribe(input: VoiceTranscribeInput): Promise<VoiceTranscribeOutput>;
+  synthesize(input: VoiceSynthesizeInput): Promise<VoiceSynthesizeOutput>;
+}
+export const voiceXaiContract = {
+  status: oc.output(z.object({ providerId: z.literal('xai'), configured: z.boolean() })),
+  transcribe: oc.input(voiceTranscribeInput).output(voiceTranscribeOutput),
+  synthesize: oc.input(voiceSynthesizeInput).output(voiceSynthesizeOutput),
+};
+
 const modelProviderId = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/);
 const modelProfile = z.string().regex(/^(?:default|[a-z][a-z0-9_-]{0,47})$/);
 const modelRole = z.enum(['default', 'fast', 'reasoning', 'coding', 'eval']);
@@ -521,7 +552,7 @@ const baseNeoContract = {
     backup: oc.input(z.object({ out: z.string().min(1), passphrase: z.string().min(12) }))
       .output(z.object({ out: z.string(), files: z.number().int(), format: z.number().int() })),
   },
-  x: { 'coding-workflow': codingWorkflowContract, 'models-router-panda': pandaContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract, metrics: metricsContract },
+  x: { 'coding-workflow': codingWorkflowContract, 'models-router-panda': pandaContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract, metrics: metricsContract, 'voice-xai': voiceXaiContract },
   onboarding: {
     get: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), workspaceName: z.string(), mode: z.enum(['desktop', 'server']) })),
     complete: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), workspaceName: z.string(), mode: z.enum(['desktop', 'server']) })),
