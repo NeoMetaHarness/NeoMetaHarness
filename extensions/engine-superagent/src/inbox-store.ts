@@ -13,7 +13,11 @@ export class InboxStore {
     // engine), so they survive a restart.
     const resumable = (item: InboxItem) => item.status === 'suggestion'
       && (item.source === 'neo/upstream' || item.source === 'neo/memory');
-    return records.map(item => item.status === 'running' || (item.status === 'suggestion' && !resumable(item)) ? {
+    return records.map(item => item.dream && item.status === 'running' ? {
+      // A dream interrupted mid-apply is offered again; memory-honcho re-checks every step it already wrote.
+      ...item, status: 'approval' as const, kind: 'approval' as const, mode: 'act' as const, updatedAt: Date.now(),
+      approval: { destructive: item.destructive ?? true, reason: 'Applying this dream was interrupted by a restart; approve to finish it' },
+    } : item.status === 'running' || (item.status === 'suggestion' && !resumable(item)) ? {
       ...item, status: 'blocked' as const, updatedAt: Date.now(), report: {
         status: 'blocked' as const, summary: 'Engine restarted; submit a new request to continue this item.',
         changes: [], tests: [], risks: ['Upstream tickets are held in memory and cannot resume after restart.'], options: [],

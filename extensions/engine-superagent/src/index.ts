@@ -22,7 +22,7 @@ import { AcceptModeStore } from './accept-mode.js';
 
 type Role = 'viewer' | 'member' | 'admin' | 'owner';
 /** memory-honcho's dream applier (looked up per call, so toggling memory-honcho is always safe). */
-type MemoryDreams = { apply(id: string): Promise<{ applied: number; skipped: number; changes: string[] }>; reject(id: string): void };
+type MemoryDreams = { apply(id: string): Promise<{ applied: number; skipped: number; changes: string[] }>; reject(id: string): Promise<void> };
 type DreamProposal = { dreamId: string; workspace: string; summary: string; proposals: number;
   destructive: boolean; applied: boolean; changes: string[]; risks: string[] };
 const isAdmin = (role?: Role) => role === 'admin' || role === 'owner';
@@ -127,7 +127,7 @@ class SuperagentService {
    */
   proposeDream(input: DreamProposal): { id: string } {
     if (this.closed) throw new Error('Inbox is disabled');
-    const acceptMode = this.acceptModes.get();
+    const acceptMode = this.acceptModes.get(input.workspace); // the dream's own workspace (review M1)
     const now = Date.now();
     const base = { id: randomUUID(), botId: 'neo-memory', source: 'neo/memory' as const, requesterRole: 'member' as const,
       text: `Memory dream for workspace ${input.workspace}`, acceptMode, destructive: input.destructive,
@@ -160,9 +160,12 @@ class SuperagentService {
     }
   }
 
-  private rejectDream(item: InboxItem): void {
-    try { this.dreams?.()?.reject(item.dream!.id); } catch { /* memory-honcho disabled; the dream stays unapplied */ }
+  private async rejectDream(item: InboxItem): Promise<void> {
+    try { await this.dreams?.()?.reject(item.dream!.id); } catch { /* memory-honcho disabled; the dream stays unapplied */ }
   }
+
+  /** The accept mode of one workspace (a dream follows its own workspace's mode). */
+  acceptModeFor(workspace: string): AcceptMode { return this.acceptModes.get(workspace); }
 
   /** Inject the `neo upstream` check runner (tests use a scripted fake; production runs upstream:check). */
   useUpstreamChecker(checker: UpstreamChecker): void { this.upstreamChecker = checker; }
@@ -630,7 +633,7 @@ class SuperagentService {
     const item = this.items.get(input.id);
     if (!item || item.status !== 'suggestion') throw new Error('Only Suggestions can be dismissed');
     const reason = input.reason?.trim() || `Dismissed by ${role ?? 'member'}`;
-    if (item.dream) this.rejectDream(item);
+    if (item.dream) await this.rejectDream(item);
     const triggerId = `${item.source ?? 'neo/app'}:${item.id}`;
     const candidate = this.candidates.get(triggerId);
     if (candidate) {
@@ -673,7 +676,7 @@ class SuperagentService {
       const approval = { destructive: item.approval?.destructive ?? false, reason: input.reason.trim(),
         decision: (input.decision === 'approve' ? 'approved' : 'denied') as 'approved' | 'denied' };
       if (input.decision === 'deny') {
-        this.rejectDream(item);
+        await this.rejectDream(item);
         const summary = `Dream denied: ${input.reason.trim()}`;
         return this.update(item, { status: 'blocked', kind: undefined, approval,
           report: { status: 'blocked', summary, changes: [], tests: [], risks: [summary], options: [] } });
@@ -958,7 +961,7 @@ export default defineExtension({
     await github.start();
     // memory-honcho dreams report here; their apply/reject comes back through memory-honcho's service.
     service.attachDreams(() => ctx.inject<MemoryDreams>('memoryDreams'));
-    ctx.provide('memoryInboxSink', { acceptMode: () => service.acceptModeGet().mode,
+    ctx.provide('memoryInboxSink', { acceptMode: (workspace: string) => service.acceptModeFor(workspace),
       propose: (input: DreamProposal) => service.proposeDream(input) });
     ctx.provide('dshInboxSink', { report: (input: Parameters<typeof service.reportDsh>[0]) =>
       service.reportDsh(input) });

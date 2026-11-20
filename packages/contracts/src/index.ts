@@ -249,7 +249,7 @@ export const memoryContract = {
     subjectId: z.string().min(1).max(100).default('global'), text: memoryText,
     source: z.string().min(1).max(200).default('manual'),
     provenance: z.string().max(1000).default('Neo Memory UI'),
-    trust: z.enum(['untrusted', 'observed', 'confirmed']).default('confirmed'),
+    trust: z.enum(['untrusted', 'observed', 'confirmed']).default('observed'),
   })).output(memoryEntrySchema),
   update: oc.input(z.object({ id: z.string().uuid(), text: memoryText.optional(),
     trust: z.enum(['untrusted', 'observed', 'confirmed']).optional(),

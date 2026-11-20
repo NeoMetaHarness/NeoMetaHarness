@@ -44,14 +44,25 @@ export default defineExtension({
     ctx.provide('memoryDreams', { apply: (id: string) => dreamer.apply(id), reject: (id: string) => dreamer.reject(id) });
     ctx.route('dream/run', ({ body }) => dreamer.run((body as { workspace: string }).workspace));
     ctx.route('dream/last', ({ body }) => dreamer.last((body as { workspace: string }).workspace));
+    ctx.route('forget-intent', async ({ body }) => {
+      const value = body as { workspace: string; text: string };
+      return { forgotten: await store.forgetIntent(value.workspace, value.text) };
+    });
 
     // Nightly pass over the desktop workspace. Other workspaces dream on demand (`dream/run`).
     const interval = process.env.NODE_ENV === 'test' && process.env.NMH_HONCHO_DREAM_INTERVAL_MS
       ? Math.max(200, Number(process.env.NMH_HONCHO_DREAM_INTERVAL_MS)) : DAY_MS;
-    const timer = setInterval(() => {
-      void dreamer.run('default').catch((error) => console.error('Memory dream failed:', error instanceof Error ? error.message : error));
-    }, interval);
-    timer.unref();
-    ctx.effect(() => () => { clearInterval(timer); dreamer.close(); });
+    // Anchored to the last dream, so a restart neither skips a night nor dreams twice.
+    const nightly = () => void dreamer.run('default')
+      .catch((error) => console.error('Memory dream failed:', error instanceof Error ? error.message : error));
+    const last = dreamer.last('default')?.createdAt;
+    let timer: NodeJS.Timeout | undefined;
+    const first = setTimeout(() => {
+      nightly();
+      timer = setInterval(nightly, interval);
+      timer.unref();
+    }, last === undefined ? interval : Math.max(0, last + interval - Date.now()));
+    first.unref();
+    ctx.effect(() => () => { clearTimeout(first); if (timer) clearInterval(timer); dreamer.close(); });
   },
 });

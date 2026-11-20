@@ -12,3 +12,11 @@ A consolidation pass over L1 (`memory-local`'s `memoryStore`) and L2 (Honcho, th
 - Applying re-checks each target and skips anything that changed since the dream. With the Inbox disabled, a dream is reported as `undelivered` and nothing is written.
 
 Standing intents live in L1 (`memory-local`, source `neo.intent`) so they keep working without Honcho. See `x.memory-local.intents.*`.
+
+Review hardening (P4-9):
+- Dreams never touch standing intents. Honcho metadata is never trusted: imports enter L1 as observed at most, and an L2 entry claiming to be an intent is ignored. Corroboration must match the subject as well as the text.
+- A dream follows its own workspace's accept mode. In server mode every memory route refuses a workspace other than the caller's.
+- Retracting an intent also deletes any Honcho copy.
+- Honcho lists are paged fully, and apply re-checks both stores before every write, so read windows never cause duplicate writes.
+- Pending dreams are never pruned. Reject waits behind a running apply. A dream interrupted mid-apply is offered again after a restart. A corrupt `dreams.json` is logged and ignored.
+- The nightly timer is anchored to the last dream, and a dream with no L1 proposes no imports.

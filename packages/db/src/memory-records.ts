@@ -28,6 +28,8 @@ export interface MemoryDraft {
 export interface MemoryStore {
   list(query: MemoryQuery): Promise<MemoryEntry[]>;
   add(draft: MemoryDraft): Promise<MemoryEntry>;
+  /** One entry by id, whatever its age (optional: stores without random access omit it). */
+  get?(id: string): Promise<MemoryEntry | undefined>;
   update(id: string, changes: Partial<Pick<MemoryDraft, 'text' | 'trust' | 'source' | 'provenance'>>): Promise<MemoryEntry | undefined>;
   delete(id: string): Promise<boolean>;
   export(workspace: string): Promise<Record<'SOUL.md' | 'USER.md' | 'MEMORY.md', string>>;
@@ -79,6 +81,10 @@ export class MemoryRecords implements MemoryStore {
       } else statement = statement.where('text', 'like', `%${search}%`);
     }
     return statement.orderBy('updated_at', 'desc').limit(Math.min(Math.max(limit, 1), 500)).execute();
+  }
+
+  async get(id: string): Promise<MemoryEntry | undefined> {
+    return this.db.selectFrom('memory_entry').selectAll().where('id', '=', id).executeTakeFirst();
   }
 
   async add(draft: MemoryDraft): Promise<MemoryEntry> {

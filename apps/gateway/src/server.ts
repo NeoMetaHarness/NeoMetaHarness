@@ -382,6 +382,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Local memory extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  // Memory is per workspace. In server mode a caller may only name their own workspace ('default' means
+  // "mine"); any other name is refused. Desktop is a single tenant whose sessions name memory workspaces
+  // freely (DSH sessions, the legacy 'default'), so every name there belongs to the one owner.
+  const memoryWorkspace = (requested: string | undefined, context: GatewayAuthContext): string => {
+    if (mode === 'desktop') return requested ?? 'default';
+    const own = context.workspaceId;
+    if (!own) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
+    if (requested === undefined || requested === 'default' || requested === own) return own;
+    throw new ORPCError('FORBIDDEN', { message: 'Memory belongs to another workspace' });
+  };
+  /** The workspace an id-addressed memory write must belong to (none to check in desktop mode). */
+  const memoryOwner = (context: GatewayAuthContext) => mode === 'desktop' ? undefined : memoryWorkspace(undefined, context);
   const invokeHoncho = async (route: string, body: unknown) => {
     const path = '/x/memory-honcho/' + route;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Honcho extension disabled' });
@@ -774,58 +786,70 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         status: os.x['memory-honcho'].status.handler(async ({ input, context }) => {
           authorize('x.memory-honcho.status', context);
           if (!kernel.hasRoute('/x/memory-honcho/status')) return 'off';
-          return invokeHoncho('status', input) as Promise<'ok' | 'degraded' | 'off'>;
+          return invokeHoncho('status', { ...input, workspace: memoryWorkspace(input.workspace, context) }) as Promise<'ok' | 'degraded' | 'off'>;
         }),
         list: os.x['memory-honcho'].list.handler(async ({ input, context }) => {
           authorize('x.memory-honcho.list', context);
           if (!kernel.hasRoute('/x/memory-honcho/list')) return [];
-          return invokeHoncho('list', input) as ReturnType<typeof db.memories.list>;
+          return invokeHoncho('list', { ...input, workspace: memoryWorkspace(input.workspace, context) }) as ReturnType<typeof db.memories.list>;
         }),
         dream: {
           run: os.x['memory-honcho'].dream.run.handler(async ({ input, context }) => {
             authorize('x.memory-honcho.dream.run', context);
-            return invokeHoncho('dream/run', input) as Promise<DreamReport>;
+            return invokeHoncho('dream/run', { workspace: memoryWorkspace(input.workspace, context) }) as Promise<DreamReport>;
           }),
           last: os.x['memory-honcho'].dream.last.handler(async ({ input, context }) => {
             authorize('x.memory-honcho.dream.last', context);
-            return invokeHoncho('dream/last', input) as Promise<DreamReport | null>;
+            return invokeHoncho('dream/last', { workspace: memoryWorkspace(input.workspace, context) }) as Promise<DreamReport | null>;
           }),
         },
       },
       'memory-local': {
         list: os.x['memory-local'].list.handler(async ({ input, context }) => {
           authorize('x.memory-local.list', context);
-          return invokeMemory('list', input) as ReturnType<typeof db.memories.list>;
+          return invokeMemory('list', { ...input, workspace: memoryWorkspace(input.workspace, context) }) as ReturnType<typeof db.memories.list>;
         }),
         add: os.x['memory-local'].add.handler(async ({ input, context }) => {
           authorize('x.memory-local.add', context);
-          return invokeMemory('add', input) as ReturnType<typeof db.memories.add>;
+          // The intent source is reserved, and provenance is the authenticated user, never caller-supplied.
+          if (input.source === 'neo.intent') throw new ORPCError('BAD_REQUEST', { message: 'Standing intents are added through memory-local.intents.add' });
+          return invokeMemory('add', { ...input, workspace: memoryWorkspace(input.workspace, context),
+            provenance: `Neo Memory UI; user:${context.user!.id}` }) as ReturnType<typeof db.memories.add>;
         }),
         update: os.x['memory-local'].update.handler(async ({ input, context }) => {
           authorize('x.memory-local.update', context);
-          return (await invokeMemory('update', input) as Awaited<ReturnType<typeof db.memories.update>>) ?? null;
+          if (input.source === 'neo.intent') throw new ORPCError('BAD_REQUEST', { message: 'Standing intents change only through memory-local.intents' });
+          return (await invokeMemory('update', { ...input, workspace: memoryOwner(context) }) as Awaited<ReturnType<typeof db.memories.update>>) ?? null;
         }),
         delete: os.x['memory-local'].delete.handler(async ({ input, context }) => {
           authorize('x.memory-local.delete', context);
-          return invokeMemory('delete', input) as Promise<{ deleted: boolean }>;
+          return invokeMemory('delete', { ...input, workspace: memoryOwner(context) }) as Promise<{ deleted: boolean }>;
         }),
         export: os.x['memory-local'].export.handler(async ({ input, context }) => {
           authorize('x.memory-local.export', context);
-          return invokeMemory('export', input) as ReturnType<typeof db.memories.export>;
+          return invokeMemory('export', { workspace: memoryWorkspace(input.workspace, context) }) as ReturnType<typeof db.memories.export>;
         }),
         intents: {
           list: os.x['memory-local'].intents.list.handler(async ({ input, context }) => {
             authorize('x.memory-local.intents.list', context);
-            return invokeMemory('intents/list', input) as ReturnType<typeof db.memories.list>;
+            return invokeMemory('intents/list', { workspace: memoryWorkspace(input.workspace, context) }) as ReturnType<typeof db.memories.list>;
           }),
           // Provenance is the authenticated user, never caller-supplied.
           add: os.x['memory-local'].intents.add.handler(async ({ input, context }) => {
             authorize('x.memory-local.intents.add', context);
-            return invokeMemory('intents/add', { ...input, provenance: `user:${context.user!.id} via Neo app` }) as ReturnType<typeof db.memories.add>;
+            return invokeMemory('intents/add', { text: input.text, workspace: memoryWorkspace(input.workspace, context),
+              provenance: `user:${context.user!.id} via Neo app` }) as ReturnType<typeof db.memories.add>;
           }),
           retract: os.x['memory-local'].intents.retract.handler(async ({ input, context }) => {
             authorize('x.memory-local.intents.retract', context);
-            return invokeMemory('intents/retract', input) as Promise<{ retracted: boolean }>;
+            // A retracted intent also leaves Honcho, so no dream or L2 context can bring it back.
+            const workspace = memoryWorkspace(input.workspace, context);
+            const result = await invokeMemory('intents/retract', { id: input.id, workspace }) as { retracted: boolean; text?: string };
+            if (result.retracted && result.text && kernel.hasRoute('/x/memory-honcho/forget-intent')) {
+              try { await invokeHoncho('forget-intent', { workspace, text: result.text }); }
+              catch (error) { console.error('Honcho intent cleanup failed:', error instanceof Error ? error.message : error); }
+            }
+            return { retracted: result.retracted };
           }),
         },
       },
@@ -1286,9 +1310,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           const intents = (await invokeMemory('intents/list', { workspace: consumer.workspace }) as Array<{
             text: string; trust: string; provenance: string;
           }>).filter((entry) => entry.trust === 'confirmed').slice(0, 20);
+          // Provenance (a user id) stays in Neo; model providers only see that the intent is confirmed.
           const intentContext = intents.length ? ('Standing intents:\n' + intents.map((entry) =>
-            '- ' + entry.text.replace(/\s+/g, ' ').slice(0, 300) + ' [neo.intent; confirmed; '
-            + entry.provenance.slice(0, 120) + ']').join('\n')).slice(0, 1500) : '';
+            '- ' + entry.text.replace(/\s+/g, ' ').slice(0, 300) + ' [standing intent; confirmed]').join('\n')).slice(0, 1500) : '';
           let honchoContext = '';
           if (kernel.hasRoute('/x/memory-honcho/context')) {
             try {

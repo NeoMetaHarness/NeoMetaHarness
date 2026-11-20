@@ -149,15 +149,29 @@ export class HonchoStore implements MemoryStore {
     return answer.content ?? '';
   }
 
+  /** Every page of a Honcho list endpoint (bounded), so callers never see a silent first-page window. */
+  private async pages<T>(workspace: string, path: string): Promise<T[]> {
+    const size = 100;
+    const items: T[] = [];
+    for (let page = 1; page <= 100; page++) {
+      const result = await this.request<Page<T> & { pages?: number }>(workspace, 'POST',
+        path + (path.includes('?') ? '&' : '?') + 'page=' + page + '&size=' + size, {});
+      const batch = result.items ?? [];
+      items.push(...batch);
+      if (batch.length < size || (typeof result.pages === 'number' && page >= result.pages)) break;
+    }
+    return items;
+  }
+
   async list(query: MemoryQuery): Promise<MemoryEntry[]> {
     const root = wsPath(query.workspace);
-    const sessions = await this.request<Page<{ id: string }>>(query.workspace, 'POST', root + '/sessions/list?page=1&size=50', {});
+    const sessions = await this.pages<{ id: string }>(query.workspace, root + '/sessions/list');
     const records: MemoryEntry[] = [];
-    for (const session of sessions.items ?? []) {
+    for (const session of sessions) {
       if (!session.id.startsWith('nmh_')) continue;
-      const result = await this.request<Page<HonchoMessage>>(query.workspace, 'POST',
-        root + '/sessions/' + session.id + '/messages/list?page=1&size=50&reverse=true', {});
-      for (const message of result.items ?? []) {
+      const messages = await this.pages<HonchoMessage>(query.workspace,
+        root + '/sessions/' + session.id + '/messages/list?reverse=true');
+      for (const message of messages) {
         if (message.metadata?.deleted) continue;
         const item = entry(query.workspace, message);
         if (query.subjectId && item.subject_id !== query.subjectId) continue;
@@ -184,6 +198,15 @@ export class HonchoStore implements MemoryStore {
     const edited = await this.request<HonchoMessage>(workspace, 'PUT', path,
       { metadata: { ...original.metadata, ...changes } });
     return entry(workspace, edited);
+  }
+
+  /** A retracted standing intent leaves L2 too: any Honcho copy is marked deleted, so nothing re-imports it. */
+  async forgetIntent(workspace: string, text: string): Promise<number> {
+    const key = text.toLowerCase().replace(/s+/g, ' ').trim();
+    const copies = (await this.list({ workspace, query: text, source: 'neo.intent', limit: 5000 }))
+      .filter((item) => item.text.toLowerCase().replace(/s+/g, ' ').trim() === key);
+    for (const copy of copies) await this.delete(copy.id);
+    return copies.length;
   }
 
   async delete(id: string): Promise<boolean> {
