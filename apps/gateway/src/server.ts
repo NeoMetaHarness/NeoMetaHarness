@@ -1424,15 +1424,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     computers: {
       policy: {
         get: os.computers.policy.get.handler(({ input, context }) => {
-          authorize('computers.policy.get', context); return computers.policy(input.id);
+          authorize('computers.policy.get', context);
+          computers.assertWorkspace(input.id, context.workspaceId ?? '');
+          return computers.policy(input.id);
         }),
         set: os.computers.policy.set.handler(({ input, context }) => {
-          authorize('computers.policy.set', context); return computers.setPolicy(input.id, input);
+          authorize('computers.policy.set', context);
+          computers.assertWorkspace(input.id, context.workspaceId ?? '');
+          return computers.setPolicy(input.id, input);
         }),
       },
       list: os.computers.list.handler(async ({ context }) => {
         authorize('computers.list', context);
-        return computers.list();
+        return computers.list(context.workspaceId ?? '');
       }),
       provision: os.computers.provision.handler(async ({ input, context }) => {
         authorize('computers.provision', context);
@@ -1446,31 +1450,36 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       }),
       release: os.computers.release.handler(async ({ input, context }) => {
         authorize('computers.release', context);
+        computers.assertWorkspace(input.id, context.workspaceId ?? '');
         return { released: await computers.release(input.id) };
       }),
       terminate: os.computers.terminate.handler(async ({ input, context }) => {
         authorize('computers.terminate', context);
+        computers.assertWorkspace(input.id, context.workspaceId ?? '');
         return { terminated: await computers.terminate(input.id) };
       }),
       lease: os.computers.lease.handler(async ({ input, context }) => {
         authorize('computers.lease', context);
+        computers.assertWorkspace(input.id, context.workspaceId ?? '');
         return computers.lease(input.id, input.holder);
       }),
       assign: os.computers.assign.handler(async ({ input, context }) => {
         authorize('computers.assign', context);
+        computers.assertWorkspace(input.computerId, context.workspaceId ?? '');
         computers.assign(input.engine, input.targetId, input.computerId);
         return input;
       }),
       kill: os.computers.kill.handler(async ({ input, context }) => {
         authorize('computers.kill', context);
-        return computers.kill(input.engaged);
+        return computers.kill(input.engaged, context.workspaceId ?? undefined);
       }),
       state: os.computers.state.handler(async ({ context }) => {
         authorize('computers.state', context);
-        return computers.state();
+        return computers.state(context.workspaceId ?? undefined);
       }),
       capture: os.computers.capture.handler(async ({ input, context }) => {
         authorize('computers.capture', context);
+        computers.assertWorkspace(input.id, context.workspaceId ?? '');
         try { return await computers.capture(input.id); }
         catch { throw new ORPCError('BAD_GATEWAY', { message: 'Computer capture failed; release and reattach the computer' }); }
       }),

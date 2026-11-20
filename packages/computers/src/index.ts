@@ -61,7 +61,7 @@ export interface ComputerInfo {
 }
 export interface ComputerBinding { endpoint: string; token: string; computerId: string }
 
-interface Entry { providerId: string; provider: ComputerProvider; computer: Computer; holder: LeaseHolder; policy: ComputerSafetyPolicy; queue: Promise<unknown> }
+interface Entry { providerId: string; provider: ComputerProvider; computer: Computer; holder: LeaseHolder; policy: ComputerSafetyPolicy; queue: Promise<unknown>; workspaceId?: string }
 interface Assignment { engine: string; targetId: string; computerId: string; token: string }
 
 export class ComputerRegistry {
@@ -72,6 +72,7 @@ export class ComputerRegistry {
   private readonly assignments = new Map<string, Assignment>();
   private readonly tokens = new Map<string, Assignment>();
   private killed = false;
+  private readonly killedWorkspaces = new Map<string, boolean>();
 
   constructor(
     private readonly endpoint: () => string,
@@ -89,8 +90,8 @@ export class ComputerRegistry {
     };
   }
 
-  list(): ComputerInfo[] {
-    return [...this.entries].map(([id, entry]) => ({
+  list(workspaceId?: string): ComputerInfo[] {
+    return [...this.entries].filter(([, entry]) => workspaceId === undefined || !entry.workspaceId || entry.workspaceId === workspaceId).map(([id, entry]) => ({
       id, providerId: entry.providerId,
       capabilities: this.providers.get(entry.providerId)?.capabilities ?? {
         screen: false, input: false, browserCdp: false, shell: false, files: false, snapshot: false,
@@ -116,7 +117,7 @@ export class ComputerRegistry {
         await provider.release(target);
         throw new Error('Computer provider was disabled');
       }
-      this.entries.set(target, { providerId, provider, computer, holder: 'agent', policy: { allowDestructiveKeys: false, navigationOrigins: [] }, queue: Promise.resolve() });
+      this.entries.set(target, { providerId, provider, computer, holder: 'agent', workspaceId: context?.workspaceId, policy: { allowDestructiveKeys: false, navigationOrigins: [] }, queue: Promise.resolve() });
       return this.list().find((entry) => entry.id === target)!;
     } finally {
       this.attaching.delete(target);
@@ -134,7 +135,7 @@ export class ComputerRegistry {
         await provider.release(id);
         throw new Error('Computer provider was disabled');
       }
-      this.entries.set(id, { providerId, provider, computer, holder: 'agent', policy: { allowDestructiveKeys: false, navigationOrigins: [] }, queue: Promise.resolve() });
+      this.entries.set(id, { providerId, provider, computer, holder: 'agent', workspaceId: context?.workspaceId, policy: { allowDestructiveKeys: false, navigationOrigins: [] }, queue: Promise.resolve() });
       return this.list().find((entry) => entry.id === id)!;
     } finally {
       this.attaching.delete(id);
@@ -169,6 +170,11 @@ export class ComputerRegistry {
 
   private key(engine: string, targetId: string): string { return JSON.stringify([engine, targetId]); }
 
+  assertWorkspace(id: string, workspaceId: string): void {
+    const entry = this.entries.get(id);
+    if (entry?.workspaceId && entry.workspaceId !== workspaceId) throw new Error('Computer workspace mismatch');
+  }
+
   assign(engine: 'hermes' | 'dsh' | 'superagent', targetId: string, computerId: string): ComputerBinding {
     if (!this.entries.has(computerId)) throw new Error('Unknown computer');
     const key = this.key(engine, targetId);
@@ -193,17 +199,21 @@ export class ComputerRegistry {
 
   unassign(engine: string, targetId: string): void { this.revoke(this.key(engine, targetId)); }
 
-  kill(engaged: boolean): { engaged: boolean } {
-    this.killed = engaged;
+  kill(engaged: boolean, workspaceId?: string): { engaged: boolean } {
+    if (workspaceId) this.killedWorkspaces.set(workspaceId, engaged);
+    else this.killed = engaged;
     for (const entry of this.entries.values()) {
+      if (workspaceId && entry.workspaceId !== workspaceId) continue;
       if (engaged) entry.computer.interrupt?.();
-      else if (entry.holder === 'agent') entry.computer.resumeInput?.();
+      else if (entry.holder === 'agent' && !this.killed && !this.killedWorkspaces.get(entry.workspaceId ?? '')) entry.computer.resumeInput?.();
     }
     this.publish({ type: 'computer.kill', engaged });
     return { engaged };
   }
 
-  state(): { engaged: boolean } { return { engaged: this.killed }; }
+  state(workspaceId?: string): { engaged: boolean } {
+    return { engaged: this.killed || Boolean(workspaceId && this.killedWorkspaces.get(workspaceId)) };
+  }
 
   async capture(id: string): Promise<Capture> {
     const entry = this.entries.get(id);
@@ -222,7 +232,7 @@ export class ComputerRegistry {
     await this.runQueued(entry, async () => {
       await entry.computer.lease(holder);
       entry.holder = holder;
-      if (this.killed && holder === 'agent') entry.computer.interrupt?.();
+      if (this.state(entry.workspaceId).engaged && holder === 'agent') entry.computer.interrupt?.();
       this.publish({ type: 'computer.lease', computerId: id, holder });
     });
     return this.list().find((computer) => computer.id === id)!;
@@ -268,9 +278,9 @@ export class ComputerRegistry {
         if (!authorized()) throw new Error('Computer capability revoked');
         if (this.tokens.get(token) !== assignment) throw new Error('Computer capability revoked');
         if (action.action === 'status') {
-          audit('allowed'); return { ok: true, lease: { holder: entry.holder, engaged: this.killed } };
+          audit('allowed'); return { ok: true, lease: { holder: entry.holder, engaged: this.state(entry.workspaceId).engaged } };
         }
-        if (this.killed) throw new Error('Computer kill switch engaged');
+        if (this.state(entry.workspaceId).engaged) throw new Error('Computer kill switch engaged');
         if (entry.holder === 'human') throw new Error('Computer is leased to a human');
         // Unknown chords and editing/deletion keys require explicit operator policy.
         // Allow only single letters/digits and a small set of non-destructive keys by default.

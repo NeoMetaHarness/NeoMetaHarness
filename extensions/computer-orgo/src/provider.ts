@@ -1,27 +1,54 @@
 import type { Capture, Computer, ComputerAttachContext, ComputerInput, ComputerProvider, LeaseHolder } from '@neometaharness/computers';
 import type { VaultService } from '@neometaharness/vault';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const managedId = /^neo-[a-f0-9]{24}$/;
-const secretScope = { kind: 'engine' as const, workspaceId: 'default', subjectId: 'computer-orgo' };
+// The provider owns this ledger. An individual workspace cannot claim a VM by saving its ID in settings.
+const ownershipScope = { kind: 'engine' as const, workspaceId: 'default', subjectId: 'computer-orgo-ownership' };
+const ownershipName = (remoteId: string) => 'COMPUTER_' + remoteId.replace(/-/g, '_').toUpperCase();
 
 export interface OrgoClient {
   request<T>(key: string, method: 'GET' | 'POST' | 'DELETE', path: string, body?: object, signal?: AbortSignal): Promise<T>;
 }
 
-/** Inject a loopback base URL for tests. Production uses Orgo's fixed HTTPS origin. */
+function privateAddress(address: string): boolean {
+  const normalized = address.toLowerCase();
+  if (normalized.startsWith('::ffff:')) return privateAddress(normalized.slice(7));
+  if (isIP(normalized) === 6) {
+    return normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd')
+      || /^fe[89ab]/.test(normalized) || normalized.startsWith('ff');
+  }
+  if (isIP(normalized) !== 4) return true;
+  const [a, b] = normalized.split('.').map(Number);
+  return a === 0 || a === 10 || a === 127 || a! >= 224 || (a === 100 && b! >= 64 && b! <= 127)
+    || (a === 169 && b === 254) || (a === 172 && b! >= 16 && b! <= 31)
+    || (a === 192 && (b === 168 || b === 0)) || (a === 198 && (b === 18 || b === 19));
+}
+
+/** Custom endpoints require explicit operator configuration and are validated for every request. */
 export class HttpOrgoClient implements OrgoClient {
-  constructor(private readonly origin = 'https://www.orgo.ai/api', private readonly transport: typeof fetch = fetch) {
+  private readonly hostname: string;
+  constructor(private readonly origin = 'https://www.orgo.ai/api', private readonly transport: typeof fetch = fetch,
+    private readonly allowPrivateNetwork = false) {
     const url = new URL(origin);
-    if (url.pathname !== '/api' || url.search || url.hash || url.username || url.password ||
-        !(url.origin === 'https://www.orgo.ai' || (url.protocol === 'http:' && url.hostname === '127.0.0.1'))) {
+    if (url.protocol !== 'https:' || url.pathname !== '/api' || url.search || url.hash || url.username || url.password) {
       throw new Error('Invalid Orgo API origin');
     }
+    this.hostname = url.hostname.replace(/^\[|\]$/g, '');
   }
 
   async request<T>(key: string, method: 'GET' | 'POST' | 'DELETE', path: string, body?: object, signal?: AbortSignal): Promise<T> {
     if (!/^\/computers(?:\/[0-9a-f-]{36})?(?:\/[a-z-]+)?(?:\?[a-z0-9=&_]+)?$/.test(path)) throw new Error('Invalid Orgo path');
     try {
+      if (this.hostname !== 'www.orgo.ai') {
+        const addresses = isIP(this.hostname) ? [this.hostname]
+          : (await lookup(this.hostname, { all: true })).map((entry) => entry.address);
+        if (!addresses.length || (!this.allowPrivateNetwork && addresses.some(privateAddress))) {
+          throw new Error('Orgo API origin blocked');
+        }
+      }
       const response = await this.transport(this.origin + path, {
         method, headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -41,8 +68,7 @@ export class HttpOrgoClient implements OrgoClient {
 
 type Remote = { id: string; workspace_id?: string; project_id?: string; os?: string };
 type Shot = { success: boolean; image: string; width: number; height: number };
-type Settings = { workspaceId?: string };
-type Instance = { remoteId: string; owned: boolean; computer: OrgoComputer };
+type Instance = { remoteId: string; owned: boolean; workspaceId: string; computer: OrgoComputer };
 
 class OrgoComputer implements Computer {
   private holder: LeaseHolder = 'agent';
@@ -105,57 +131,64 @@ export class OrgoComputerProvider implements ComputerProvider {
   private pending = new Set<Promise<Computer>>();
   private disposed = false;
 
-  constructor(private readonly vault: Pick<VaultService, 'get'>, private readonly settings: Settings,
+  constructor(private readonly vault: Pick<VaultService, 'get' | 'put' | 'delete'>,
+    private readonly settingsFor: (workspaceId: string) => Promise<Record<string, unknown>>,
     private readonly api: OrgoClient = new HttpOrgoClient()) {}
 
-  private async key(): Promise<string> {
-    const key = await this.vault.get(secretScope, 'SEC_APIKEY');
-    if (!key) throw new Error('Orgo API key missing from extension settings');
+  private async key(workspaceId: string): Promise<string> {
+    const key = (await this.settingsFor(workspaceId)).apiKey;
+    if (typeof key !== 'string' || !key) throw new Error('Orgo API key missing from extension settings');
     return key;
   }
-  private workspace(context?: ComputerAttachContext): string {
+  private async workspace(context?: ComputerAttachContext): Promise<{ neoId: string; orgoId: string }> {
     if (!context?.workspaceId) throw new Error('Authenticated workspace required');
-    const workspaceId = this.settings.workspaceId;
-    if (!workspaceId || !uuid.test(workspaceId)) throw new Error('Orgo workspace ID missing from extension settings');
-    return workspaceId;
+    const orgoId = (await this.settingsFor(context.workspaceId)).workspaceId;
+    if (typeof orgoId !== 'string' || !uuid.test(orgoId)) throw new Error('Orgo workspace ID missing from extension settings');
+    return { neoId: context.workspaceId, orgoId };
   }
 
   provision(spec: Record<string, unknown>, context?: ComputerAttachContext): Promise<Computer> {
     if (this.disposed) throw new Error('Orgo provider disabled');
     if (typeof spec.id !== 'string' || !managedId.test(spec.id)) throw new Error('Invalid managed computer ID');
-    const workspaceId = this.workspace(context);
     const os = spec.os ?? 'linux', ram = spec.ram ?? (os === 'macos' ? undefined : 4), cpu = spec.cpu ?? 1;
     const validRam = os === 'macos' ? (ram === undefined || ram === 10) : [4, 8, 16, 32, 64].includes(ram as number);
     if (!['linux', 'windows', 'macos'].includes(String(os)) || !validRam ||
         ![1, 2, 4, 6, 8].includes(cpu as number)) throw new Error('Invalid Orgo computer size');
-    const operation = this.create(spec.id, workspaceId, String(os), ram as number | undefined, Number(cpu));
+    const operation = this.workspace(context).then(({ neoId, orgoId }) =>
+      this.create(spec.id as string, neoId, orgoId, String(os), ram as number | undefined, Number(cpu)));
     this.pending.add(operation);
     void operation.finally(() => this.pending.delete(operation)).catch(() => {});
     return operation;
   }
 
-  private async create(id: string, workspaceId: string, os: string, ram: number | undefined, cpu: number): Promise<Computer> {
-    const remote = await this.api.request<Remote>(await this.key(), 'POST', '/computers',
-      { workspace_id: workspaceId, name: id, os, ...(ram === undefined ? {} : { ram }), cpu });
-    if (!uuid.test(remote.id) || remote.workspace_id !== workspaceId) throw new Error('Invalid Orgo create response');
+  private async create(id: string, neoId: string, orgoId: string, os: string, ram: number | undefined, cpu: number): Promise<Computer> {
+    const remote = await this.api.request<Remote>(await this.key(neoId), 'POST', '/computers',
+      { workspace_id: orgoId, name: id, os, ...(ram === undefined ? {} : { ram }), cpu });
+    if (!uuid.test(remote.id) || remote.workspace_id !== orgoId) throw new Error('Invalid Orgo create response');
     if (this.disposed) {
-      await this.api.request(await this.key(), 'DELETE', '/computers/' + remote.id).catch(() => {});
+      await this.api.request(await this.key(neoId), 'DELETE', '/computers/' + remote.id).catch(() => {});
       throw new Error('Orgo provider disabled');
     }
-    const computer = new OrgoComputer(this.api, () => this.key(), remote.id, os);
-    this.instances.set(id, { remoteId: remote.id, owned: true, computer });
+    try { await this.vault.put(ownershipScope, ownershipName(remote.id), neoId); }
+    catch (error) {
+      await this.api.request(await this.key(neoId), 'DELETE', '/computers/' + remote.id).catch(() => {});
+      throw error;
+    }
+    const computer = new OrgoComputer(this.api, () => this.key(neoId), remote.id, os);
+    this.instances.set(id, { remoteId: remote.id, owned: true, workspaceId: neoId, computer });
     return computer;
   }
 
   async attach(target: string, context?: ComputerAttachContext): Promise<Computer> {
     if (this.disposed) throw new Error('Orgo provider disabled');
     if (!uuid.test(target)) throw new Error('Invalid Orgo computer ID');
-    const workspaceId = this.workspace(context);
-    const remote = await this.api.request<Remote>(await this.key(), 'GET', '/computers/' + target);
-    if (remote.id !== target || (remote.project_id ?? remote.workspace_id) !== workspaceId) throw new Error('Orgo computer workspace mismatch');
+    const { neoId, orgoId } = await this.workspace(context);
+    if (await this.vault.get(ownershipScope, ownershipName(target)) !== neoId) throw new Error('Orgo computer workspace mismatch');
+    const remote = await this.api.request<Remote>(await this.key(neoId), 'GET', '/computers/' + target);
+    if (remote.id !== target || (remote.project_id ?? remote.workspace_id) !== orgoId) throw new Error('Orgo computer workspace mismatch');
     if (this.disposed) throw new Error('Orgo provider disabled');
-    const computer = new OrgoComputer(this.api, () => this.key(), target, remote.os ?? 'linux');
-    this.instances.set(target, { remoteId: target, owned: false, computer });
+    const computer = new OrgoComputer(this.api, () => this.key(neoId), target, remote.os ?? 'linux');
+    this.instances.set(target, { remoteId: target, owned: false, workspaceId: neoId, computer });
     return computer;
   }
 
@@ -166,9 +199,10 @@ export class OrgoComputerProvider implements ComputerProvider {
     if (!instance) return;
     instance.computer.interrupt();
     if (destroy || instance.owned) {
-      await this.api.request(await this.key(), destroy ? 'DELETE' : 'POST',
+      await this.api.request(await this.key(instance.workspaceId), destroy ? 'DELETE' : 'POST',
         '/computers/' + instance.remoteId + (destroy ? '' : '/stop'));
     }
+    if (destroy) await this.vault.delete(ownershipScope, ownershipName(instance.remoteId));
     this.instances.delete(id);
   }
 

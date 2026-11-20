@@ -8,7 +8,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import { startGateway } from '../src/server.js';
 import { FakeRfbServer } from '../../../extensions/computer-vnc/test/fake-rfb.js';
-import { HttpOrgoClient } from '../../../extensions/computer-orgo/src/provider.js';
+import { HttpOrgoClient, type OrgoClient } from '../../../extensions/computer-orgo/src/provider.js';
 
 const root = await mkdtemp(join(tmpdir(), 'neo-p310-'));
 const fakeRfb = await new FakeRfbServer().start();
@@ -79,8 +79,27 @@ try {
     server.once('error', fail);
     server.listen(0, '127.0.0.1', () => done((server.address() as { port: number }).port));
   });
-  const fakeClient = new HttpOrgoClient('http://127.0.0.1:' + port + '/api');
-  assert.throws(() => new HttpOrgoClient('https://not-orgo.example/api'), /origin/);
+  // The injected fake is intentionally separate from the production HTTPS egress client.
+  const fakeClient: OrgoClient = { async request<T>(token: string, method: string, path: string, body?: object): Promise<T> {
+    const response = await fetch('http://127.0.0.1:' + port + '/api' + path, {
+      method, headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error',
+    });
+    if (!response.ok) throw new Error('Orgo fake API request failed');
+    return response.json() as Promise<T>;
+  } };
+  assert.throws(() => new HttpOrgoClient('http://127.0.0.1:' + port + '/api'), /origin/);
+  let privateFetches = 0;
+  const fakeTransport = (async (_url: string, options: RequestInit) => {
+    privateFetches++;
+    assert.equal(options.redirect, 'error');
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }) as typeof fetch;
+  await assert.rejects(new HttpOrgoClient('https://127.0.0.1/api', fakeTransport)
+    .request(key, 'GET', '/computers'), /Orgo API request failed/);
+  assert.equal(privateFetches, 0);
+  await new HttpOrgoClient('https://127.0.0.1/api', fakeTransport, true).request(key, 'GET', '/computers');
+  assert.equal(privateFetches, 1);
 
   const bin = join(root, 'bin');
   await mkdir(bin);
@@ -140,6 +159,8 @@ try {
   const saved = await rpc.settings.get({ extension: 'computer-orgo' });
   assert.deepEqual(saved.values.apiKey, { set: true });
   assert.ok(!JSON.stringify(saved).includes(key));
+  assert.equal((await gateway.kernel.getSettings('computer-orgo', gatewayWorkspaceId)).values.workspaceId, workspaceId);
+  assert.equal(await gateway.vault.get({ kind: 'engine', workspaceId: gatewayWorkspaceId, subjectId: 'computer-orgo' }, 'SEC_APIKEY'), key);
   await assert.rejects(anonymous.computers.provision({ providerId: 'computer-orgo', spec: {} }),
     (e: any) => e.code === 'UNAUTHORIZED');
 
@@ -172,6 +193,33 @@ try {
       assert.equal(stale?.computerId, id);
     }
   }
+
+  // Two distinct Neo workspaces may point at the same Orgo account. They must remain isolated.
+  const otherNeoWorkspace = randomUUID();
+  await assert.rejects(gateway.computers.provision('computer-orgo', {}, { workspaceId: otherNeoWorkspace }),
+    /Orgo workspace ID missing/);
+  await gateway.kernel.saveSettings('computer-orgo', { workspaceId }, otherNeoWorkspace);
+  await assert.rejects(gateway.computers.provision('computer-orgo', {}, { workspaceId: otherNeoWorkspace }),
+    /Orgo API key missing/);
+  await gateway.kernel.saveSettings('computer-orgo', { apiKey: key }, otherNeoWorkspace);
+  const orgoRemote = actions.find(a => a.type === 'create')!.id;
+  const actionCount = actions.length;
+  await assert.rejects(gateway.computers.attach('computer-orgo', orgoRemote,
+    { workspaceId: otherNeoWorkspace }), /workspace mismatch/);
+  assert.equal(actions.length, actionCount, 'cross-workspace attach never touches the Orgo API');
+  for (const id of [orgo.id, local.id]) {
+    assert.throws(() => gateway!.computers.assertWorkspace(id, otherNeoWorkspace), /workspace mismatch/);
+  }
+  assert.ok(!gateway.computers.list(otherNeoWorkspace).some((entry) => entry.id === orgo.id));
+  const otherComputer = await gateway.computers.provision('computer-orgo', {}, { workspaceId: otherNeoWorkspace });
+  const otherBinding = gateway.computers.assign('dsh', 'other-workspace-bot', otherComputer.id);
+  gateway.computers.kill(true, otherNeoWorkspace);
+  assert.equal((await act(otherBinding, { action: 'click', x: 1, y: 1 })).status, 403);
+  assert.equal((await act(gateway.computers.binding('hermes', bot)!, { action: 'click', x: 2, y: 3 })).status, 200);
+  gateway.computers.kill(false, otherNeoWorkspace);
+  await assert.rejects(gateway.computers.attach('computer-orgo', actions.find(a => a.type === 'create' && a.id !== orgoRemote)!.id,
+    { workspaceId: gatewayWorkspaceId }), /workspace mismatch/);
+  await gateway.computers.terminate(otherComputer.id);
 
   assert.deepEqual(localCalls, ['click:10,20']);
   assert.ok(actions.some(a => a.type === 'click' && a.body.x === 12));
