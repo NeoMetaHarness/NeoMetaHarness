@@ -50,6 +50,33 @@ const docDefinitions = [
     description: 'Overview of Neo Meta Harness architecture, workspaces, engines, and CLI workflows.',
   },
   {
+    id: 'user-guide-onboarding',
+    section: 'user-guide',
+    sectionTitle: 'User Guide',
+    title: 'First-Time Onboarding',
+    slug: '/user-guide/onboarding',
+    sourceFile: 'docs/onboarding.md',
+    description: '15-minute onboarding wizard, workspace setup, model selection, and first bot interaction.',
+  },
+  {
+    id: 'user-guide-computers',
+    section: 'user-guide',
+    sectionTitle: 'User Guide',
+    title: 'Computers & Safety Policy',
+    slug: '/user-guide/computers',
+    sourceFile: 'docs/computers-and-safety.md',
+    description: 'Local desktop provider (computer-local), Hermes screen viewer, P3-7 safety policy, and kill switch.',
+  },
+  {
+    id: 'user-guide-autonomy',
+    section: 'user-guide',
+    sectionTitle: 'User Guide',
+    title: 'Autonomous Operations & Inbox',
+    slug: '/user-guide/autonomy',
+    sourceFile: 'docs/autonomous-operations.md',
+    description: 'Accept modes (observe, act-with-approval, act), Suggestions lane, neo upstream self-maintenance routine, and WhatsApp notifications.',
+  },
+  {
     id: 'user-guide-prd',
     section: 'user-guide',
     sectionTitle: 'User Guide',
@@ -174,6 +201,24 @@ const docDefinitions = [
   },
 
   // 5. Deploy
+  {
+    id: 'deploy-installers',
+    section: 'deploy',
+    sectionTitle: 'Deploy',
+    title: 'Installers & Packaging',
+    slug: '/deploy/installers',
+    sourceFile: 'docs/install.md',
+    description: 'Tauri 2 desktop installers, Node gateway sidecar, desktop PWA, and Docker Compose.',
+  },
+  {
+    id: 'deploy-desktop-shell',
+    section: 'deploy',
+    sectionTitle: 'Deploy',
+    title: 'Desktop Shell Configuration',
+    slug: '/deploy/desktop-shell',
+    sourceFile: 'docs/desktop-shell.md',
+    description: 'Tauri 2 launcher shortcuts, tray controls, neo:// deep links, and updater configuration.',
+  },
   {
     id: 'deploy-compose',
     section: 'deploy',
