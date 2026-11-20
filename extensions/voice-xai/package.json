@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@neometaharness/contracts": "workspace:*",
+    "@neometaharness/egress": "workspace:*",
     "@neometaharness/kernel": "workspace:*",
     "undici": "8.11.2"
   },

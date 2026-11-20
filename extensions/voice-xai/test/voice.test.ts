@@ -11,7 +11,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import { neoContract } from '@neometaharness/contracts';
 import type { ContractRouterClient } from '@orpc/contract';
 import { XaiVoiceService, type VoiceHttpClient } from '../src/index.js';
-import { assertSafeProviderUrl, createSafeProviderClient } from '@neometaharness/kernel';
+import { assertSafeProviderUrl, createSafeProviderClient } from '@neometaharness/egress';
 
 const repo = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 type Client = ContractRouterClient<typeof neoContract>;
