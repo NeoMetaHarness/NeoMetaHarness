@@ -381,7 +381,8 @@
     "P4-9": {
       "title": "Honcho dreaming + report, standing intents",
       "status": "in_progress",
-      "owner": "opus"
+      "owner": "opus",
+      "note": "Returned 2026-11-20: cross-workspace route check (H1), intent forgery via memory-local add/update (H2), accept mode per workspace, retracted intents resurrected via L2, read-window duplicates."
     }
   },
   "p3_tasks": {
@@ -618,6 +619,11 @@
       "status": "done",
       "owner": "opus",
       "evidence": "Pushed 963c42e (4 commits). test:p6-8 PASS x2; superagent, app typecheck, upstream:check PASS; full regression 58/58."
+    },
+    "P6-10": {
+      "title": "Inbox and memory workspace isolation (inbox.list/events/actions and memory-local routes scoped to the caller workspace)",
+      "status": "not_started",
+      "note": "Found 2026-11-20 by P4-9 review: inbox.list is unfiltered across workspaces (server.ts inbox handlers); memory-local routes trust input.workspace. Pre-existing; systemic."
     }
   }
 }
