@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { AppsRegistry, validateEgressUrl, assertPublicEgressAddress, type AppApproval } from '@neometaharness/kernel';
 import { ComposioProvider } from '../src/composio.js';
 import { fakeComposio } from './fake.js';
+import { lookup } from 'node:dns';
+import { guardedEgressLookup } from '../../../packages/kernel/src/egress.js';
 const temp = await mkdtemp(join(tmpdir(), 'neo-apps-unit-')); const fake = await fakeComposio();
 let settings = { endpoint: fake.endpoint, apiKey: 'fake-composio-only', allowPrivateNetwork: true };
 const actor = { kind: 'user' as const, workspaceId: 'workspace-a', userId: 'member-a' };
@@ -52,6 +54,12 @@ try {
   for (const ip of ['172.16.0.1', '192.168.1.1', 'fc00::1', 'fe80::1']) assert.throws(() => assertPublicEgressAddress(ip));
   assert.doesNotThrow(() => validateEgressUrl('https://backend.composio.dev'));
   assert.throws(() => validateEgressUrl('http://127.0.0.1', true));
+  for (const addresses of [[{ address: '10.0.0.2', family: 4 }], [{ address: '8.8.8.8', family: 4 }, { address: '169.254.169.254', family: 4 }]]) {
+    const fakeLookup = ((_host, _options, callback) => callback(null, addresses)) as typeof lookup;
+    await new Promise<void>(done => guardedEgressLookup(false, fakeLookup)('public-name.example', { all: true }, error => { assert.match(error!.message, /egress address denied/); done(); }));
+  }
+  const publicLookup = ((_host, _options, callback) => callback(null, [{ address: '8.8.8.8', family: 4 }])) as typeof lookup;
+  await new Promise<void>(done => guardedEgressLookup(false, publicLookup)('public-name.example', {}, (error, address) => { assert.equal(error, null); assert.equal(address, '8.8.8.8'); done(); }));
   assert.ok(injectedCalls > 0);
   console.log('APPS_COMPOSIO_UNIT PASS ownership=true workspace_isolation=true explicit_grants=true revoke_before_execution=true local_read_policy=true egress_denies_private=true HTTPS_only=true OAuth_origin=true immutable_approval=true rotation_invalidates=true disable_revokes=true fake_only=true');
 } finally { gate(); provider.close(); await fake.close(); await rm(temp, { recursive: true, force: true }); }
