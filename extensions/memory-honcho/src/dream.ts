@@ -11,7 +11,7 @@ type Proposal = DreamProposal & {
   /** The L2 entry to copy into L1 (sync-l1 only). */
   copy?: { subject: 'user' | 'bot'; subjectId: string; source: string; provenance: string; trust: MemoryTrust };
 };
-type Report = Omit<DreamReport, 'proposals'> & { proposals: Proposal[] };
+type Report = Omit<DreamReport, 'proposals'> & { proposals: Proposal[]; fingerprint?: string };
 
 /** The Inbox side, provided by engine-superagent. Without it, a dream is reported but never applied. */
 export interface MemoryInboxSink {
@@ -110,6 +110,12 @@ export class Dreamer {
     const report: Report = { id: randomUUID(), workspace, createdAt: this.now(), status: 'empty',
       proposals, applied: 0, skipped: 0, risks, markdown: '' };
     if (!proposals.length) return this.finish(report);
+    // A pending dream with the same proposals is still the answer: no second Inbox item for it.
+    report.fingerprint = createHash('sha256').update(JSON.stringify(proposals.map(({ kind, target, expect }) =>
+      [kind, target, expect]))).digest('hex');
+    const pending = this.reports.find((item) => item.workspace === workspace && item.status === 'proposed'
+      && item.fingerprint === report.fingerprint);
+    if (pending) return publicReport(pending);
 
     const destructive = proposals.some((item) => item.destructive);
     const sink = this.sink();
@@ -122,15 +128,27 @@ export class Dreamer {
     // `act` writes non-destructive dreams directly. Deletions always wait for an admin's approval.
     if (acceptMode === 'act' && !destructive) {
       const result = await this.write(report);
-      const applied = this.finish({ ...report, status: 'applied', applied: result.applied, skipped: result.skipped });
-      const item = sink.propose({ dreamId: report.id, workspace, summary: summary(applied), proposals: proposals.length,
-        destructive, applied: true, changes: result.changes, risks });
-      return this.finish({ ...applied, inboxId: item.id });
+      const applied: Report = { ...report, status: 'applied', applied: result.applied, skipped: result.skipped };
+      this.finish(applied);
+      return this.deliver(applied, sink, true, result.changes);
     }
-    const pending = this.finish({ ...report, status: 'proposed' });
-    const item = sink.propose({ dreamId: report.id, workspace, summary: summary(pending), proposals: proposals.length,
-      destructive, applied: false, changes: proposals.map(describe), risks });
-    return this.finish({ ...pending, inboxId: item.id });
+    // Saved before the Inbox sees it, so accepting the item always finds the dream.
+    const proposed: Report = { ...report, status: 'proposed' };
+    this.finish(proposed);
+    return this.deliver(proposed, sink, false, proposals.map(describe));
+  }
+
+  private deliver(report: Report, sink: MemoryInboxSink, applied: boolean, changes: string[]): DreamReport {
+    try {
+      const item = sink.propose({ dreamId: report.id, workspace: report.workspace, summary: summary(report),
+        proposals: report.proposals.length, destructive: report.proposals.some((entry) => entry.destructive),
+        applied, changes, risks: report.risks });
+      return this.finish({ ...report, inboxId: item.id });
+    } catch {
+      // No Inbox item means nobody can approve it, so it is not left pending.
+      const risks = [...report.risks, 'The Inbox could not take this report.'];
+      return this.finish({ ...report, risks, status: applied ? 'applied' : 'undelivered' });
+    }
   }
 
   private async write(report: Report) {
@@ -257,7 +275,7 @@ function render(report: Report) {
   return lines.join('\n') + '\n';
 }
 
-function publicReport(report: Report): DreamReport {
+function publicReport({ fingerprint: _fingerprint, ...report }: Report): DreamReport {
   return { ...report, proposals: report.proposals.map(({ kind, target, text, reason, destructive }) =>
     ({ kind, target, text, reason, destructive })) };
 }
