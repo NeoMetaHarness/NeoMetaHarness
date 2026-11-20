@@ -11,6 +11,7 @@
   "scripts": {
     "test:p6-9": "pnpm --dir apps/neo-app test:p6-9",
     "test:p3-10": "pnpm --dir extensions/computer-orgo typecheck && pnpm --dir apps/gateway exec tsx test/p3-10.ts",
+    "test:p2-12": "pnpm --dir apps/neo-app build && pnpm --dir extensions/apps-composio test && pnpm --dir extensions/apps-composio test:p2-12",
     "test:p3-6": "pnpm --dir apps/neo-app build && pnpm --dir extensions/computer-docker typecheck && pnpm --dir apps/gateway exec tsx test/p3-6.ts",
     "test:p3-11": "pnpm --dir apps/neo-app build && pnpm --dir extensions/computer-boat typecheck && pnpm --dir apps/gateway exec tsx test/p3-11.ts",
     "test:p3-9": "pnpm --dir apps/neo-app build && pnpm --dir extensions/engine-hermes typecheck && pnpm --dir extensions/computer-hermes-screen typecheck && pnpm --dir apps/gateway exec tsx test/p3-9.ts",

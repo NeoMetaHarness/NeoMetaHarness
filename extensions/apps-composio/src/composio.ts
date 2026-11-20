@@ -36,9 +36,16 @@ export class ComposioProvider implements AppsProvider {
     } catch { throw new Error('Composio request failed; no automatic action retry'); }
   }
   async toolkits() {
-    const data = await this.request('toolkits?limit=100');
-    if (!Array.isArray(data.items)) throw new Error('Invalid Composio toolkit response');
-    return data.items.map((item: any) => ({ id: String(item.slug), name: String(item.name) }));
+    const result: { id: string; name: string }[] = []; const cursors = new Set<string>(); let cursor = '';
+    for (let page = 0; page < 100; page++) {
+      const data = await this.request('toolkits?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+      if (!Array.isArray(data.items)) throw new Error('Invalid Composio toolkit response');
+      for (const item of data.items) { if (typeof item.slug !== 'string' || typeof item.name !== 'string') throw new Error('Invalid Composio toolkit'); result.push({ id: item.slug, name: item.name }); }
+      if (!data.next_cursor) return result;
+      if (typeof data.next_cursor !== 'string' || cursors.has(data.next_cursor)) throw new Error('Invalid Composio toolkit pagination');
+      cursor = data.next_cursor; cursors.add(cursor);
+    }
+    throw new Error('Composio toolkit pagination exceeded its safety limit');
   }
   async connect(input: { toolkit: string; authConfigId: string; userId: string; callbackUrl: string }) {
     const callback = new URL(input.callbackUrl);
@@ -57,12 +64,14 @@ export class ComposioProvider implements AppsProvider {
     return { ...account, redirectUrl: url.href };
   }
   async describe(input: AppAction) {
+    const fingerprint = this.fingerprint();
     const account = this.accounts.find(a => a.id === input.accountId); if (!account) throw new Error('Account was not connected through Neo');
     const tool = await this.request('tools/' + encodeURIComponent(input.action));
     if (tool.slug !== input.action || tool.toolkit?.slug !== account.toolkit) throw new Error('Action does not match connected toolkit');
     const destructive = !Array.isArray(tool.tags) || !tool.tags.includes('readOnlyHint') || tool.tags.includes('destructiveHint');
     if (typeof tool.version !== 'string' || !tool.version) throw new Error('Action version is missing');
-    this.approvals.set(input, { fingerprint: this.fingerprint(), version: tool.version });
+    if (fingerprint !== this.fingerprint()) throw new Error('Composio settings changed during review');
+    this.approvals.set(input, { fingerprint, version: tool.version });
     return { destructive, summary: `${input.action} on ${account.toolkit} account ${account.id}` };
   }
   async execute(input: AppAction, signal: AbortSignal) {

@@ -24,6 +24,10 @@ try {
   await assert.rejects(pending!.execute(), /settings changed/); settings.apiKey = 'fake-composio-only';
   await registry.run(action); detach(); await assert.rejects(pending!.execute(), /expired/);
   fake.setFail(true); await assert.rejects(provider.toolkits(), e => !String(e).includes('fake-composio-only'));
+  const alternative = { id: 'alternative', toolkits: async () => [{ id: 'fake', name: 'Other provider' }], connect: async () => ({ id: 'other', toolkit: 'fake', redirectUrl: 'https://fake.test/oauth' }), describe: async () => ({ destructive: false, summary: 'Other provider' }), execute: async () => 'alternative result' };
+  const removeOther = registry.register(alternative);
+  assert.equal((await registry.toolkits('alternative'))[0]!.id, 'fake');
+  await registry.run({ ...action, provider: 'alternative' }); assert.equal(await pending!.execute(), 'alternative result'); removeOther();
   assert.ok(injectedCalls > 0);
   console.log('APPS_COMPOSIO_UNIT PASS injected_http=true fake_only=true OAuth=true conservative_policy=true immutable_approval=true rotation_invalidates=true disable_revokes=true errors_redacted=true');
 } finally { gate(); provider.close(); await fake.close(); await rm(temp, { recursive: true, force: true }); }
