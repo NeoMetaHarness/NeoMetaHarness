@@ -143,6 +143,7 @@ export class PollingGitHubSource implements GitHubSource {
       if (observed) this.activeObserved = true;
       return this.active;
     }
+    if (this.pausedUntil !== null && Date.now() >= this.pausedUntil) this.unobservedFailure = undefined;
     // A scheduled poll may reach the rate limit just before an explicit request.
     // Surface that original error once instead of presenting its cooldown as success.
     if (observed && this.unobservedFailure) {
