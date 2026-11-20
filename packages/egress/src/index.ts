@@ -2,7 +2,7 @@
  * Shared outbound HTTP guard for extensions that call admin-configurable provider URLs.
  * Rule: HTTPS only, no credentials in the URL, no redirects, private/reserved addresses denied unless the
  * admin-only `allowPrivateNetwork` setting is on, DNS checked inside the socket lookup (no rebinding gap),
- * bounded response size and a default timeout. Originally written for apps-composio (P2-12).
+ * bounded response size (maxResponseBytes, default 1 MB) and a timeout that a caller's signal cannot remove. Originally written for apps-composio (P2-12).
  */
 import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { lookup } from 'node:dns';
@@ -44,16 +44,57 @@ export function guardedEgressLookup(allowPrivate: boolean, resolve = lookup): Lo
 /** DNS is checked by the socket lookup itself, avoiding a check-then-resolve rebinding gap.
  * Injected clients are trusted host/test dependencies; URL validation still applies to them. */
 export const DEFAULT_EGRESS_TIMEOUT_MS = 30_000;
+export const DEFAULT_EGRESS_MAX_RESPONSE_BYTES = 1_000_000;
+export interface EgressFetchOptions {
+  /** Applies to every request, also when the caller passes its own signal (both abort it). Default 30 s. */
+  timeoutMs?: number;
+  /** Largest response body accepted; a bigger one fails with "Egress response too large". Default 1 MB. */
+  maxResponseBytes?: number;
+}
+
+const positive = (value: number | undefined, fallback: number, name: string) => {
+  if (value === undefined) return fallback;
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`Egress ${name} must be a positive number`);
+  return value;
+};
+
+/** Buffer a response body up to the cap, so an injected client is bounded like the built-in one. */
+async function capped(response: Response, maxBytes: number): Promise<Response> {
+  const tooLarge = () => new Error('Egress response too large');
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) { await response.body?.cancel().catch(() => {}); throw tooLarge(); }
+  if (!response.body) return response;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = []; let bytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > maxBytes) { await reader.cancel().catch(() => {}); throw tooLarge(); }
+    chunks.push(value);
+  }
+  return new Response([204, 205, 304].includes(response.status) ? null : Buffer.concat(chunks),
+    { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
+/**
+ * The third argument is the options object, or (as before) just the timeout in milliseconds.
+ * A caller's own `signal` is combined with the timeout (AbortSignal.any), so it can never disable it.
+ */
 export function createEgressFetch(allowPrivateNetwork: () => boolean, injected?: typeof fetch,
-  timeoutMs = DEFAULT_EGRESS_TIMEOUT_MS): typeof fetch {
+  options: number | EgressFetchOptions = {}): typeof fetch {
+  const settings = typeof options === 'number' ? { timeoutMs: options } : options;
+  const timeoutMs = positive(settings.timeoutMs, DEFAULT_EGRESS_TIMEOUT_MS, 'timeoutMs');
+  const maxResponseBytes = positive(settings.maxResponseBytes, DEFAULT_EGRESS_MAX_RESPONSE_BYTES, 'maxResponseBytes');
   return (async (input, rawInit) => {
     const allowPrivate = allowPrivateNetwork() === true; // a non-boolean (e.g. the string "false") never opens private egress
-    const init = { ...rawInit, signal: rawInit?.signal ?? AbortSignal.timeout(timeoutMs) };
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const init = { ...rawInit, signal: rawInit?.signal ? AbortSignal.any([rawInit.signal, timeout]) : timeout };
     const url = validateEgressUrl(input instanceof Request ? input.url : String(input), allowPrivate);
     if (injected) {
       const response = await injected(url.href, { ...init, redirect: 'error' });
       if (response.redirected || (response.status >= 300 && response.status < 400)) throw new Error('Egress redirect denied');
-      return response;
+      return capped(response, maxResponseBytes);
     }
     if (init?.body !== undefined && typeof init.body !== 'string') throw new Error('Unsupported egress body');
     return new Promise<Response>((resolve, reject) => {
@@ -63,7 +104,7 @@ export function createEgressFetch(allowPrivateNetwork: () => boolean, injected?:
         if ((response.statusCode ?? 0) >= 300 && (response.statusCode ?? 0) < 400) { response.destroy(); reject(new Error('Egress redirect denied')); return; }
         const chunks: Buffer[] = []; let bytes = 0;
         response.on('error', reject);
-        response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 1_000_000) { outgoing.destroy(new Error('Egress response too large')); return; } chunks.push(chunk); });
+        response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > maxResponseBytes) { outgoing.destroy(new Error('Egress response too large')); return; } chunks.push(chunk); });
         response.on('end', () => {
           try {
             const headers = new Headers(); for (const [name, value] of Object.entries(response.headers)) if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value);
