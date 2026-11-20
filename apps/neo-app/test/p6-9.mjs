@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { startCodingFixture } from './p6-9-coding.mjs';
 import { gatewayReady } from './gateway-ready.mjs';
 import assert from 'node:assert/strict';
-import { spawn, execFileSync, spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { existsSync } from 'node:fs';
@@ -18,13 +18,61 @@ import { RPCLink } from '@orpc/client/fetch';
 const app = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(app, '../..');
 const gatewayDir = join(repo, 'apps', 'gateway');
-const uiDir = join(repo, 'packages', 'ui');
 const chromeBinary = process.env.CHROME ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-function nodeTool(cwd, tool, args) {
-  console.log(`RUN ${tool} ${args.join(' ')}`);
-  execFileSync(process.execPath, [join(cwd, 'node_modules', tool), ...args], { cwd, stdio: 'inherit' });
+const children = new Set();
+function track(child) {
+  children.add(child);
+  child.once('close', () => children.delete(child));
+  return child;
+}
+
+function killTree(child) {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform === 'win32') {
+    const result = spawnSync(join(process.env.SystemRoot, 'System32/taskkill.exe'),
+      ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 5000 });
+    if (result.status !== 0) child.kill('SIGKILL');
+  } else {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+  }
+}
+
+function withDeadline(promise, ms, message) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message())), ms);
+  })]).finally(() => clearTimeout(timer));
+}
+
+async function waitForDatabaseRelease(dbFile) {
+  if (process.platform !== 'win32') return;
+  // Node opens files with sharing enabled on Windows. An exclusive open
+  // also detects inherited handles on the WAL and shared-memory files.
+  const probe = track(spawn(join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), [
+    '-NoProfile', '-NonInteractive', '-Command', `
+      $deadline = [Diagnostics.Stopwatch]::StartNew()
+      do {
+        try {
+          foreach ($path in @($env:NMH_TEST_DB, ($env:NMH_TEST_DB + '-wal'), ($env:NMH_TEST_DB + '-shm'))) {
+            try { [IO.File]::Open($path, 'Open', 'Read', 'None').Dispose() }
+            catch [IO.FileNotFoundException] {}
+          }
+          exit 0
+        } catch [IO.IOException] { Start-Sleep -Milliseconds 100 }
+      } while ($deadline.ElapsedMilliseconds -lt 10000)
+      exit 1
+    `,
+  ], { env: { ...process.env, NMH_TEST_DB: dbFile }, windowsHide: true, stdio: 'ignore' }));
+  const closed = new Promise((resolve, reject) => {
+    probe.once('error', reject);
+    probe.once('close', resolve);
+  });
+  try {
+    assert.equal(await withDeadline(closed, 15000, () => 'SQLite handle probe timed out'), 0,
+      'Gateway SQLite handles were not released within 10 seconds');
+  } finally { killTree(probe); }
 }
 
 async function freePort() {
@@ -58,7 +106,7 @@ const authHeaders = () => ({ authorization: `Bearer ${AUTH}` });
 
 async function startGateway(dbFile, hermesHome, modelUrl, dshUrl, extra = {}) {
   const startedAt = Date.now();
-  const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
+  const child = track(spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: gatewayDir,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
@@ -69,29 +117,26 @@ async function startGateway(dbFile, hermesHome, modelUrl, dshUrl, extra = {}) {
       NMH_DB_PATH: dbFile, NMH_HERMES_HOME: hermesHome, NMH_HERMES_MODEL_URL: modelUrl,
       NMH_SUPERAGENT_MODEL_URL: dshUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1', ...extra,
     },
-  });
+  }));
+  const closed = new Promise(resolve => child.once('close', resolve));
   let errors = '';
   child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
   const port = await gatewayReady(child, { onToken: token => { AUTH = token; }, errors: () => errors });
   console.log(`P6-9_GATEWAY_READY startup_ms=${Date.now() - startedAt}`);
-  return { port, child, errors: () => errors, async close() {
-    if (child.exitCode !== null) return;
-    const exit = new Promise((done) => child.once('exit', done));
-    child.send('shutdown');
-    let timer;
+  let closing;
+  const close = async () => {
+    if (child.connected) child.send('shutdown', error => { if (error) killTree(child); });
     try {
-      await Promise.race([exit, new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          if (child.exitCode === null) {
-            if (process.platform === 'win32') spawnSync(join(process.env.SystemRoot, 'System32/taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-            else child.kill('SIGKILL');
-          }
-          reject(new Error(`Gateway shutdown timeout: ${errors}`));
-        }, 45000);
-      })]);
-    } finally { clearTimeout(timer); }
+      await withDeadline(closed, 45000, () => `Gateway shutdown timeout: ${errors}`);
+    } catch (error) {
+      killTree(child);
+      await withDeadline(closed, 10000, () => 'Gateway process tree did not close after forced shutdown');
+      throw error;
+    }
     assert.equal(child.exitCode, 0, `Gateway shutdown error: ${errors}`);
-  } };
+    await waitForDatabaseRelease(dbFile);
+  };
+  return { port, errors: () => errors, close: () => closing ??= close() };
 }
 
 async function eventually(check, label, timeout = 90000) {
@@ -108,10 +153,10 @@ async function eventually(check, label, timeout = 90000) {
 }
 
 async function startChrome(profile) {
-  const child = spawn(chromeBinary, [
+  const child = track(spawn(chromeBinary, [
     '--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', '--disable-extensions', 'about:blank',
-  ], { stdio: 'ignore', windowsHide: true });
+  ], { stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' }));
   let port;
   for (let retry = 0; retry < 100; retry++) {
     try { port = Number((await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]); break; }
@@ -186,7 +231,7 @@ async function pageSession(chrome, url) {
 
 
 function git(cwd, args) {
-  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true });
+  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true, timeout: 5000, killSignal: 'SIGKILL' });
   assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
 }
 async function scriptedModels() {
@@ -284,7 +329,7 @@ async function trial(previewPort) {
   const models = await scriptedModels();
   let coding, github, gateway, chrome, page;
   try {
-    coding = await startCodingFixture(temporary); github = await fakeGitHub(coding.root);
+    coding = await startCodingFixture(temporary, track); github = await fakeGitHub(coding.root);
     const bridgeScript = await prepareWhatsApp(temporary);
     const home = join(temporary, 'hermes-home');
     const extra = { ...coding.env, NMH_SUPERAGENT_GITHUB_API_URL: github.url, NMH_SUPERAGENT_GITHUB_POLL_INTERVAL_MS: '120000',
@@ -397,13 +442,35 @@ async function trial(previewPort) {
     const cleanup = await Promise.allSettled([gateway?.close(), coding?.close()]);
     for (const result of cleanup) if (result.status === 'rejected') console.error('P6-9_CLEANUP_ERROR', result.reason);
     await Promise.all([new Promise(done => models.server.close(done)), github ? new Promise(done => github.server.close(done)) : Promise.resolve()]);
-    await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    try {
+      await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (error) {
+      if (error.code !== 'EBUSY') throw error;
+      console.warn(`P6-9_CLEANUP_WARNING temporary directory still busy: ${temporary}`);
+    }
   }
 }
+const overallTimeoutMs = Number(process.env.NMH_P69_TEST_TIMEOUT_MS ?? 600000);
+assert.ok(Number.isInteger(overallTimeoutMs) && overallTimeoutMs > 0 && overallTimeoutMs <= 600000,
+  'NMH_P69_TEST_TIMEOUT_MS must be between 1 and 600000');
+const watchdog = setTimeout(() => {
+  console.error(`P6-9 FAIL overall deadline exceeded after ${overallTimeoutMs}ms`);
+  for (const child of children) killTree(child);
+  process.exit(1);
+}, overallTimeoutMs);
 try {
-  nodeTool(app, 'vite/bin/vite.js', ['build']);
+  const build = track(spawn(process.execPath, [join(app, 'node_modules/vite/bin/vite.js'), 'build'],
+    { cwd: app, stdio: 'inherit', detached: process.platform !== 'win32' }));
+  await new Promise((resolve, reject) => {
+    build.once('error', reject);
+    build.once('close', code => code === 0 ? resolve() : reject(new Error(`App build exited ${code}`)));
+  });
   const port = await freePort();
-  const preview = spawn(process.execPath, [join(app, 'node_modules/vite/bin/vite.js'), 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: app, stdio: 'ignore', windowsHide: true });
+  const preview = track(spawn(process.execPath, [join(app, 'node_modules/vite/bin/vite.js'), 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: app, stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' }));
   try { await awaitHttp(`http://127.0.0.1:${port}/inbox`, 'App preview'); await trial(port); }
-  finally { if (process.platform === 'win32') spawnSync(join(process.env.SystemRoot, 'System32/taskkill.exe'), ['/PID', String(preview.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); else preview.kill(); }
+  finally { killTree(preview); }
 } catch (error) { console.error('P6-9 FAIL', error.stack ?? error); process.exitCode = 1; }
+finally {
+  for (const child of children) killTree(child);
+  watchdog.unref();
+}
