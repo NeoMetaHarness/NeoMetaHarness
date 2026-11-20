@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -105,6 +105,7 @@ async function main() {
     const independent = new XaiVoiceService({ apiKey: key }, injected);
     assert.equal((await independent.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' })).text, 'Injected transcript');
     assert.deepEqual(calls, ['/v1/stt']);
+    await assert.rejects(independent.synthesize({ text: 'x'.repeat(15_001) }), /too_big|<=15000|15000|maximum|less than or equal/i);
     independent.dispose();
     await assert.rejects(independent.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' }), /disabled/);
 

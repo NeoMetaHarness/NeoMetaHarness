@@ -408,7 +408,7 @@ export const voiceTranscribeOutput = z.object({
   text: z.string(), language: z.string().optional(), duration: z.number().nonnegative().optional(),
 });
 export const voiceSynthesizeInput = z.object({
-  text: z.string().min(1).max(60_000),
+  text: z.string().min(1).max(15_000),
   voice: z.string().min(1).max(128).optional(), language: z.string().min(2).max(40).optional(),
 });
 export const voiceSynthesizeOutput = z.object({
