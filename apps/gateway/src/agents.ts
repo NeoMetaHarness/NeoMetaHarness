@@ -8,7 +8,7 @@ import { requireViewer, requireMember, requireAdminOrOwner, type GatewayAuthCont
 import { authorize, destructiveToolApproval, policyMiddleware } from './policy.js';
 
 /** The gateway owns the service lifetime. It follows Hermes enable/disable transitions. */
-export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: NeoKernel) {
+export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: NeoKernel, mode: 'server' | 'desktop' = 'server') {
   let service: AgentService | undefined;
   const hermesRunning = () => kernel.list().some((extension) =>
     extension.id === 'engine-hermes' && extension.status === 'running');
@@ -37,11 +37,12 @@ export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: Neo
     bots: {
       list: os.agents.bots.list.handler(({ context }) => {
         authorize('agents.bots.list', context as GatewayAuthContext);
-        return requireService().records.listBots();
+        return requireService().records.listBots().then((bots) =>
+          mode === 'server' ? bots.filter((bot) => bot.workspace_id === context.workspaceId) : bots);
       }),
       create: os.agents.bots.create.handler(({ input, context }) => {
         authorize('agents.bots.create', context as GatewayAuthContext);
-        return requireService().createBot(input.name);
+        return requireService().createBot(input.name, mode === 'server' ? context.workspaceId ?? undefined : undefined);
       }),
       update: os.agents.bots.update.handler(async ({ input, context }) => {
         authorize('agents.bots.update', context as GatewayAuthContext);

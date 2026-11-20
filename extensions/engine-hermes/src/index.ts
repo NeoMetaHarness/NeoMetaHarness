@@ -22,12 +22,14 @@ export default defineExtension({
     const computers = ctx.inject<ComputerRegistry>('computers');
     const memory = ctx.inject<MemoryBridge>('memoryBridge');
     const skillsBridge = ctx.inject<SkillsBridge>('skillsBridge');
+    const profileWorkspace = ctx.inject<(profile: string) => Promise<string | undefined>>('computerProfileWorkspace');
     const service = new HermesRuntime(credentials, async (profile, profileHome) => {
-      const computerBinding = computers ? await projectHermesComputer(computers, profile, profileHome) : undefined;
+      const workspaceId = await profileWorkspace?.(profile);
+      const computerBinding = computers ? await projectHermesComputer(computers, profile, profileHome, workspaceId) : undefined;
       const memoryVersion = await projectHermesMemory(memory, profile, profileHome);
       const skillsVersion = await skillsBridge?.hermesReady(profile, profileHome);
       // hermes-agent@v0.23.2 tools/mcp_tool_transport.py:375-395 consumes configured stdio servers.
-      const computerMcp = await ctx.inject<ComputerMcpBridge>('computerMcpBridge')?.ready('hermes', profile, profileHome);
+      const computerMcp = await ctx.inject<ComputerMcpBridge>('computerMcpBridge')?.ready('hermes', profile, profileHome, workspaceId ?? 'default');
       const modelVersion = await ctx.inject<ModelProjector>('modelHub')?.projectHermes(profile, profileHome);
       // The Neo backend reads binding.json on every action. Swapping the
       // computer capability never requires restarting this Hermes bot.

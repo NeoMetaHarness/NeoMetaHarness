@@ -8,8 +8,8 @@ import type { ComputerRegistry } from './index.js';
 const assets = fileURLToPath(new URL('./hermes-plugin/', import.meta.url));
 
 /** Projects a profile's assigned computer exclusively into the supplied Neo-owned home. */
-export async function projectHermesComputer(registry: ComputerRegistry, profile: string, home: string): Promise<string | undefined> {
-  const binding = registry.binding('hermes', profile);
+export async function projectHermesComputer(registry: ComputerRegistry, profile: string, home: string, workspaceId?: string): Promise<string | undefined> {
+  const binding = registry.binding('hermes', profile, workspaceId);
   const pluginDir = join(home, 'plugins', 'neo_vnc');
   if (!binding) {
     // Fail closed after release or unassignment. The retained backend config

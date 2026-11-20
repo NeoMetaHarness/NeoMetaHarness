@@ -1,10 +1,10 @@
-import type { Kysely, Generated } from 'kysely';
+import { sql, type Kysely, type Generated } from 'kysely';
 import type { NeoTables } from './index.js';
 
 export type TurnStatus = 'queued' | 'running' | 'awaiting_approval' | 'completed' | 'denied' | 'stopped' | 'failed' | 'interrupted';
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'interrupted';
 
-export interface AgentBot { id: string; name: string; created_at: number }
+export interface AgentBot { id: string; name: string; created_at: number; workspace_id?: string | null }
 export interface AgentRoom { id: string; name: string; created_at: number }
 export interface AgentRoomMember { room_id: string; bot_id: string }
 export interface AgentRoomMessage { id: string; room_id: string; author_id: string; body: string; created_at: number }
@@ -47,7 +47,12 @@ export class AgentRecords {
     await this.db.schema.createTable('agent_bot').ifNotExists()
       .addColumn('id', 'text', (c) => c.primaryKey())
       .addColumn('name', 'text', (c) => c.notNull())
-      .addColumn('created_at', 'integer', (c) => c.notNull()).execute();
+      .addColumn('created_at', 'integer', (c) => c.notNull())
+      .addColumn('workspace_id', 'text').execute();
+    const columns = await sql<{ name: string }>`PRAGMA table_info('agent_bot')`.execute(this.db);
+    if (!columns.rows.some((column) => column.name === 'workspace_id')) {
+      await this.db.schema.alterTable('agent_bot').addColumn('workspace_id', 'text').execute();
+    }
     await this.db.schema.createTable('agent_room').ifNotExists()
       .addColumn('id', 'text', (c) => c.primaryKey())
       .addColumn('name', 'text', (c) => c.notNull())

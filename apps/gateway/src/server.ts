@@ -323,6 +323,13 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     channelSource: channelBus,
     channelBus,
     computers,
+    computerProfileWorkspace: async (profile: string): Promise<string | undefined> => {
+      if (mode === 'desktop') return undefined;
+      const botId = /^neo_[a-f0-9]{32}$/i.test(profile)
+        ? profile.slice(4).replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5')
+        : profile;
+      return (await db.agents.getBot(botId))?.workspace_id ?? undefined;
+    },
     computerMcpBridge,
     computerLocalDriverFactory: options.computerLocalDriverFactory,
     hermesScreen: options.hermesScreenBridge,
@@ -405,7 +412,12 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     throw error;
   }
 
-  const agentApi = await createAgentGateway(db, kernel);
+  const agentApi = await createAgentGateway(db, kernel, mode);
+  const computerWorkspace = (workspaceId: string | null): string | undefined => {
+    if (mode === 'desktop') return undefined;
+    if (!workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace required' });
+    return workspaceId;
+  };
   for (const extension of kernel.list()) {
     if (extension.version) backupStorage.versions[extension.id] = extension.version;
   }
@@ -1425,62 +1437,68 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       policy: {
         get: os.computers.policy.get.handler(({ input, context }) => {
           authorize('computers.policy.get', context);
-          computers.assertWorkspace(input.id, context.workspaceId ?? '');
+          if (mode === 'server') computers.assertWorkspace(input.id, computerWorkspace(context.workspaceId)!);
           return computers.policy(input.id);
         }),
         set: os.computers.policy.set.handler(({ input, context }) => {
           authorize('computers.policy.set', context);
-          computers.assertWorkspace(input.id, context.workspaceId ?? '');
+          if (mode === 'server') computers.assertWorkspace(input.id, computerWorkspace(context.workspaceId)!);
           return computers.setPolicy(input.id, input);
         }),
       },
       list: os.computers.list.handler(async ({ context }) => {
         authorize('computers.list', context);
-        return computers.list(context.workspaceId ?? '');
+        return computers.list(computerWorkspace(context.workspaceId));
       }),
       provision: os.computers.provision.handler(async ({ input, context }) => {
         authorize('computers.provision', context);
-        try { return await computers.provision(input.providerId, input.spec, { workspaceId: context.workspaceId ?? undefined }); }
+        try { return await computers.provision(input.providerId, input.spec, { workspaceId: mode === 'server' ? computerWorkspace(context.workspaceId) : context.workspaceId ?? undefined }); }
         catch { throw new ORPCError('BAD_REQUEST', { message: 'Computer provisioning failed; check the image, Docker service and workspace credentials' }); }
       }),
       attach: os.computers.attach.handler(async ({ input, context }) => {
         authorize('computers.attach', context);
-        try { return await computers.attach(input.providerId, input.target, { workspaceId: context.workspaceId ?? undefined }); }
+        try { return await computers.attach(input.providerId, input.target, { workspaceId: mode === 'server' ? computerWorkspace(context.workspaceId) : context.workspaceId ?? undefined }); }
         catch { throw new ORPCError('BAD_REQUEST', { message: 'Computer attachment failed; check the target, security type and vault credentials' }); }
       }),
       release: os.computers.release.handler(async ({ input, context }) => {
         authorize('computers.release', context);
-        computers.assertWorkspace(input.id, context.workspaceId ?? '');
-        return { released: await computers.release(input.id) };
+        return { released: await computers.release(input.id, computerWorkspace(context.workspaceId)) };
       }),
       terminate: os.computers.terminate.handler(async ({ input, context }) => {
         authorize('computers.terminate', context);
-        computers.assertWorkspace(input.id, context.workspaceId ?? '');
-        return { terminated: await computers.terminate(input.id) };
+        return { terminated: await computers.terminate(input.id, computerWorkspace(context.workspaceId)) };
       }),
       lease: os.computers.lease.handler(async ({ input, context }) => {
         authorize('computers.lease', context);
-        computers.assertWorkspace(input.id, context.workspaceId ?? '');
-        return computers.lease(input.id, input.holder);
+        return computers.lease(input.id, input.holder, computerWorkspace(context.workspaceId));
       }),
       assign: os.computers.assign.handler(async ({ input, context }) => {
         authorize('computers.assign', context);
-        computers.assertWorkspace(input.computerId, context.workspaceId ?? '');
-        computers.assign(input.engine, input.targetId, input.computerId);
+        const workspace = computerWorkspace(context.workspaceId);
+        if (workspace) {
+          computers.assertWorkspace(input.computerId, workspace);
+          const normalized = input.engine === 'hermes' && /^neo_[a-f0-9]{32}$/i.test(input.targetId)
+            ? input.targetId.slice(4).replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5')
+            : input.targetId;
+          const bot = await db.agents.getBot(normalized);
+          if (!bot || bot.workspace_id !== workspace) {
+            throw new ORPCError('NOT_FOUND', { message: 'Bot unavailable in this workspace' });
+          }
+        }
+        computers.assign(input.engine, input.targetId, input.computerId, workspace);
         return input;
       }),
       kill: os.computers.kill.handler(async ({ input, context }) => {
         authorize('computers.kill', context);
-        return computers.kill(input.engaged, context.workspaceId ?? undefined);
+        return computers.kill(input.engaged, computerWorkspace(context.workspaceId));
       }),
       state: os.computers.state.handler(async ({ context }) => {
         authorize('computers.state', context);
-        return computers.state(context.workspaceId ?? undefined);
+        return computers.state(computerWorkspace(context.workspaceId));
       }),
       capture: os.computers.capture.handler(async ({ input, context }) => {
         authorize('computers.capture', context);
-        computers.assertWorkspace(input.id, context.workspaceId ?? '');
-        try { return await computers.capture(input.id); }
+        try { return await computers.capture(input.id, computerWorkspace(context.workspaceId)); }
         catch { throw new ORPCError('BAD_GATEWAY', { message: 'Computer capture failed; release and reattach the computer' }); }
       }),
       local: {

@@ -91,7 +91,7 @@ export class ComputerRegistry {
   }
 
   list(workspaceId?: string): ComputerInfo[] {
-    return [...this.entries].filter(([, entry]) => workspaceId === undefined || !entry.workspaceId || entry.workspaceId === workspaceId).map(([id, entry]) => ({
+    return [...this.entries].filter(([, entry]) => workspaceId === undefined || entry.workspaceId === workspaceId).map(([id, entry]) => ({
       id, providerId: entry.providerId,
       capabilities: this.providers.get(entry.providerId)?.capabilities ?? {
         screen: false, input: false, browserCdp: false, shell: false, files: false, snapshot: false,
@@ -142,11 +142,13 @@ export class ComputerRegistry {
     }
   }
 
-  async release(id: string): Promise<boolean> {
+  async release(id: string, workspaceId?: string): Promise<boolean> {
+    if (workspaceId !== undefined) this.assertWorkspace(id, workspaceId);
     return this.remove(id, false);
   }
 
-  async terminate(id: string): Promise<boolean> {
+  async terminate(id: string, workspaceId?: string): Promise<boolean> {
+    if (workspaceId !== undefined) this.assertWorkspace(id, workspaceId);
     return this.remove(id, true);
   }
 
@@ -168,25 +170,26 @@ export class ComputerRegistry {
     }
   }
 
-  private key(engine: string, targetId: string): string { return JSON.stringify([engine, targetId]); }
+  private key(engine: string, targetId: string, workspaceId?: string): string { return JSON.stringify([workspaceId ?? null, engine, targetId]); }
 
   assertWorkspace(id: string, workspaceId: string): void {
     const entry = this.entries.get(id);
-    if (entry?.workspaceId && entry.workspaceId !== workspaceId) throw new Error('Computer workspace mismatch');
+    if (!workspaceId || !entry || entry.workspaceId !== workspaceId) throw new Error('Computer workspace mismatch');
   }
 
-  assign(engine: 'hermes' | 'dsh' | 'superagent', targetId: string, computerId: string): ComputerBinding {
+  assign(engine: 'hermes' | 'dsh' | 'superagent', targetId: string, computerId: string, workspaceId?: string): ComputerBinding {
     if (!this.entries.has(computerId)) throw new Error('Unknown computer');
-    const key = this.key(engine, targetId);
+    if (workspaceId !== undefined) this.assertWorkspace(computerId, workspaceId);
+    const key = this.key(engine, targetId, workspaceId);
     this.revoke(key);
     const assignment = { engine, targetId, computerId, token: randomBytes(32).toString('hex') };
     this.assignments.set(key, assignment);
     this.tokens.set(assignment.token, assignment);
-    return this.binding(engine, targetId)!;
+    return this.binding(engine, targetId, workspaceId)!;
   }
 
-  binding(engine: string, targetId: string): ComputerBinding | undefined {
-    const assignment = this.assignments.get(this.key(engine, targetId));
+  binding(engine: string, targetId: string, workspaceId?: string): ComputerBinding | undefined {
+    const assignment = this.assignments.get(this.key(engine, targetId, workspaceId));
     if (!assignment || !this.entries.has(assignment.computerId)) return undefined;
     return { endpoint: this.endpoint(), token: assignment.token, computerId: assignment.computerId };
   }
@@ -197,7 +200,7 @@ export class ComputerRegistry {
     this.assignments.delete(key);
   }
 
-  unassign(engine: string, targetId: string): void { this.revoke(this.key(engine, targetId)); }
+  unassign(engine: string, targetId: string, workspaceId?: string): void { this.revoke(this.key(engine, targetId, workspaceId)); }
 
   kill(engaged: boolean, workspaceId?: string): { engaged: boolean } {
     if (workspaceId) this.killedWorkspaces.set(workspaceId, engaged);
@@ -215,13 +218,15 @@ export class ComputerRegistry {
     return { engaged: this.killed || Boolean(workspaceId && this.killedWorkspaces.get(workspaceId)) };
   }
 
-  async capture(id: string): Promise<Capture> {
+  async capture(id: string, workspaceId?: string): Promise<Capture> {
+    if (workspaceId !== undefined) this.assertWorkspace(id, workspaceId);
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown computer');
     return this.runQueued(entry, () => Promise.resolve(entry.computer.capture()));
   }
 
-  async lease(id: string, holder: LeaseHolder): Promise<ComputerInfo> {
+  async lease(id: string, holder: LeaseHolder, workspaceId?: string): Promise<ComputerInfo> {
+    if (workspaceId !== undefined) this.assertWorkspace(id, workspaceId);
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown computer');
     // Human takeover preempts active native input before queued agent work drains.

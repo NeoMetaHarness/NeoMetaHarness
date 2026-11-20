@@ -92,7 +92,8 @@ export class ComputerProjection implements ComputerMcpProjection {
     if (!consumer || !timingSafeEqual(Buffer.from(match[1]!, 'hex'), Buffer.from(consumer.token, 'hex'))) return denied;
     const action = computerActionSchema.safeParse(payload.action);
     if (!action.success) return { status: 400, body: { error: 'Invalid computer action' } };
-    const binding = this.computers.binding(consumer.engine, consumer.profile);
+    const binding = this.computers.binding(consumer.engine, consumer.profile,
+      consumer.workspace === 'default' ? undefined : consumer.workspace);
     if (!binding) return denied;
     try { return { status: 200, body: await this.computers.act(binding.token, action.data, () => this.active && this.consumers.get(this.key(consumer.engine, consumer.profile)) === consumer) }; }
     catch (error) {

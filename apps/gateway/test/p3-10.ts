@@ -279,3 +279,5 @@ try {
   }
   await rm(root, { recursive: true, force: true });
 }
+
+await import('./p3-10-scope.js');

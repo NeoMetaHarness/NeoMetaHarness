@@ -32,9 +32,9 @@ export class AgentService {
     await Promise.allSettled([...this.queues.values()]);
   }
 
-  async createBot(name: string): Promise<AgentBot> {
+  async createBot(name: string, workspaceId?: string): Promise<AgentBot> {
     if (!name.trim()) throw new Error('Bot name required');
-    const bot = { id: randomUUID(), name: name.trim(), created_at: Date.now() };
+    const bot = { id: randomUUID(), name: name.trim(), created_at: Date.now(), workspace_id: workspaceId ?? null };
     await this.records.createBot(bot);
     return bot;
   }
