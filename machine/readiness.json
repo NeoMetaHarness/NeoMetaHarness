@@ -211,7 +211,7 @@
       "title": "Blue/green extension upgrade in the kernel",
       "status": "in_progress",
       "owner": "sol61",
-      "note": "Returned 2026-11-20: kernel generation refactor conflicts with P1-9 settings; rebase requested."
+      "note": "Returned 2026-11-20: makes test:p6-4 flaky (GitHub 429 poll resolves instead of rejecting; 3/4 fail vs main 3/3 pass)."
     }
   },
   "p2_tasks": {
@@ -285,6 +285,22 @@
       "owner": "sol61",
       "status": "done",
       "evidence": "Pushed cd2ca10. test:p2-9 PASS x2 (authenticated Panda escalation, scripted endpoints)."
+    },
+    "P2-10": {
+      "title": "voice-xai and provider-agnostic voice interface",
+      "status": "in_progress",
+      "owner": "codex"
+    },
+    "P2-11": {
+      "title": "x-search optional extension",
+      "status": "in_progress",
+      "owner": "codex",
+      "note": "Reassigned from antigravity (blocked on Google account verification) to codex."
+    },
+    "P2-12": {
+      "title": "apps-composio and neo.apps interface",
+      "status": "in_progress",
+      "owner": "sol61"
     }
   },
   "known_risks": [
@@ -399,17 +415,23 @@
       "title": "computer-local provider (opt-in local desktop)",
       "owner": "sol-b",
       "status": "done",
-      "evidence": "Pushed 268fe4d. test:p3-8 PASS x2 after PM test fix opting into key chords via P3-7 policy; p3-3..p3-7, gateway, toggle PASS."
+      "evidence": "Pushed 268fe4d. test:p3-8 PASS x2 after PM test fix opting into key chords via P3-7 policy; p3-3..p3-7, gateway, toggle PASS. Gateway test p3-8.mjs fixed for P3-7 policy in bd6db3f (missed in original review)."
     },
     "P3-9": {
       "title": "computer-hermes-screen: bot screen via Hermes seams",
-      "status": "in_progress",
-      "owner": "sol-b"
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "Pushed 90b07ff. test:p3-9 PASS x2; p3-4/7/8, engine-hermes, gateway, toggle PASS. Screen token vault-backed, timing-safe compare."
     },
     "P3-10": {
       "title": "computer-orgo provider and P3 exit swap",
       "status": "in_progress",
       "owner": "sol-a"
+    },
+    "P3-11": {
+      "title": "computer-boat provider (boat.dev and PandaOS)",
+      "status": "in_progress",
+      "owner": "sol-b"
     }
   },
   "p5_tasks": {
@@ -497,13 +519,18 @@
       "status": "done",
       "owner": "antigravity",
       "evidence": "Pushed 2db3db9. docs:build + docs:check + apps/docs test PASS x2.",
-      "follow_up": "Assigned as P7-7b to antigravity: docs build dirties generated content.ts; remove unused skills-registry ceiling/get alias."
+      "follow_up": "P7-7b pushed 15f2074: generated content.ts gitignored, build leaves tree clean. Its ceiling/get alias removal broke p4-3; restored in 830587e."
     },
     "P7-8": {
       "title": "Onboarding under 15 minutes (v1 exit)",
       "status": "done",
       "owner": "sol-a",
       "evidence": "Pushed a9a53fc. test:p7-8 PASS x2 (WebView onboarding, scripted first reply); p1-8, p1-9, installer:check, gateway, toggle PASS."
+    },
+    "P7-9": {
+      "title": "Security review of extensions added since P7-2",
+      "status": "in_progress",
+      "owner": "opus"
     }
   },
   "p6_tasks": {
@@ -546,13 +573,15 @@
     },
     "P6-7": {
       "title": "Episodes and playbooks into the skills fabric",
-      "status": "in_progress",
-      "owner": "codex"
+      "status": "done",
+      "owner": "codex",
+      "evidence": "Pushed 830587e (6 commits). test:p6-7 PASS x2; p6-1/3/4/6, p4-3, p4-7, skills-registry, gateway, toggle PASS. Full regression 56/56 on main after push."
     },
     "P6-9": {
       "title": "P6 exit scenarios end to end",
-      "status": "in_progress",
-      "owner": "sol61"
+      "status": "done",
+      "owner": "sol61",
+      "evidence": "Pushed b426cfd (9 commits). test:p6-9 PASS x2; full regression 57/57 (channels, superagent, hermes, toggle included)."
     },
     "P6-8": {
       "title": "neo upstream as a super-agent routine",
