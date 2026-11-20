@@ -83,7 +83,11 @@ try {
   await assert.rejects(rpcClient().x['x-search'].status(), (e: any) => e.code === 'UNAUTHORIZED');
   await assert.rejects(rpc.x['x-search'].search({ query: 'test' }), (e: any) => e.code === 'NOT_FOUND');
 
-  const saved = await rpc.settings.set({ extension: 'x-search', values: { apiKey, baseUrl: 'https://api.x.ai', model: 'grok-4.7', allowPrivateNetwork: false } });
+  const saved = await rpc.settings.set({ extension: 'x-search', values: {
+    apiKey, baseUrl: 'https://api.x.ai', model: 'grok-4.7', allowPrivateNetwork: false,
+    requestsPerMinutePerUser: 2, requestsPerMinutePerWorkspace: 2,
+    requestsPerDayPerUser: 3, requestsPerDayPerWorkspace: 3,
+  } });
   assert.deepEqual(saved.values.apiKey, { set: true });
   const settings = await rpc.settings.get({ extension: 'x-search' });
   assert.deepEqual(settings.values.apiKey, { set: true });
@@ -114,6 +118,9 @@ try {
   await assert.rejects(rpc.x['x-search'].search({ query: 'rate limited' }), (e: any) =>
     e.code === 'INTERNAL_SERVER_ERROR' && !e.message.includes(apiKey));
   statusCode = 200;
+  await assert.rejects(rpc.x['x-search'].search({ query: 'over user quota' }), (e: any) =>
+    e.code === 'TOO_MANY_REQUESTS' && !e.message.includes(apiKey));
+  assert.equal(requestCount, 2);
 
   const injected = new XSearchService({ apiKey }, {
     request: async (url, request) => {
@@ -145,6 +152,45 @@ try {
       headers: { 'content-type': 'application/json' },
     }),
   }).search({ query: 'oversized response' }), /invalid response/);
+  let now = Date.UTC(2026, 10, 21, 10);
+  let meteredRequests = 0;
+  const metered = new XSearchService({
+    apiKey, requestsPerMinutePerUser: 2, requestsPerMinutePerWorkspace: 3,
+    requestsPerDayPerUser: 3, requestsPerDayPerWorkspace: 5,
+  }, {
+    request: async () => {
+      meteredRequests++;
+      return new Response(JSON.stringify({ output_text: 'ok' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  }, () => now);
+  const alice = { userId: 'alice', workspaceId: 'team-1' };
+  const bob = { userId: 'bob', workspaceId: 'team-1' };
+  await metered.search({ query: 'one' }, alice);
+  await metered.search({ query: 'two' }, alice);
+  await assert.rejects(metered.search({ query: 'three' }, alice), /user minute/);
+  await assert.rejects(metered.search({ query: 'same user other workspace' }, {
+    userId: 'alice', workspaceId: 'team-2',
+  }), /user minute/);
+  await metered.search({ query: 'bob' }, bob);
+  await assert.rejects(metered.search({ query: 'workspace full' }, bob), /workspace minute/);
+  now += 60_000;
+  await metered.search({ query: 'alice again' }, alice);
+  await assert.rejects(metered.search({ query: 'alice daily limit' }, alice), /user day/);
+  await metered.search({ query: 'bob again' }, bob);
+  await assert.rejects(metered.search({ query: 'workspace daily limit' }, bob), /workspace day/);
+  assert.equal(meteredRequests, 5);
+  now += 86_400_000;
+  await metered.search({ query: 'new day' }, alice);
+  assert.equal(meteredRequests, 6);
+  const capped = new XSearchService({ apiKey, requestsPerMinutePerUser: 0, requestsPerDayPerUser: Infinity }, {
+    request: async () => new Response(JSON.stringify({ output_text: 'ok' }), {
+      headers: { 'content-type': 'application/json' },
+    }),
+  });
+  for (let i = 0; i < 5; i++) await capped.search({ query: `fallback ${i}` });
+  await assert.rejects(capped.search({ query: 'fallback exceeded' }), /user minute/);
   const viewer = { user: { id: 'viewer' }, role: 'viewer', workspaceId: 'default' };
   assert.doesNotThrow(() => authorize('x.x-search.status', viewer as any));
   assert.throws(() => authorize('x.x-search.search', viewer as any), (e: any) => e.code === 'FORBIDDEN');

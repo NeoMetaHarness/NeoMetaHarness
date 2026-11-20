@@ -853,7 +853,17 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
         search: os.x['x-search'].search.handler(async ({ input, context }) => {
           requireMember(context);
-          return invokeXSearch('search', input) as Promise<import('@neometaharness/contracts').XSearchOutput>;
+          try {
+            return await invokeXSearch('search', {
+              input,
+              requester: { userId: context.user!.id, workspaceId: context.workspaceId ?? 'default' },
+            }) as import('@neometaharness/contracts').XSearchOutput;
+          } catch (error) {
+            if ((error as { code?: string })?.code === 'X_SEARCH_RATE_LIMIT') {
+              throw new ORPCError('TOO_MANY_REQUESTS', { message: 'X Search rate limit exceeded' });
+            }
+            throw error;
+          }
         }),
       },
       'models-router-panda': {

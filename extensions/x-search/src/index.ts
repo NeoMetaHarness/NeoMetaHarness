@@ -12,6 +12,30 @@ export interface SearchSettings {
   baseUrl?: string;
   model?: string;
   allowPrivateNetwork?: boolean;
+  requestsPerMinutePerUser?: number;
+  requestsPerMinutePerWorkspace?: number;
+  requestsPerDayPerUser?: number;
+  requestsPerDayPerWorkspace?: number;
+}
+
+export interface SearchRequester {
+  userId?: string;
+  workspaceId?: string;
+}
+
+interface QuotaCounter {
+  minute: number;
+  minuteCount: number;
+  dayCount: number;
+}
+
+class SearchRateLimitError extends Error {
+  readonly code = 'X_SEARCH_RATE_LIMIT';
+}
+
+function quota(value: number | undefined, fallback: number, maximum: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= maximum
+    ? value : fallback;
 }
 
 
@@ -98,9 +122,13 @@ function parseSearchResponse(data: SearchResponse, apiKey: string): XSearchOutpu
 
 export class XSearchService implements NeoSearchService {
   private readonly guardedFetch: typeof fetch;
+  private readonly userCounters = new Map<string, QuotaCounter>();
+  private readonly workspaceCounters = new Map<string, QuotaCounter>();
+  private counterDay = -1;
   constructor(
     private readonly settings: SearchSettings,
     private readonly httpClient?: SearchHttpClient,
+    private readonly now: () => number = Date.now,
   ) {
     const injected = httpClient
       ? (async (url: string | URL | Request, init?: RequestInit) =>
@@ -115,7 +143,46 @@ export class XSearchService implements NeoSearchService {
     return Boolean(this.settings.apiKey?.trim());
   }
 
-  async search(rawInput: XSearchInput): Promise<XSearchOutput> {
+  private counterFor(map: Map<string, QuotaCounter>, id: string, minute: number): QuotaCounter {
+    let counter = map.get(id);
+    if (!counter) {
+      counter = { minute, minuteCount: 0, dayCount: 0 };
+      map.set(id, counter);
+    }
+    if (counter.minute !== minute) {
+      counter.minute = minute;
+      counter.minuteCount = 0;
+    }
+    return counter;
+  }
+
+  private charge(requester: SearchRequester): void {
+    const time = this.now();
+    const day = Math.floor(time / 86_400_000);
+    const minute = Math.floor(time / 60_000);
+    if (day !== this.counterDay) {
+      this.userCounters.clear();
+      this.workspaceCounters.clear();
+      this.counterDay = day;
+    }
+    const user = this.counterFor(this.userCounters, requester.userId || 'anonymous', minute);
+    const workspace = this.counterFor(this.workspaceCounters, requester.workspaceId || 'default', minute);
+    const checks = [
+      [user.minuteCount, quota(this.settings.requestsPerMinutePerUser, 5, 60), 'user minute'],
+      [workspace.minuteCount, quota(this.settings.requestsPerMinutePerWorkspace, 20, 600), 'workspace minute'],
+      [user.dayCount, quota(this.settings.requestsPerDayPerUser, 100, 10_000), 'user day'],
+      [workspace.dayCount, quota(this.settings.requestsPerDayPerWorkspace, 500, 100_000), 'workspace day'],
+    ] as const;
+    for (const [used, limit, scope] of checks) {
+      if (used >= limit) throw new SearchRateLimitError(`X Search rate limit exceeded (${scope})`);
+    }
+    user.minuteCount++;
+    workspace.minuteCount++;
+    user.dayCount++;
+    workspace.dayCount++;
+  }
+
+  async search(rawInput: XSearchInput, requester: SearchRequester = {}): Promise<XSearchOutput> {
     const input = xSearchInput.parse(rawInput);
     if (input.fromDate && input.toDate && input.fromDate > input.toDate) {
       throw new Error('Invalid X Search date range');
@@ -129,6 +196,7 @@ export class XSearchService implements NeoSearchService {
     if (input.excludedHandles) tool.excluded_x_handles = input.excludedHandles;
     if (input.fromDate) tool.from_date = input.fromDate;
     if (input.toDate) tool.to_date = input.toDate;
+    this.charge(requester);
     let response: Response;
     try {
       response = await this.guardedFetch(endpoint.href, {
@@ -163,7 +231,13 @@ export default defineExtension({
       route: '/x/x-search/search',
     });
     ctx.route('status', () => ({ providerId: 'xai', configured: search.configured }));
-    ctx.route('search', ({ body }) => search.search(body as XSearchInput));
+    ctx.route('search', ({ body }) => {
+      if (body && typeof body === 'object' && 'input' in body) {
+        const request = body as { input: XSearchInput; requester: SearchRequester };
+        return search.search(request.input, request.requester);
+      }
+      return search.search(body as XSearchInput);
+    });
     ctx.health(() => ({ ok: true }));
   },
 });
