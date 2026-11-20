@@ -30,6 +30,15 @@ export type EgressOptions = {
   resolveHost?: (hostname: string) => Promise<string[]>;
 };
 
+function assertSafeAddresses(addresses: string[], allowPrivateNetwork = false): void {
+  if (addresses.length === 0 || addresses.some((address) => !isIP(address))) {
+    throw new Error('Provider endpoint has no valid network address');
+  }
+  if (!allowPrivateNetwork && !addresses.every(isPublicAddress)) {
+    throw new Error('Private provider endpoint is disabled');
+  }
+}
+
 /** Validate the destination before any credential-bearing provider request. */
 export async function assertSafeProviderUrl(url: URL, options: EgressOptions = {}): Promise<void> {
   if (url.username || url.password || url.hash || url.search || !['https:', 'http:'].includes(url.protocol)) {
@@ -45,13 +54,8 @@ export async function assertSafeProviderUrl(url: URL, options: EgressOptions = {
   } catch {
     throw new Error('Provider endpoint DNS resolution failed');
   }
-  if (addresses.length === 0 || addresses.some((address) => !isIP(address))) {
-    throw new Error('Provider endpoint has no valid network address');
-  }
+  assertSafeAddresses(addresses, options.allowPrivateNetwork);
   const allPrivate = addresses.every((address) => !isPublicAddress(address));
-  if (!options.allowPrivateNetwork && !addresses.every(isPublicAddress)) {
-    throw new Error('Private provider endpoint is disabled');
-  }
   if (url.protocol !== 'https:' && !(options.allowPrivateNetwork && allPrivate)) {
     throw new Error('Provider endpoint requires HTTPS');
   }
@@ -71,10 +75,9 @@ export function createSafeProviderClient(options: EgressOptions = {}): {
       lookup(hostname, lookupOptions, callback) {
         const resolve = options.resolveHost ?? (async (host: string) =>
           (await lookup(host, { all: true })).map((entry) => entry.address));
-        void resolve(hostname).then(async (addresses) => {
-          await assertSafeProviderUrl(new URL(`https://${hostname}`), {
-            ...options, resolveHost: async () => addresses,
-          });
+        void resolve(hostname).then((addresses) => {
+          // Revalidate even the official host against its actual socket address.
+          assertSafeAddresses(addresses, options.allowPrivateNetwork);
           const family = typeof lookupOptions === 'object' ? lookupOptions.family : lookupOptions;
           const candidates = addresses.filter((address) => !family || isIP(address) === family);
           if (candidates.length === 0) throw new Error('Provider endpoint address family unavailable');
