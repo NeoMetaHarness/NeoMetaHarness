@@ -10,7 +10,7 @@ export class McpProjectionBridge {
   private projection?: ComputerMcpProjection;
   private readonly consumers = new Map<string, { engine: ComputerEngine; profile: string; home: string; workspace: string }>();
   async attach(projection: ComputerMcpProjection) {
-    if (this.projection) throw new Error('Computer MCP projection already attached');
+    if (this.projection) throw new Error('MCP projection already attached');
     this.projection = projection;
     try { for (const value of this.consumers.values()) await projection.ready(value.engine, value.profile, value.home, value.workspace); }
     catch (error) { this.projection = undefined; await projection.removeAll(); throw error; }
@@ -37,3 +37,7 @@ export class McpProjectionBridge {
 
 /** Compatibility name for the computer projection. */
 export class ComputerMcpBridge extends McpProjectionBridge {}
+
+export type McpEngine = ComputerEngine;
+export type McpConfig = ComputerMcpConfig;
+export type McpProjection = ComputerMcpProjection;

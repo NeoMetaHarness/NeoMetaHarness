@@ -3,7 +3,7 @@ import type { VaultService } from '@neometaharness/vault';
 import type { ComputerRegistry } from '@neometaharness/computers';
 import { join } from 'node:path';
 import { DshAgentRuntime } from './runtime.js';
-import type { ComputerMcpBridge, SkillsBridge } from '@neometaharness/kernel';
+import type { ComputerMcpBridge, McpProjectionBridge, SkillsBridge } from '@neometaharness/kernel';
 import type { DshMemoryBridge } from './memory.js';
 import type { ModelResolver, DshInboxSink } from './runtime.js';
 
@@ -17,7 +17,7 @@ export default defineExtension({
     const memory = ctx.inject<DshMemoryBridge>('dshMemoryBridge');
     const runtime = new DshAgentRuntime(vault, join(dataDir, 'engine-dsh'), computers, bridge, memory,
       () => ctx.inject<ModelResolver>('modelHub'), ctx.inject<ComputerMcpBridge>('computerMcpBridge'),
-      () => ctx.inject<DshInboxSink>('dshInboxSink'));
+      () => ctx.inject<DshInboxSink>('dshInboxSink'), ctx.inject<McpProjectionBridge>('appsMcpBridge'));
     ctx.provide('dshAgentRuntime', runtime);
     ctx.effect(() => () => runtime.stop());
     ctx.health(() => ({ ok: true }));

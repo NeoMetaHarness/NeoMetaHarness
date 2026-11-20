@@ -99,6 +99,11 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.coding-workflow.prepare': 'member',
   'onboarding.get': 'admin',
   'onboarding.complete': 'admin',
+  // Workspace-scoped connected apps
+  'apps.toolkits': 'viewer',
+  'apps.connect': 'member',
+  'apps.run': 'member',
+  'apps.grant': 'member',
   // x.engine-t3
   'x.engine-t3.create': 'member',
   'x.engine-t3.send': 'member',
@@ -269,6 +274,8 @@ export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
   '/internal/memory/context': 'internal',
   '/internal/memory/write': 'internal',
   '/internal/computers-mcp/action': 'internal',
+  '/internal/apps-mcp/action': 'internal',
+  '/x/apps-composio/mcp/action': 'internal',
   '/x/computers-mcp/action': 'internal',
   '/internal/computers/action': 'internal',
   '/x/computer-local/consent': 'owner',

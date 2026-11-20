@@ -4,7 +4,7 @@ import type { ComputerRegistry } from '@neometaharness/computers';
 import { projectHermesComputer } from '@neometaharness/computers/hermes';
 import { HermesRuntime, ProfileFileCredentials, VaultCredentials } from './runtime.js';
 import { projectHermesMemory, type MemoryBridge } from './memory.js';
-import type { ComputerMcpBridge, SkillsBridge } from '@neometaharness/kernel';
+import type { ComputerMcpBridge, McpProjectionBridge, SkillsBridge } from '@neometaharness/kernel';
 import type { VaultService } from '@neometaharness/vault';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,10 +30,11 @@ export default defineExtension({
       const skillsVersion = await skillsBridge?.hermesReady(profile, profileHome);
       // hermes-agent@v0.23.2 tools/mcp_tool_transport.py:375-395 consumes configured stdio servers.
       const computerMcp = await ctx.inject<ComputerMcpBridge>('computerMcpBridge')?.ready('hermes', profile, profileHome, workspaceId ?? 'default');
+      const appsMcp = await ctx.inject<McpProjectionBridge>('appsMcpBridge')?.ready('hermes', profile, profileHome, workspaceId ?? 'default');
       const modelVersion = await ctx.inject<ModelProjector>('modelHub')?.projectHermes(profile, profileHome);
       // The Neo backend reads binding.json on every action. Swapping the
       // computer capability never requires restarting this Hermes bot.
-      return JSON.stringify([computerBinding ? 'neo_vnc' : undefined, memoryVersion, skillsVersion, modelVersion, computerMcp ? true : undefined]);
+      return JSON.stringify([computerBinding ? 'neo_vnc' : undefined, memoryVersion, skillsVersion, modelVersion, computerMcp ? true : undefined, appsMcp ? true : undefined]);
     }, home);
     await service.start();
     ctx.provide('agentRuntime', service);
@@ -50,6 +51,7 @@ export default defineExtension({
 
     ctx.effect(() => async () => {
       await ctx.inject<ComputerMcpBridge>('computerMcpBridge')?.forgetEngine('hermes');
+      await ctx.inject<McpProjectionBridge>('appsMcpBridge')?.forgetEngine('hermes');
       await service.disconnect();
     });
     ctx.health(() => ({ ok: service.connected, pid: service.pid }));
@@ -61,6 +63,7 @@ export default defineExtension({
       const result = await service.deleteProfile(name);
       skillsBridge?.forgetHermes(name);
       await ctx.inject<ComputerMcpBridge>('computerMcpBridge')?.forget('hermes', name);
+      await ctx.inject<McpProjectionBridge>('appsMcpBridge')?.forget('hermes', name);
       return result;
     });
     ctx.route('runs/start', ({ body }) => {

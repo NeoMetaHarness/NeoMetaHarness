@@ -742,6 +742,20 @@ export const inboxEpisodeSchema = z.object({
   outcome: z.enum(['ready', 'blocked', 'failed']), traceId: z.string(),
   procedure: z.string().optional(),
 });
+export const appActionSchema = z.object({ provider: z.string().min(1).max(64), accountId: z.string().min(1).max(200),
+  action: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/), arguments: z.record(z.string(), z.unknown()) });
+export const appsContract = {
+  toolkits: oc.input(z.object({ provider: z.string().default('composio') })).output(z.array(z.object({ id: z.string(), name: z.string() }))),
+  connect: oc.input(z.object({ provider: z.string().default('composio'), toolkit: z.string().min(1).max(200),
+    authConfigId: z.string().min(1).max(200), callbackUrl: z.string().url().max(4096) }))
+    .output(z.object({ id: z.string(), toolkit: z.string(), redirectUrl: z.string().url() })),
+  run: oc.input(appActionSchema).output(z.unknown()),
+};
+export const appsOperationSchema = z.discriminatedUnion('operation', [
+  z.object({ operation: z.literal('toolkits'), provider: z.string().default('composio') }),
+  z.object({ operation: z.literal('connect'), provider: z.string().default('composio'), toolkit: z.string().min(1).max(200), authConfigId: z.string().min(1).max(200), callbackUrl: z.string().url() }),
+  appActionSchema.extend({ operation: z.literal('run') }),
+]);
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
   /**
@@ -751,13 +765,14 @@ export const inboxItemSchema = z.object({
    */
   workspace: z.string().optional(),
   notification: z.object({ channelId: z.string(), deliveredAt: z.number().optional(), error: z.string().optional() }).optional(),
-  source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/binding', 'neo/upstream', 'neo/github', 'neo/dsh', 'neo/memory']).optional(),
+  source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/binding', 'neo/upstream', 'neo/github', 'neo/dsh', 'neo/memory', 'neo/apps']).optional(),
   github: z.object({ repo: z.string(), issue: z.number().int().optional(),
     url: z.string(), kind: z.enum(['comment', 'check']), posted: z.boolean().optional() }).optional(),
   upstream: z.object({ name: z.string(), pinned: z.string(), latest: z.string(),
     changelog: z.string().url().nullable() }).optional(),
   /** A memory dream report whose proposals this item accepts or approves. */
   dream: z.object({ id: z.string(), workspace: z.string(), proposals: z.number().int() }).optional(),
+  appAction: z.object({ provider: z.string(), accountId: z.string(), action: z.string() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).optional(),
   mode: z.enum(['observe', 'act']),
   status: z.enum(['suggestion', 'running', 'ready', 'question', 'approval', 'blocked', 'failed', 'dismissed']),
@@ -850,4 +865,5 @@ export const inboxContract = {
   },
 };
 
-export const neoContract = { ...baseNeoContract, agents: agentsContract, inbox: inboxContract };
+export const neoContract = {
+  apps: appsContract, ...baseNeoContract, agents: agentsContract, inbox: inboxContract };

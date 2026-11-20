@@ -14,11 +14,11 @@ export interface AppsApprovalGate { submit(input: AppApproval): Promise<unknown>
 export class AppsRegistry {
   private readonly providers = new Map<string, AppsProvider>();
   private gate?: AppsApprovalGate;
-  private readonly pending = new Set<AbortController>();
+  private readonly pending = new Map<AbortController, AppsProvider>();
   register(provider: AppsProvider) {
     if (this.providers.has(provider.id)) throw new Error('Apps provider already registered');
     this.providers.set(provider.id, provider);
-    return () => { if (this.providers.get(provider.id) === provider) this.providers.delete(provider.id); for (const job of this.pending) job.abort(); };
+    return () => { if (this.providers.get(provider.id) === provider) this.providers.delete(provider.id); for (const [job, owner] of this.pending) if (owner === provider) job.abort(); };
   }
   attachGate(gate: AppsApprovalGate) { if (this.gate) throw new Error('Apps approval gate already attached'); this.gate = gate; return () => { if (this.gate === gate) this.gate = undefined; }; }
   private provider(id: string) { const value = this.providers.get(id); if (!value) throw new Error('Apps provider disabled or unavailable'); return value; }
@@ -33,7 +33,7 @@ export class AppsRegistry {
     return gate.submit({ request: copy, ...detail, execute: async () => {
       if (JSON.stringify(copy) !== serialized) throw new Error('Apps action changed after approval');
       if (this.providers.get(copy.provider) !== provider || this.gate !== gate) throw new Error('Apps action approval expired; request it again');
-      const controller = new AbortController(); this.pending.add(controller);
+      const controller = new AbortController(); this.pending.set(controller, provider);
       try { return await provider.execute(copy, controller.signal); }
       finally { this.pending.delete(controller); }
     } });

@@ -1,3 +1,4 @@
+import { AppsRegistry, McpProjectionBridge } from '@neometaharness/kernel';
 import { codingWorkflowRouter } from './coding-workflow.js';
 import { ComputerMcpBridge } from '@neometaharness/kernel';
 import { createServer } from 'node:http';
@@ -275,6 +276,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
   let gatewayPort = 0;
   const computerMcpBridge = new ComputerMcpBridge();
+  const appsRegistry = new AppsRegistry();
+  const appsMcpBridge = new McpProjectionBridge();
   const computers = new ComputerRegistry(
     () => {
       if (!gatewayPort) throw new Error('Computer Gateway is not listening');
@@ -342,6 +345,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       return (await db.agents.getBot(botId))?.workspace_id ?? undefined;
     },
     computerMcpBridge,
+    appsRegistry, appsMcpBridge,
     computerLocalDriverFactory: options.computerLocalDriverFactory,
     hermesScreen: options.hermesScreenBridge,
     orgoClient: options.orgoClient,
@@ -673,6 +677,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }
         return onboardingStatus(context);
       }),
+    },
+    apps: {
+      toolkits: os.apps.toolkits.handler(async ({ input, context }) => { authorize('apps.toolkits', context); return appsRegistry.toolkits(input.provider); }),
+      connect: os.apps.connect.handler(async ({ input, context }) => { authorize('apps.connect', context); return appsRegistry.connect(input.provider, { ...input, userId: context.user!.id }); }),
+      run: os.apps.run.handler(async ({ input, context }) => { authorize('apps.run', context); return appsRegistry.run(input); }),
     },
     agents: agentApi.router,
     inbox: {
@@ -1764,6 +1773,23 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           });
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ id: entry.id }));
         }
+        return;
+      }
+
+      if (path === '/internal/apps-mcp/action') {
+        if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+        if (!kernel.hasRoute('/x/apps-composio/mcp/action')) { res.writeHead(404).end(); return; }
+        const chunks: Buffer[] = []; let size = 0;
+        for await (const chunk of req) {
+          size += (chunk as Buffer).length;
+          if (size > 16384) { res.writeHead(413).end(); return; }
+          chunks.push(chunk as Buffer);
+        }
+        let payload: unknown;
+        try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { res.writeHead(400).end(); return; }
+        const result = await kernel.invokeRoute('/x/apps-composio/mcp/action', 'POST', { authorization: req.headers.authorization, payload }) as { status: number; body: unknown };
+        res.writeHead(result.status, { 'content-type': 'application/json' }).end(JSON.stringify(result.body));
         return;
       }
 

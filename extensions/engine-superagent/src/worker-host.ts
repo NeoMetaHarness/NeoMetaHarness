@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { ComputerMcpBridge, SkillsBridge } from '@neometaharness/kernel';
+import type { ComputerMcpBridge, McpProjectionBridge, SkillsBridge } from '@neometaharness/kernel';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +24,7 @@ export interface WorkerHost {
 
 export class PresetWorkerHost implements WorkerHost {
   constructor(private readonly models: ModelFactory, private readonly computers?: ComputerMcpBridge,
-    private readonly skills?: SkillsBridge) {}
+    private readonly skills?: SkillsBridge, private readonly appsMcp?: McpProjectionBridge) {}
   private readonly context = new Context();
   private registration?: { dispose(): Promise<void> };
   private active = new Set<{ dispose(): Promise<void> }>();
@@ -66,7 +66,9 @@ export class PresetWorkerHost implements WorkerHost {
     const { adapter, provider, model } = binding;
     const computerProfile = botId;
     this.computerProfiles.set(`${workspace ?? 'default'}:${computerProfile}`, workspace ?? 'default');
-    const computerMcp = await this.computers?.ready('superagent', computerProfile, join(this.home, createHash('sha256').update(`${workspace ?? 'default'}:${computerProfile}`).digest('hex')), workspace ?? 'default');
+    const profileHome = join(this.home, createHash('sha256').update(`${workspace ?? 'default'}:${computerProfile}`).digest('hex'));
+    const computerMcp = await this.computers?.ready('superagent', computerProfile, profileHome, workspace ?? 'default');
+    const appsMcp = await this.appsMcp?.ready('superagent', computerProfile, profileHome, workspace ?? 'default');
     // Every worker has its own model adapter, allowing concurrent assignments.
     const unregister = this.context.llm.registerAdapter([provider], adapter);
     let worker: Awaited<ReturnType<typeof this.context.agents.create>> | undefined;
@@ -78,6 +80,9 @@ export class PresetWorkerHost implements WorkerHost {
           await this.context.agentPresets.mount(owner, 'neo-superagent-worker');
           // dsh-superagent@8c32a9dc5d72 cordis.patch.yml:20-26 (worker preset plugins);
           // DSH@0.2.2-rc.1 packages/mcp/mcp-client/src/index.ts:51-78,154 (stdio mount).
+          if (appsMcp) await owner.plugin(await import('@deepseek-ai/dsh-mcp-client'), {
+            ...appsMcp, cwd: this.home, toolCallTimeoutMs: 20000, failOnStartupError: false,
+          });
           if (computerMcp) await owner.plugin(await import('@deepseek-ai/dsh-mcp-client'), {
             ...computerMcp, cwd: this.home, toolCallTimeoutMs: 15000, failOnStartupError: false,
           });
@@ -121,9 +126,10 @@ export class PresetWorkerHost implements WorkerHost {
 
   async close(): Promise<void> {
     await Promise.allSettled([...this.active].map((worker) => worker.dispose()));
-    for (const [key, workspace] of this.computerProfiles) {
-      await this.computers?.forget('superagent', key.slice(workspace.length + 1), workspace);
-    }
+    this.computerProfiles.set(`${workspace ?? 'default'}:${computerProfile}`, workspace ?? 'default');
+    const profileHome = join(this.home, createHash('sha256').update(`${workspace ?? 'default'}:${computerProfile}`).digest('hex'));
+    const computerMcp = await this.computers?.ready('superagent', computerProfile, profileHome, workspace ?? 'default');
+    const appsMcp = await this.appsMcp?.ready('superagent', computerProfile, profileHome, workspace ?? 'default');
     this.computerProfiles.clear();
     this.skills?.forgetDsh('superagent');
     await this.registration?.dispose();

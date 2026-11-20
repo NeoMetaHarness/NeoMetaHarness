@@ -3,14 +3,14 @@ import { dirname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import type { AppsProvider, AppAction, AppAccount } from '@neometaharness/kernel';
 export type ComposioSettings = { endpoint?: string; apiKey?: string };
-/** Composio v3 REST boundary: /toolkits, /connected_accounts, /tools/{slug}, /tools/execute/{slug}.
+/** Composio v3.1 REST boundary: /toolkits, /connected_accounts, /tools/{slug}, /tools/execute/{slug}.
  * https://docs.composio.dev/reference/api-reference -- no vendor SDK or engine modifications. */
 export class ComposioProvider implements AppsProvider {
   readonly id = 'composio';
   private accounts: AppAccount[] = [];
   private active = true;
   private readonly shutdown = new AbortController();
-  private readonly approvals = new WeakMap<object, string>();
+  private readonly approvals = new WeakMap<object, { fingerprint: string; version: string }>();
   constructor(private readonly settings: () => ComposioSettings, private readonly file: string,
     private readonly http: typeof fetch = fetch) {}
   async load() { try { this.accounts = JSON.parse(await readFile(this.file, 'utf8')); if (!Array.isArray(this.accounts)) throw Error(); }
@@ -27,7 +27,7 @@ export class ComposioProvider implements AppsProvider {
   private async request(path: string, body?: unknown, signal?: AbortSignal): Promise<any> {
     const config = this.config();
     try {
-      const response = await this.http(config.endpoint + '/api/v3/' + path, { method: body === undefined ? 'GET' : 'POST',
+      const response = await this.http(config.endpoint + '/api/v3.1/' + path, { method: body === undefined ? 'GET' : 'POST',
         redirect: 'error', signal: AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(10000), ...(signal ? [signal] : [])]),
         headers: { 'x-api-key': config.apiKey, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       if (!response.ok) throw Error();
@@ -46,11 +46,10 @@ export class ComposioProvider implements AppsProvider {
     // Resolve toolkit membership on the service, never trust a caller-supplied account id.
     const auth = await this.request('auth_configs/' + encodeURIComponent(input.authConfigId));
     if (auth.toolkit?.slug !== input.toolkit) throw new Error('Auth configuration does not match toolkit');
-    const data = await this.request('connected_accounts', { auth_config: { id: input.authConfigId },
-      connection: { user_id: input.userId, redirect_url: input.callbackUrl } });
+    const data = await this.request('connected_accounts/link', { auth_config_id: input.authConfigId, user_id: input.userId, callback_url: input.callbackUrl });
     const url = new URL(data.redirect_url);
-    if (url.protocol !== 'https:' || url.username || url.password || typeof data.id !== 'string' || !data.id) throw new Error('Invalid Composio OAuth response');
-    const account = { id: data.id, toolkit: input.toolkit };
+    if (url.protocol !== 'https:' || url.username || url.password || typeof data.connected_account_id !== 'string' || !data.connected_account_id) throw new Error('Invalid Composio OAuth response');
+    const account = { id: data.connected_account_id, toolkit: input.toolkit };
     this.accounts.push(account); await mkdir(dirname(this.file), { recursive: true });
     const pending = this.file + '.' + randomUUID() + '.tmp';
     try { await writeFile(pending, JSON.stringify(this.accounts), { mode: 0o600 }); await rename(pending, this.file); }
@@ -62,14 +61,16 @@ export class ComposioProvider implements AppsProvider {
     const tool = await this.request('tools/' + encodeURIComponent(input.action));
     if (tool.slug !== input.action || tool.toolkit?.slug !== account.toolkit) throw new Error('Action does not match connected toolkit');
     const destructive = !Array.isArray(tool.tags) || !tool.tags.includes('readOnlyHint') || tool.tags.includes('destructiveHint');
-    this.approvals.set(input, this.fingerprint());
+    if (typeof tool.version !== 'string' || !tool.version) throw new Error('Action version is missing');
+    this.approvals.set(input, { fingerprint: this.fingerprint(), version: tool.version });
     return { destructive, summary: `${input.action} on ${account.toolkit} account ${account.id}` };
   }
   async execute(input: AppAction, signal: AbortSignal) {
     // Settings changes invalidate queued approvals before any remote action.
-    if (this.approvals.get(input) !== this.fingerprint()) throw new Error('Composio settings changed; request approval again');
+    const approval = this.approvals.get(input);
+    if (!approval || approval.fingerprint !== this.fingerprint()) throw new Error('Composio settings changed; request approval again');
     this.approvals.delete(input);
-    return this.request('tools/execute/' + encodeURIComponent(input.action), { connected_account_id: input.accountId, arguments: input.arguments }, signal);
+    return this.request('tools/execute/' + encodeURIComponent(input.action), { connected_account_id: input.accountId, version: approval.version, arguments: input.arguments }, signal);
   }
   close() { this.active = false; this.shutdown.abort(); }
 }

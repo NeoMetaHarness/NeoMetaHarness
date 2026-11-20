@@ -1,3 +1,4 @@
+import type { AppsRegistry, AppApproval, McpProjectionBridge } from '@neometaharness/kernel';
 import type { ComputerMcpBridge, SkillsBridge } from '@neometaharness/kernel';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -100,7 +101,7 @@ class SuperagentService {
   private unsubscribeChannel?: () => void;
   private readonly notifying = new Set<string>();
   private readonly channelReplies = new Map<string, { channelId: string; inReplyTo: string }>();
-  private readonly inflight = new Set<Promise<void>>();
+  private readonly inflight = new Set<Promise<unknown>>();
   private readonly assignments = new Map<string, string>();
   private readonly terminalReports = new Set<string>();
   private playbookQueue: Promise<void> = Promise.resolve();
@@ -627,6 +628,10 @@ class SuperagentService {
       return this.finish(item, { status: 'blocked', summary: reason,
         changes: [], tests: [], risks: [reason], options: [] });
     }
+    if (item.appAction) {
+      if (item.destructive) return this.update(item, { status: 'approval', kind: 'approval', mode: 'act' });
+      await this.executeApp(item); return this.items.get(item.id)!;
+    }
     const candidate = this.candidates.get(`${item.source ?? 'neo/app'}:${item.id}`);
     if (!candidate) throw new Error('Suggestion Eval expired');
     // Accepted work acts; how its result is delivered still follows the item's accept mode.
@@ -645,6 +650,7 @@ class SuperagentService {
   async dismiss(input: { id: string; reason?: string }, role?: Role): Promise<InboxItem> {
     const item = this.items.get(input.id);
     if (!item || item.status !== 'suggestion') throw new Error('Only Suggestions can be dismissed');
+    if (item.appAction) this.appExecutions.delete(item.id);
     const reason = input.reason?.trim() || `Dismissed by ${role ?? 'member'}`;
     if (item.dream) await this.rejectDream(item);
     const triggerId = `${item.source ?? 'neo/app'}:${item.id}`;
@@ -678,6 +684,36 @@ class SuperagentService {
     return this.resume(item, `${item.text}\nHuman answer: ${input.answer.trim()}`);
   }
 
+  private readonly appExecutions = new Map<string, () => Promise<unknown>>();
+  async submitApp(input: AppApproval): Promise<unknown> {
+    if (this.closed) throw new Error('Inbox is disabled');
+    const mode = this.acceptModes.get(); const now = Date.now();
+    const item: InboxItem = { id: randomUUID(), botId: 'neo-apps', source: 'neo/apps',
+      text: `${input.summary}\nArguments: ${JSON.stringify(input.request.arguments)}`, appAction: {
+        provider: input.request.provider, accountId: input.request.accountId, action: input.request.action },
+      mode: mode === 'observe' ? 'observe' : 'act', acceptMode: mode, destructive: input.destructive,
+      status: mode === 'observe' ? 'suggestion' : 'approval', kind: mode === 'observe' ? 'suggestion' : 'approval',
+      approval: { destructive: input.destructive, reason: 'Review this connected-app action before execution' }, createdAt: now, updatedAt: now };
+    this.appExecutions.set(item.id, input.execute); this.update(item, {});
+    if (mode === 'act' && !input.destructive) return this.executeApp(item);
+    return { status: item.status, inboxId: item.id };
+  }
+  private async executeApp(item: InboxItem): Promise<unknown> {
+    const run = this.appExecutions.get(item.id);
+    if (!run || this.closed) throw new Error('App approval expired; request the action again');
+    this.appExecutions.delete(item.id); this.update(item, { status: 'running', kind: undefined });
+    const work = (async () => {
+      try {
+        const result = await run();
+        this.update(this.items.get(item.id)!, { status: 'ready', report: { status: 'ready', summary: 'Connected-app action completed', changes: [], tests: [], risks: [], options: [] } });
+        return { status: 'completed', result };
+      } catch {
+        this.update(this.items.get(item.id)!, { status: 'failed', report: { status: 'failed', summary: 'Connected-app action failed; request it again after checking the provider', changes: [], tests: [], risks: [], options: [] } });
+        throw new Error('Connected-app action failed; no automatic retry');
+      }
+    })();
+    this.inflight.add(work); try { return await work; } finally { this.inflight.delete(work); }
+  }
   async decideApproval(input: { id: string; decision: 'approve' | 'deny'; reason: string },
     role: 'viewer' | 'member' | 'admin' | 'owner'): Promise<InboxItem> {
     const item = this.items.get(input.id);
@@ -695,6 +731,11 @@ class SuperagentService {
           report: { status: 'blocked', summary, changes: [], tests: [], risks: [summary], options: [] } });
       }
       return this.applyDream(this.update(item, { approval }));
+    }
+    if (item.appAction) {
+      if (input.decision === 'deny') { this.appExecutions.delete(item.id); return this.update(item, { status: 'blocked', kind: undefined, approval: { ...item.approval!, decision: 'denied', reason: input.reason } }); }
+      const approved = this.update(item, { approval: { ...item.approval!, decision: 'approved', reason: input.reason } });
+      await this.executeApp(approved); return this.items.get(item.id)!;
     }
     if (item.source === 'neo/github') {
       if (role !== 'admin' && role !== 'owner') throw new Error('GitHub publishing requires admin approval');
@@ -904,6 +945,7 @@ class SuperagentService {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.appExecutions.clear();
     this.github?.stop();
     this.unsubscribeChannel?.();
     await this.cron?.stop();
@@ -955,7 +997,7 @@ export default defineExtension({
       new DecisionLog(join(dataDir, 'engine-superagent', 'traces')),
       () => ctx.inject<SkillImporter>('skillRegistry'),
       new PresetWorkerHost(models, ctx.inject<ComputerMcpBridge>('computerMcpBridge'),
-        ctx.inject<SkillsBridge>('skillsBridge')));
+        ctx.inject<SkillsBridge>('skillsBridge'), ctx.inject<McpProjectionBridge>('appsMcpBridge')));
     const github = new PollingGitHubSource(join(dataDir, 'engine-superagent', 'github.json'),
       vault, (event) => service.ingestGithub(event), fetch,
       process.env.NODE_ENV === 'test' && process.env.NMH_SUPERAGENT_GITHUB_API_URL
@@ -971,6 +1013,9 @@ export default defineExtension({
       service.useUpstreamChecker(fake.createUpstreamChecker());
     }
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
+    const apps = ctx.inject<AppsRegistry>('appsRegistry');
+    const detachApps = apps?.attachGate({ submit: input => service.submitApp(input) });
+    ctx.effect(() => () => { detachApps?.(); });
     await github.start();
     // memory-honcho dreams report here; their apply/reject comes back through memory-honcho's service.
     service.attachDreams(() => ctx.inject<MemoryDreams>('memoryDreams'));
