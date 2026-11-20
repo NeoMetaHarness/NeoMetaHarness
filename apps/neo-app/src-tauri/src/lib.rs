@@ -34,45 +34,99 @@ fn forward_deep_link(app: &tauri::AppHandle, url: &str) {
     }
 }
 
-#[tauri::command]
-async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, String> {
+#[derive(Default)]
+struct UpdateCandidate(Mutex<Option<String>>);
+
+fn validate_updater_endpoint(endpoint: &str, is_debug: bool) -> Result<(), String> {
+    if !is_debug && !endpoint.starts_with("https://") {
+        return Err(format!("Release updater endpoint must use HTTPS: {endpoint}"));
+    }
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() {
+        return Err("Updater endpoint cannot be empty".into());
+    }
+    Ok(())
+}
+
+fn get_updater_overrides() -> (Option<String>, Option<String>) {
+    #[cfg(debug_assertions)]
+    {
+        let endpoint = std::env::var("NMH_UPDATER_ENDPOINT").ok().filter(|s| !s.trim().is_empty());
+        let pubkey = std::env::var("NMH_UPDATER_PUBLIC_KEY").ok().filter(|s| !s.trim().is_empty());
+        (endpoint, pubkey)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        (None, None)
+    }
+}
+
+fn configure_updater_builder(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::UpdaterBuilder, String> {
+    #[allow(unused_mut)]
     let mut builder = app.updater_builder();
-    if let Ok(endpoint) = std::env::var("NMH_UPDATER_ENDPOINT") {
-        if !endpoint.trim().is_empty() {
-            let endpoint = endpoint.parse().map_err(|error| format!("Invalid updater URL: {error}"))?;
-            builder = builder.endpoints(vec![endpoint]).map_err(|error| error.to_string())?;
+    let (override_endpoint, override_pubkey) = get_updater_overrides();
+
+    if let Some(endpoint) = override_endpoint {
+        validate_updater_endpoint(&endpoint, cfg!(debug_assertions))?;
+        let url = endpoint.trim().parse().map_err(|error| format!("Invalid updater URL: {error}"))?;
+        builder = builder.endpoints(vec![url]).map_err(|error| error.to_string())?;
+    }
+    if let Some(public_key) = override_pubkey {
+        builder = builder.pubkey(public_key.trim());
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        if let Some(endpoints) = app.config().plugins.0.get("updater").and_then(|val| val.get("endpoints")).and_then(|val| val.as_array()) {
+            for ep in endpoints {
+                if let Some(s) = ep.as_str() {
+                    validate_updater_endpoint(s, false)?;
+                }
+            }
         }
     }
-    if let Ok(public_key) = std::env::var("NMH_UPDATER_PUBLIC_KEY") {
-        if !public_key.trim().is_empty() {
-            builder = builder.pubkey(public_key);
-        }
-    }
+
+    Ok(builder)
+}
+
+async fn check_for_updates_internal(app: &tauri::AppHandle) -> Result<Option<String>, String> {
+    let builder = configure_updater_builder(app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
     let update = updater.check().await.map_err(|error| error.to_string())?;
-    Ok(update.map(|candidate| candidate.version))
+    let version = update.map(|candidate| candidate.version);
+    if let Some(state) = app.try_state::<UpdateCandidate>() {
+        *state.0.lock().unwrap() = version.clone();
+    }
+    Ok(version)
 }
 
 #[tauri::command]
-async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
-    let mut builder = app.updater_builder();
-    if let Ok(endpoint) = std::env::var("NMH_UPDATER_ENDPOINT") {
-        if !endpoint.trim().is_empty() {
-            let endpoint = endpoint.parse().map_err(|error| format!("Invalid updater URL: {error}"))?;
-            builder = builder.endpoints(vec![endpoint]).map_err(|error| error.to_string())?;
-        }
+async fn check_for_updates(app: tauri::AppHandle, window: tauri::Window) -> Result<Option<String>, String> {
+    if window.label() != "main" {
+        return Err("Updates can only be checked from the main window".into());
     }
-    if let Ok(public_key) = std::env::var("NMH_UPDATER_PUBLIC_KEY") {
-        if !public_key.trim().is_empty() {
-            builder = builder.pubkey(public_key);
-        }
+    check_for_updates_internal(&app).await
+}
+
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Updates can only be installed from the main window".into());
     }
+    let candidate = app.try_state::<UpdateCandidate>()
+        .and_then(|state| state.0.lock().unwrap().clone())
+        .ok_or_else(|| "No update candidate available. Check for updates first.".to_string())?;
+
+    let builder = configure_updater_builder(&app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
     if let Some(update) = updater.check().await.map_err(|error| error.to_string())? {
+        if update.version != candidate {
+            return Err(format!("Available update version ({}) does not match expected candidate ({candidate})", update.version));
+        }
         update.download_and_install(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
         app.restart();
     }
-    Ok(())
+    Err("No update available to install".into())
 }
 
 struct GatewaySidecar {
@@ -179,7 +233,7 @@ pub fn run() {
             let (sidecar, port) = GatewaySidecar::launch(app.handle(), data_dir.clone())?;
             let app_handle_for_update = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Ok(Some(version)) = check_for_updates(app_handle_for_update.clone()).await {
+                if let Ok(Some(version)) = check_for_updates_internal(&app_handle_for_update).await {
                     if let Some(window) = app_handle_for_update.get_webview_window("main") {
                         if let Ok(payload) = serde_json::to_string(&version) {
                             let _ = window.eval(&format!(
@@ -191,6 +245,7 @@ pub fn run() {
             });
             let gateway_pid = sidecar.child.id();
             app.manage(GatewayState(Mutex::new(Some(sidecar))));
+            app.manage(UpdateCandidate::default());
 
             let token = fs::read_to_string(data_dir.join("desktop.token")).unwrap_or_default().trim().to_string();
             let mut url = if token.is_empty() {
@@ -274,4 +329,35 @@ pub fn run() {
                 }
             }
         });
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_endpoint_https_enforcement() {
+        assert!(validate_updater_endpoint("http://insecure.example.com/latest.json", false).is_err());
+        assert!(validate_updater_endpoint("https://secure.example.com/latest.json", false).is_ok());
+        assert!(validate_updater_endpoint("http://127.0.0.1:8080/latest.json", true).is_ok());
+        assert!(validate_updater_endpoint("", false).is_err());
+    }
+
+    #[test]
+    fn test_override_is_debug_only() {
+        unsafe {
+            std::env::set_var("NMH_UPDATER_PUBLIC_KEY", "injected_attacker_key");
+            std::env::set_var("NMH_UPDATER_ENDPOINT", "http://attacker.example/update.json");
+        }
+
+        let (endpoint, pubkey) = get_updater_overrides();
+        if cfg!(debug_assertions) {
+            assert_eq!(endpoint.as_deref(), Some("http://attacker.example/update.json"));
+            assert_eq!(pubkey.as_deref(), Some("injected_attacker_key"));
+        } else {
+            assert!(endpoint.is_none());
+            assert!(pubkey.is_none());
+        }
+    }
 }

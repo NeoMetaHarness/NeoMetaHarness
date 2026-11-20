@@ -88,6 +88,11 @@ function closeWindow(pid) {
 console.log('Building frontend with Vite...');
 execFileSync(process.execPath, [join(appDir, 'node_modules/vite/bin/vite.js'), 'build'], { cwd: appDir, stdio: 'pipe' });
 
+console.log('Running cargo unit tests (verifying updater overrides and endpoint HTTPS enforcement)...');
+execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['test'], {
+  cwd: join(appDir, 'src-tauri'), stdio: 'pipe',
+});
+
 console.log('Building desktop binary with Cargo (debug)...');
 execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['build'], {
   cwd: join(appDir, 'src-tauri'), stdio: 'pipe',
@@ -132,6 +137,7 @@ const desktop = spawn(exe, [], {
     ...process.env,
     NMH_DESKTOP_REPO_ROOT: repoDir,
     NMH_DESKTOP_DATA_DIR: join(home, 'state'),
+    NMH_HERMES_HOME: join(home, 'hermes'),
     NMH_DESKTOP_STATUS_FILE: statusFile,
     NMH_UPDATER_ENDPOINT: `http://127.0.0.1:${updaterPort}/latest.json`,
     WEBVIEW2_USER_DATA_FOLDER: join(home, 'webview'),
