@@ -221,6 +221,11 @@
       "title": "Perf budgets wired into neo check",
       "status": "in_progress",
       "owner": "antigravity"
+    },
+    "P1-13": {
+      "title": "Per-workspace extension settings and secrets in the kernel (settings/vault currently scoped to workspace \"default\")",
+      "status": "not_started",
+      "note": "Found 2026-11-20 by x-search security review: any extension key/settings are shared across workspaces in server mode (packages/kernel/src/index.ts settings use workspaceId \"default\")."
     }
   },
   "p2_tasks": {
@@ -304,7 +309,7 @@
       "title": "x-search optional extension",
       "status": "in_progress",
       "owner": "codex",
-      "note": "Reassigned from antigravity (blocked on Google account verification) to codex."
+      "note": "Returned 2026-11-20: DNS-rebinding gap (High), http allowed, no timeout/size cap; must use shared @neometaharness/egress (c7b3976)."
     },
     "P2-12": {
       "title": "apps-composio and neo.apps interface",
