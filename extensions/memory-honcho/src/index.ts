@@ -49,13 +49,24 @@ export default defineExtension({
       return { forgotten: await store.forgetIntent(value.workspace, value.text) };
     });
 
-    // Nightly pass over the desktop workspace. Other workspaces dream on demand (`dream/run`).
+    // Nightly pass. Desktop dreams its 'default' memory workspace (others dream on demand through `dream/run`).
+    // In server mode 'default' belongs to nobody (every caller's 'default' is their own workspace), so the pass
+    // dreams each workspace that actually holds L1 memory, and never 'default'.
+    const server = ctx.inject<string>('deploymentMode') === 'server';
+    const nightlyWorkspaces = async (): Promise<string[]> => {
+      if (!server) return ['default'];
+      const l1 = ctx.inject<MemoryStore>('memoryStore');
+      return ((await l1?.workspaces?.()) ?? []).filter((workspace) => workspace !== 'default');
+    };
     const interval = process.env.NODE_ENV === 'test' && process.env.NMH_HONCHO_DREAM_INTERVAL_MS
       ? Math.max(200, Number(process.env.NMH_HONCHO_DREAM_INTERVAL_MS)) : DAY_MS;
     // Anchored to the last dream, so a restart neither skips a night nor dreams twice.
-    const nightly = () => void dreamer.run('default')
-      .catch((error) => console.error('Memory dream failed:', error instanceof Error ? error.message : error));
-    const last = dreamer.last('default')?.createdAt;
+    const nightly = () => void nightlyWorkspaces().then(async (workspaces) => {
+      for (const workspace of workspaces) {
+        await dreamer.run(workspace).catch((error) => console.error('Memory dream failed:', error instanceof Error ? error.message : error));
+      }
+    }).catch((error) => console.error('Memory dream failed:', error instanceof Error ? error.message : error));
+    const last = server ? dreamer.latest() : dreamer.last('default')?.createdAt;
     let timer: NodeJS.Timeout | undefined;
     const first = setTimeout(() => {
       nightly();

@@ -23,10 +23,13 @@ export default defineExtension({
     const foreign = (entry: { workspace: string } | undefined, workspace?: string) =>
       !entry || (workspace !== undefined && entry.workspace !== workspace);
     ctx.route('update', async ({ body }) => {
-      const { id, workspace, ...changes } = body as { id: string; workspace?: string } & Parameters<MemoryStore['update']>[1];
+      const { id, workspace, editedBy, ...changes } = body as { id: string; workspace?: string; editedBy?: string }
+        & Parameters<MemoryStore['update']>[1];
       const current = await get(id);
       if (foreign(current, workspace)) return undefined;
       if (reserved(current!.source) || reserved(changes.source)) throw new Error('Standing intents change only through the intents routes');
+      // The Gateway names the editor; the entry keeps its origin and gains who changed it.
+      if (editedBy) changes.provenance = `${current!.provenance}; edited via ${editedBy}`;
       return memory.update(id, changes);
     });
     ctx.route('delete', async ({ body }) => {

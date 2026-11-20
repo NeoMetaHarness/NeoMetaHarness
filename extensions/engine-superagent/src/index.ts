@@ -160,8 +160,18 @@ class SuperagentService {
     }
   }
 
+  /**
+   * Best effort: if memory-honcho is disabled now, the Dreamer reconciles later. It sees this item is no longer
+   * pending (dreamPending) and rejects the dream itself, so a stale proposal never blocks the next dream.
+   */
   private async rejectDream(item: InboxItem): Promise<void> {
-    try { await this.dreams?.()?.reject(item.dream!.id); } catch { /* memory-honcho disabled; the dream stays unapplied */ }
+    try { await this.dreams?.()?.reject(item.dream!.id); } catch { /* reconciled by the Dreamer on its next pass */ }
+  }
+
+  /** Whether a memory dream's Inbox item still waits for a decision or is being applied. */
+  dreamPending(id: string): boolean {
+    const item = this.items.get(id);
+    return Boolean(item?.dream) && (item!.status === 'suggestion' || item!.status === 'approval' || item!.status === 'running');
   }
 
   /** The accept mode of one workspace (a dream follows its own workspace's mode). */
@@ -407,10 +417,13 @@ class SuperagentService {
     this.acceptModeStored = true;
   }
 
-  acceptModeGet(): { mode: AcceptMode } { return { mode: this.acceptModes.get() }; }
-  acceptModeSet(input: { mode: AcceptMode }): { mode: AcceptMode } {
+  /** The accept mode of one workspace (the Gateway names the caller's; 'default' is the desktop/instance one). */
+  acceptModeGet(input: { workspace?: string } = {}): { mode: AcceptMode } {
+    return { mode: this.acceptModes.get(input.workspace ?? 'default') };
+  }
+  acceptModeSet(input: { mode: AcceptMode; workspace?: string }): { mode: AcceptMode } {
     this.acceptModeStored = true;
-    return { mode: this.acceptModes.set(input.mode) };
+    return { mode: this.acceptModes.set(input.mode, input.workspace ?? 'default') };
   }
 
   /**
@@ -962,7 +975,7 @@ export default defineExtension({
     // memory-honcho dreams report here; their apply/reject comes back through memory-honcho's service.
     service.attachDreams(() => ctx.inject<MemoryDreams>('memoryDreams'));
     ctx.provide('memoryInboxSink', { acceptMode: (workspace: string) => service.acceptModeFor(workspace),
-      propose: (input: DreamProposal) => service.proposeDream(input) });
+      propose: (input: DreamProposal) => service.proposeDream(input), isPending: (id: string) => service.dreamPending(id) });
     ctx.provide('dshInboxSink', { report: (input: Parameters<typeof service.reportDsh>[0]) =>
       service.reportDsh(input) });
     // Before the first poll (scheduled on a timer by start) so P6-4 installs keep their behaviour.
@@ -978,8 +991,8 @@ export default defineExtension({
     ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number }));
     ctx.route('accept', ({ body }) => service.accept(body as { id: string }, (body as { role?: Role }).role));
     ctx.route('dismiss', ({ body }) => service.dismiss(body as { id: string; reason?: string }, (body as { role?: Role }).role));
-    ctx.route('accept-mode/get', () => service.acceptModeGet());
-    ctx.route('accept-mode/set', ({ body }) => service.acceptModeSet(body as { mode: AcceptMode }));
+    ctx.route('accept-mode/get', ({ body }) => service.acceptModeGet((body ?? {}) as { workspace?: string }));
+    ctx.route('accept-mode/set', ({ body }) => service.acceptModeSet(body as { mode: AcceptMode; workspace?: string }));
     ctx.route('reply', ({ body }) => service.reply(body as { id: string; answer: string }));
     ctx.route('approval/decide', ({ body }) => service.decideApproval(body as {
       id: string; decision: 'approve' | 'deny'; reason: string;

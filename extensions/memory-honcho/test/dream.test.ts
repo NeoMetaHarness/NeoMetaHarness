@@ -218,6 +218,34 @@ try {
     assert.equal(errors.length, 1, 'a corrupt dreams.json is logged and ignored');
     console.log('DREAM_UNIT pending dreams kept, reject serialized, interrupted apply recovers, corrupt history ignored');
   }
+
+  // A dream whose Inbox item was closed while memory-honcho was off (the reject never arrived) is not stuck.
+  {
+    const open = new Set<string>();
+    const sinkS = new FakeSink('observe');
+    const tracked = Object.assign(sinkS, {
+      propose(input: Parameters<MemoryInboxSink['propose']>[0]) {
+        const made = FakeSink.prototype.propose.call(sinkS, input); open.add(made.id); return made;
+      },
+      isPending: (id: string) => open.has(id),
+    });
+    const l1S = new FakeL1([entry('Likes chess', { workspace: 'w' }), entry('Likes chess', { workspace: 'w' })]);
+    const dreamerS = new Dreamer(join(home, 's'), new FakeL2([], 'off'), () => l1S, () => tracked, () => NOW);
+    const first = await dreamerS.run('w');
+    assert.equal(first.status, 'proposed');
+    assert.equal((await dreamerS.run('w')).id, first.id, 'a still-pending item is reused');
+    open.delete(first.inboxId!); // dismissed in the Inbox; dreamer.reject() was never called
+    assert.equal(dreamerS.last('w')?.status, 'rejected', 'the stale dream is reconciled to rejected');
+    await assert.rejects(dreamerS.apply(first.id), /Dream is rejected/, 'a closed dream cannot be applied later');
+    const fresh = await dreamerS.run('w');
+    assert.notEqual(fresh.id, first.id, 'the same proposals get a new dream, not the stale report');
+    assert.equal(fresh.status, 'proposed');
+    assert.equal(fresh.inboxId, 'inbox-2', 'and a new Inbox item');
+    open.clear(); // the Inbox item vanished entirely (e.g. Inbox history reset)
+    const third = await dreamerS.run('w');
+    assert.notEqual(third.id, fresh.id, 'a missing Inbox item is treated as closed too');
+    console.log('DREAM_UNIT a dream whose Inbox item is closed or missing is rejected and never blocks a new one');
+  }
 } finally {
   rmSync(home, { recursive: true, force: true });
 }

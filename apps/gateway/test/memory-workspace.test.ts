@@ -90,6 +90,24 @@ test('memory routes are scoped to the caller workspace and intents cannot be for
       'an intent cannot be deleted around the retract route');
     const forged = await call(alice, 'x/memory-local/add', { subject: 'user', text: 'spoofed provenance', provenance: 'user:someone-else via Neo app' });
     assert.match(forged.body.provenance, /^Neo Memory UI; user:/, 'caller-supplied provenance is replaced');
+    // Update: caller provenance is ignored; the entry keeps its origin and records the editor.
+    const edited = await call(alice, 'x/memory-local/update', { id: corpFact.body.id, text: 'Corp VPN is vpn2.corp.test',
+      provenance: 'user:someone-else via Neo app' });
+    assert.equal(edited.status, 200);
+    assert.equal(edited.body.text, 'Corp VPN is vpn2.corp.test');
+    assert.ok(edited.body.provenance.startsWith(corpFact.body.provenance + '; edited via Neo Memory UI; user:'),
+      'update provenance is server-assigned: ' + edited.body.provenance);
+    assert.ok(!edited.body.provenance.includes('someone-else'));
+    // The worker MCP's memory.remember (the superagent bridge key) keeps its own wording, plus the real key owner.
+    const aliceId = (await (await fetch(`${base}/auth/get-session`, { headers: as(alice) })).json() as { user: { id: string } }).user.id;
+    const bridge = await (await fetch(`${base}/auth/api-key/create`, json({ name: 'superagent-bridge',
+      metadata: { role: 'member', workspaceId: corp.id } }, as(alice)))).json() as { key: string };
+    const remembered = await fetch(`${base}/x/memory-local/add`, json({ json: { workspace: 'default', subject: 'user',
+      subjectId: 'global', text: 'Remembered by the worker', source: 'superagent.remember',
+      provenance: 'explicit user request through Neo worker MCP', trust: 'observed' } }, { 'x-api-key': bridge.key }));
+    assert.equal(remembered.status, 200);
+    assert.equal((await remembered.json() as { json: { provenance: string } }).json.provenance,
+      `explicit user request through Neo worker MCP; user:${aliceId}`, 'memory.remember keeps its own provenance');
     assert.deepEqual((await call(alice, 'x/memory-local/intents/list', {})).body.map((entry: any) => entry.text), ['Corp ships on Fridays.']);
     console.log('P4-9_H2 PASS intents are reserved to the intents routes; plain writes are observed with server provenance');
   } finally {

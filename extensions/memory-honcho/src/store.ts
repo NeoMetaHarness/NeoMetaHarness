@@ -202,9 +202,10 @@ export class HonchoStore implements MemoryStore {
 
   /** A retracted standing intent leaves L2 too: any Honcho copy is marked deleted, so nothing re-imports it. */
   async forgetIntent(workspace: string, text: string): Promise<number> {
-    const key = text.toLowerCase().replace(/s+/g, ' ').trim();
+    const normal = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
+    const key = normal(text);
     const copies = (await this.list({ workspace, query: text, source: 'neo.intent', limit: 5000 }))
-      .filter((item) => item.text.toLowerCase().replace(/s+/g, ' ').trim() === key);
+      .filter((item) => normal(item.text) === key);
     for (const copy of copies) await this.delete(copy.id);
     return copies.length;
   }

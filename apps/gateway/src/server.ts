@@ -286,6 +286,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   // Channel platforms publish into, and the Inbox subscribes to, this one bus.
   const channelBus = new ChannelBus();
   const kernel = new NeoKernel(db, {
+    // Read-only deployment mode, for extensions whose background work differs per mode (memory-honcho's nightly pass).
+    deploymentMode: mode,
     backupSource: backupStorage,
     backupProtectedPaths: [dataDir, dirname(resolve(options.databaseFile)), resolve(options.extensionsDir ?? defaultExtensions)],
     channelSource: channelBus,
@@ -394,6 +396,23 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   };
   /** The workspace an id-addressed memory write must belong to (none to check in desktop mode). */
   const memoryOwner = (context: GatewayAuthContext) => mode === 'desktop' ? undefined : memoryWorkspace(undefined, context);
+  /**
+   * Memory provenance is assigned here from the authenticated caller, never taken from the request. The
+   * superagent's worker MCP bridge key (memory.remember) keeps that tool's own wording; the user id is always
+   * appended, so a key that merely borrows the bridge's name still names its real owner.
+   */
+  /**
+   * The accept-mode workspace of a caller: desktop keeps its single 'default' mode; in server mode each
+   * workspace has its own (the same key its memory dreams use, so a dream follows the caller's setting).
+   */
+  const acceptModeWorkspace = (context: GatewayAuthContext): string => mode === 'desktop' ? 'default' : memoryWorkspace(undefined, context);
+  const memoryProvenance = (context: GatewayAuthContext): string => {
+    const user = `user:${context.user?.id ?? 'unknown'}`;
+    const key = context.apiKey?.name;
+    if (key === 'superagent-bridge') return `explicit user request through Neo worker MCP; ${user}`;
+    if (key) return `API key ${key}; ${user}`;
+    return `Neo Memory UI; ${user}`;
+  };
   const invokeHoncho = async (route: string, body: unknown) => {
     const path = '/x/memory-honcho/' + route;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Honcho extension disabled' });
@@ -503,11 +522,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       acceptMode: {
         get: os.inbox.acceptMode.get.handler(async ({ context }) => {
           authorize('inbox.acceptMode.get', context);
-          return invokeInbox('accept-mode/get', {}) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
+          return invokeInbox('accept-mode/get', { workspace: acceptModeWorkspace(context) }) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
         }),
         set: os.inbox.acceptMode.set.handler(async ({ input, context }) => {
           authorize('inbox.acceptMode.set', context);
-          return invokeInbox('accept-mode/set', input) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
+          return invokeInbox('accept-mode/set', { ...input, workspace: acceptModeWorkspace(context) }) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
         }),
       },
       reply: os.inbox.reply.handler(async ({ input, context }) => {
@@ -814,12 +833,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           // The intent source is reserved, and provenance is the authenticated user, never caller-supplied.
           if (input.source === 'neo.intent') throw new ORPCError('BAD_REQUEST', { message: 'Standing intents are added through memory-local.intents.add' });
           return invokeMemory('add', { ...input, workspace: memoryWorkspace(input.workspace, context),
-            provenance: `Neo Memory UI; user:${context.user!.id}` }) as ReturnType<typeof db.memories.add>;
+            provenance: memoryProvenance(context) }) as ReturnType<typeof db.memories.add>;
         }),
         update: os.x['memory-local'].update.handler(async ({ input, context }) => {
           authorize('x.memory-local.update', context);
           if (input.source === 'neo.intent') throw new ORPCError('BAD_REQUEST', { message: 'Standing intents change only through memory-local.intents' });
-          return (await invokeMemory('update', { ...input, workspace: memoryOwner(context) }) as Awaited<ReturnType<typeof db.memories.update>>) ?? null;
+          // Provenance is server-assigned here too: memory-local appends who edited the entry to its existing provenance.
+          const { provenance: _ignored, ...changes } = input;
+          return (await invokeMemory('update', { ...changes, workspace: memoryOwner(context),
+            editedBy: memoryProvenance(context) }) as Awaited<ReturnType<typeof db.memories.update>>) ?? null;
         }),
         delete: os.x['memory-local'].delete.handler(async ({ input, context }) => {
           authorize('x.memory-local.delete', context);

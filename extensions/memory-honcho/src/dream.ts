@@ -23,6 +23,8 @@ export interface MemoryInboxSink {
   acceptMode(workspace: string): AcceptMode;
   propose(input: { dreamId: string; workspace: string; summary: string; proposals: number;
     destructive: boolean; applied: boolean; changes: string[]; risks: string[] }): { id: string };
+  /** Whether an Inbox item still waits for a decision (or is being applied). Absent: assume it does. */
+  isPending?(inboxId: string): boolean;
 }
 /** The L2 operations a dream needs; HonchoStore implements them through the REST v3 seam. */
 export interface DreamL2 {
@@ -80,7 +82,13 @@ export class Dreamer {
 
   close() { this.closed = true; }
 
+  /** When any workspace last dreamed (anchors the nightly pass across workspaces). */
+  latest(): number | undefined {
+    return this.reports.reduce<number | undefined>((at, item) => at === undefined || item.createdAt > at ? item.createdAt : at, undefined);
+  }
+
   last(workspace: string): DreamReport | null {
+    this.reconcile(workspace);
     const report = [...this.reports].reverse().find((item) => item.workspace === workspace);
     return report ? publicReport(report) : null;
   }
@@ -120,8 +128,25 @@ export class Dreamer {
     return report;
   }
 
+  /**
+   * A proposed dream whose Inbox item was closed (dismissed or denied while memory-honcho was disabled, so
+   * the reject never arrived) or is gone is rejected here. It then never blocks a later dream with the same
+   * proposals, and it can no longer be applied.
+   */
+  private reconcile(workspace: string) {
+    const sink = this.sink();
+    if (!sink?.isPending) return;
+    for (const report of this.reports) {
+      if (report.workspace !== workspace || report.status !== 'proposed' || report.applying) continue;
+      if (report.inboxId && sink.isPending(report.inboxId)) continue;
+      this.finish({ ...report, status: 'rejected',
+        risks: [...report.risks, 'Its Inbox item was closed without applying it, so the dream was rejected.'] });
+    }
+  }
+
   private async dream(workspace: string): Promise<DreamReport> {
     if (this.closed) throw new Error('Memory dreaming is disabled');
+    this.reconcile(workspace);
     const risks: string[] = [];
     const l1 = this.l1();
     const local = l1 ? await l1.list({ workspace, limit: L1_WINDOW }) : [];
