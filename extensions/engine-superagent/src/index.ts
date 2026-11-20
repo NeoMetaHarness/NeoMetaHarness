@@ -50,6 +50,8 @@ const askSchema = z.object({
   text: z.string().min(1), botId: z.string().min(1), mode: z.enum(['observe', 'act']).default('observe'),
   notification: z.object({ channelId: z.string() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).default('member'),
+  /** Set by the Gateway from the caller (server mode); the item and any schedule keep it. */
+  workspace: z.string().min(1).optional(),
 });
 
 /** The only Neo-specific boundary that can ingest a Source Trigger. */
@@ -130,6 +132,7 @@ class SuperagentService {
     const acceptMode = this.acceptModes.get(input.workspace); // the dream's own workspace (review M1)
     const now = Date.now();
     const base = { id: randomUUID(), botId: 'neo-memory', source: 'neo/memory' as const, requesterRole: 'member' as const,
+      workspace: input.workspace,
       text: `Memory dream for workspace ${input.workspace}`, acceptMode, destructive: input.destructive,
       dream: { id: input.dreamId, workspace: input.workspace, proposals: input.proposals },
       report: { status: 'ready' as const, summary: input.summary.slice(0, 2000), changes: input.changes.slice(0, 100),
@@ -267,7 +270,7 @@ class SuperagentService {
         return;
       }
       await this.ask({ text: job.text, botId: job.botId, mode: job.mode,
-        requesterRole: job.requesterRole ?? 'member' }, 'neo/cron');
+        requesterRole: job.requesterRole ?? 'member', ...(job.workspace ? { workspace: job.workspace } : {}) }, 'neo/cron');
     });
     await this.cron.start();
     if (!this.cron.list().some((job) => job.botId === 'neo-system' && job.text === '@neo/upstream check')) {

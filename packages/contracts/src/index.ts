@@ -641,6 +641,12 @@ export const inboxEpisodeSchema = z.object({
 });
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
+  /**
+   * The workspace the item belongs to (P6-10), set by the Gateway from the caller (asks, schedules) or by the
+   * producer (memory dreams). Items from instance-wide sources (channel/Hermes bindings, GitHub, upstream) have
+   * none; in server mode only items of the caller's own workspace are listed or acted on.
+   */
+  workspace: z.string().optional(),
   notification: z.object({ channelId: z.string(), deliveredAt: z.number().optional(), error: z.string().optional() }).optional(),
   source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github', 'neo/dsh', 'neo/memory']).optional(),
   github: z.object({ repo: z.string(), issue: z.number().int().optional(),

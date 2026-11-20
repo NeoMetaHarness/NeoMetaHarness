@@ -9,6 +9,8 @@ export interface ScheduledAsk {
   botId: string;
   mode: 'observe' | 'act';
   requesterRole?: 'member' | 'admin' | 'owner';
+  /** The workspace whose member scheduled it (server mode); fired items carry it. */
+  workspace?: string;
 }
 
 const LIMITS = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]] as const;

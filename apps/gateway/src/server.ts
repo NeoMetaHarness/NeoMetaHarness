@@ -406,6 +406,23 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
    * workspace has its own (the same key its memory dreams use, so a dream follows the caller's setting).
    */
   const acceptModeWorkspace = (context: GatewayAuthContext): string => mode === 'desktop' ? 'default' : memoryWorkspace(undefined, context);
+  /**
+   * P6-10 Inbox isolation. In server mode an item belongs to the workspace stamped on it, and a caller sees and
+   * acts only on their own workspace's items; an item with no workspace (a channel/Hermes binding, GitHub,
+   * upstream) is not shown to any workspace. Desktop is a single tenant and sees every item, as before.
+   */
+  const inboxWorkspace = (context: GatewayAuthContext): string | undefined => {
+    if (mode === 'desktop') return undefined;
+    if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
+    return context.workspaceId;
+  };
+  const inboxVisible = (item: InboxItem, context: GatewayAuthContext) => mode === 'desktop' || item.workspace === inboxWorkspace(context);
+  /** The caller's item, or NOT_FOUND (another workspace's item is indistinguishable from a missing one). */
+  const inboxItem = async (id: string, context: GatewayAuthContext): Promise<InboxItem> => {
+    const item = (await invokeInbox('list', {}) as InboxItem[]).find((entry) => entry.id === id);
+    if (!item || !inboxVisible(item, context)) throw new ORPCError('NOT_FOUND', { message: 'Inbox item not found' });
+    return item;
+  };
   const memoryProvenance = (context: GatewayAuthContext): string => {
     const user = `user:${context.user?.id ?? 'unknown'}`;
     const key = context.apiKey?.name;
@@ -493,11 +510,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('inbox.ask', context);
         const notification = input.notify ? (authorize('x.channels.notification.resolve', context),
           await invokeChannels('notification/resolve', { ...input.notify, botId: input.botId })) : undefined;
-        return invokeInbox('ask', { ...input, ...(notification ? { notification } : {}), requesterRole: context.role, requesterId: context.user?.id }) as Promise<InboxItem>;
+        const workspace = inboxWorkspace(context);
+        return invokeInbox('ask', { ...input, ...(notification ? { notification } : {}), requesterRole: context.role,
+          requesterId: context.user?.id, ...(workspace ? { workspace } : {}) }) as Promise<InboxItem>;
       }),
       list: os.inbox.list.handler(async ({ context }) => {
         authorize('inbox.list', context);
-        return invokeInbox('list', {}) as Promise<InboxItem[]>;
+        const items = await invokeInbox('list', {}) as InboxItem[];
+        return items.filter((item) => inboxVisible(item, context));
       }),
       decisions: {
         list: os.inbox.decisions.list.handler(async ({ input, context }) => {
@@ -508,15 +528,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       accept: os.inbox.accept.handler(async ({ input, context }) => {
         authorize('inbox.accept', context);
         // Accepting a Suggestion starts work: destructive work needs an admin or owner (as approvals do).
-        const items = await invokeInbox('list', {}) as InboxItem[];
-        const item = items.find((entry) => entry.id === input.id);
-        if (item?.destructive && context.role !== 'admin' && context.role !== 'owner') {
+        const item = await inboxItem(input.id, context);
+        if (item.destructive && context.role !== 'admin' && context.role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Accepting destructive work requires admin or owner' });
         }
         return invokeInbox('accept', { ...input, role: context.role }) as Promise<InboxItem>;
       }),
       dismiss: os.inbox.dismiss.handler(async ({ input, context }) => {
         authorize('inbox.dismiss', context);
+        await inboxItem(input.id, context);
         return invokeInbox('dismiss', { ...input, role: context.role }) as Promise<InboxItem>;
       }),
       acceptMode: {
@@ -531,19 +551,20 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       },
       reply: os.inbox.reply.handler(async ({ input, context }) => {
         authorize('inbox.reply', context);
+        await inboxItem(input.id, context);
         return invokeInbox('reply', input) as Promise<InboxItem>;
       }),
       approval: { decide: os.inbox.approval.decide.handler(async ({ input, context }) => {
         authorize('inbox.approval.decide', context);
-        const items = await invokeInbox('list', {}) as InboxItem[];
-        const item = items.find((entry) => entry.id === input.id);
-        if ((item?.approval?.destructive || item?.source === 'neo/github') && context.role !== 'admin' && context.role !== 'owner') {
+        const item = await inboxItem(input.id, context);
+        if ((item.approval?.destructive || item.source === 'neo/github') && context.role !== 'admin' && context.role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Destructive approval requires admin or owner' });
         }
         return invokeInbox('approval/decide', { ...input, role: context.role }) as Promise<InboxItem>;
       }) },
       retry: os.inbox.retry.handler(async ({ input, context }) => {
         authorize('inbox.retry', context);
+        await inboxItem(input.id, context);
         return invokeInbox('retry', input) as Promise<InboxItem>;
       }),
       upstream: {
@@ -586,12 +607,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       events: os.inbox.events.handler(async function* ({ input, signal, context }) {
         authorize('inbox.events', context);
         const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;
-        yield* stream;
+        if (mode === 'desktop') { yield* stream; return; }
+        for await (const event of stream) if (inboxVisible(event.item, context)) yield event;
       }),
       cron: {
         create: os.inbox.cron.create.handler(async ({ input, context }) => {
           authorize('inbox.cron.create', context);
-          return invokeInbox('cron/create', { ...input, requesterRole: context.role }) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }>;
+          const workspace = inboxWorkspace(context);
+          return invokeInbox('cron/create', { ...input, requesterRole: context.role, ...(workspace ? { workspace } : {}) }) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }>;
         }),
         list: os.inbox.cron.list.handler(async ({ context }) => {
           authorize('inbox.cron.list', context);

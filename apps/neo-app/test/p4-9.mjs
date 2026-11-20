@@ -302,6 +302,7 @@ async function trial() {
     const otherWorkspace = await member.x['memory-honcho'].dream.run({ workspace: 'workspace-two' });
     assert.equal(otherWorkspace.acceptMode, 'observe', 'workspace-two has no act mode of its own');
     assert.equal((await item(otherWorkspace.inboxId)).status, 'suggestion');
+    assert.equal((await item(otherWorkspace.inboxId)).workspace, 'workspace-two', 'P6-10: a dream item carries its workspace');
     // M3: a retracted intent leaves L1, its Honcho copy, the projection, and never comes back by dreaming.
     const metric = await member.x['memory-local'].intents.add({ text: 'Use metric units everywhere.' });
     await seedHoncho(honcho, 'Use metric units everywhere.', { source: 'neo.intent', trust: 'confirmed' });
