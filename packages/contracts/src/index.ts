@@ -726,10 +726,10 @@ export const inboxContract = {
       schedule: z.string().min(1), mode: z.enum(['observe', 'act']).default('observe') }))
       .output(z.object({ id: z.string(), text: z.string(), botId: z.string(),
       schedule: z.string(), mode: z.enum(['observe', 'act']),
-      requesterRole: z.enum(['member', 'admin', 'owner']).optional() })),
+      requesterRole: z.enum(['member', 'admin', 'owner']).optional(), workspace: z.string().optional() })),
     list: oc.output(z.array(z.object({ id: z.string(), text: z.string(), botId: z.string(),
       schedule: z.string(), mode: z.enum(['observe', 'act']),
-      requesterRole: z.enum(['member', 'admin', 'owner']).optional() }))),
+      requesterRole: z.enum(['member', 'admin', 'owner']).optional(), workspace: z.string().optional() }))),
     delete: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ deleted: z.boolean() })),
     fire: oc.input(z.object({ id: z.string().min(1) })).output(z.object({ ok: z.boolean() })),
   },

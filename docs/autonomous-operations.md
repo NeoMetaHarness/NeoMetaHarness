@@ -46,6 +46,14 @@ The superagent logs all evaluation decisions for observability and model trainin
 - **Query mode:** `inbox.acceptMode.get()` (available to all workspace viewers per `apps/gateway/src/policy.ts:210`).
 - **Update mode:** `inbox.acceptMode.set({ mode })` (restricted to `admin` role per `apps/gateway/src/policy.ts:211`).
 
+### Workspaces (server mode, P6-10)
+
+- Every Inbox item and schedule carries the workspace it belongs to. The Gateway stamps the caller's workspace on asks and schedules (callers cannot choose it), memory dreams carry their own, DSH reports carry their session's, and items fired by a schedule keep the schedule's.
+- `inbox.list`, `inbox.events`, `inbox.decisions.list` and `inbox.cron.list` show only the caller's workspace; accept, dismiss, decide, reply, retry and schedule delete act only on it. Another workspace's item or schedule answers 404.
+- Items and schedules with no workspace are deployment-level (channel/Hermes bindings, GitHub sources, upstream bumps, the system upstream schedule). Only owners see and act on them. Their accept mode is the deployment ('default') one, which server-mode callers cannot set through `inbox.acceptMode.set` (that is per workspace), so they stay in observe and an owner accepts or decides each.
+- Open event streams re-check membership at most every 5 seconds: a removed member's stream ends, and a demoted owner stops receiving deployment-level items.
+- Desktop is a single workspace and sees every item.
+
 ## Upstream self-maintenance routine (P6-8)
 
 Neo maintains its own dependencies using the `neo upstream` superagent routine (`extensions/engine-superagent/src/upstream-source.ts`, `extensions/engine-superagent/src/index.ts:680-735`).

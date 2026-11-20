@@ -416,12 +416,37 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
     return context.workspaceId;
   };
-  const inboxVisible = (item: InboxItem, context: GatewayAuthContext) => mode === 'desktop' || item.workspace === inboxWorkspace(context);
+  /**
+   * An item (or schedule) with no workspace is deployment-level: channel/Hermes bindings, GitHub, upstream bumps,
+   * the system upstream schedule. In server mode only owners see and act on those.
+   */
+  const inboxVisible = (item: { workspace?: string }, context: GatewayAuthContext, role = context.role) =>
+    mode === 'desktop' || (item.workspace ? item.workspace === inboxWorkspace(context) : role === 'owner');
+  const ROLE_RANK = { viewer: 0, member: 1, admin: 2, owner: 3 } as const;
+  /**
+   * The caller's role now (null: no longer a member), never above the role the stream opened with. Long-lived
+   * streams re-check it so a removed or demoted member stops receiving events. Desktop has one owner.
+   */
+  const currentInboxRole = async (context: GatewayAuthContext): Promise<GatewayAuthContext['role'] | null> => {
+    if (mode === 'desktop') return context.role;
+    if (!context.user?.id || !context.workspaceId || !context.role) return null;
+    const row = await kyselyDb.selectFrom('member').select('role').where('userId', '=', context.user.id)
+      .where('organizationId', '=', context.workspaceId).executeTakeFirst() as { role?: keyof typeof ROLE_RANK } | undefined;
+    const held = row?.role;
+    if (!held || !(held in ROLE_RANK)) return null;
+    return ROLE_RANK[held] < ROLE_RANK[context.role as keyof typeof ROLE_RANK] ? held : context.role;
+  };
   /** The caller's item, or NOT_FOUND (another workspace's item is indistinguishable from a missing one). */
   const inboxItem = async (id: string, context: GatewayAuthContext): Promise<InboxItem> => {
     const item = (await invokeInbox('list', {}) as InboxItem[]).find((entry) => entry.id === id);
     if (!item || !inboxVisible(item, context)) throw new ORPCError('NOT_FOUND', { message: 'Inbox item not found' });
     return item;
+  };
+  /** The caller's schedule, or NOT_FOUND (another workspace's schedule is indistinguishable from a missing one). */
+  const cronJob = async (id: string, context: GatewayAuthContext) => {
+    const job = (await invokeInbox('cron/list', {}) as { id: string; workspace?: string }[]).find((entry) => entry.id === id);
+    if (!job || !inboxVisible(job, context)) throw new ORPCError('NOT_FOUND', { message: 'Schedule not found' });
+    return job;
   };
   const memoryProvenance = (context: GatewayAuthContext): string => {
     const user = `user:${context.user?.id ?? 'unknown'}`;
@@ -522,7 +547,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       decisions: {
         list: os.inbox.decisions.list.handler(async ({ input, context }) => {
           authorize('inbox.decisions.list', context);
-          return invokeInbox('decisions/list', input) as Promise<import('@neometaharness/contracts').InboxDecision[]>;
+          type Decision = import('@neometaharness/contracts').InboxDecision;
+          if (mode === 'desktop') return invokeInbox('decisions/list', input) as Promise<Decision[]>;
+          // A decision belongs to its item's workspace: only decisions about items the caller can see are returned.
+          const visible = new Set((await invokeInbox('list', {}) as InboxItem[])
+            .filter((item) => inboxVisible(item, context)).map((item) => item.id));
+          if (input.ticketId && !visible.has(input.ticketId)) return [];
+          const all = await invokeInbox('decisions/list', { ...input, limit: 100_000 }) as Decision[];
+          return all.filter((decision) => visible.has(decision.ticketId)).slice(0, input.limit ?? 100);
         }),
       },
       accept: os.inbox.accept.handler(async ({ input, context }) => {
@@ -608,7 +640,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('inbox.events', context);
         const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;
         if (mode === 'desktop') { yield* stream; return; }
-        for await (const event of stream) if (inboxVisible(event.item, context)) yield event;
+        // Membership is re-checked (at most every 5 s): a removed member's stream ends, a demoted one narrows.
+        let role: GatewayAuthContext['role'] | null = await currentInboxRole(context);
+        let checkedAt = Date.now();
+        for await (const event of stream) {
+          if (Date.now() - checkedAt >= 5_000) { role = await currentInboxRole(context); checkedAt = Date.now(); }
+          if (!role) return;
+          if (inboxVisible(event.item, context, role)) yield event;
+        }
       }),
       cron: {
         create: os.inbox.cron.create.handler(async ({ input, context }) => {
@@ -618,15 +657,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
         list: os.inbox.cron.list.handler(async ({ context }) => {
           authorize('inbox.cron.list', context);
-          return invokeInbox('cron/list', {}) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }[]>;
+          const jobs = await invokeInbox('cron/list', {}) as { id: string; text: string; botId: string; schedule: string;
+            mode: 'observe' | 'act'; workspace?: string }[];
+          return jobs.filter((job) => inboxVisible(job, context));
         }),
         delete: os.inbox.cron.delete.handler(async ({ input, context }) => {
           authorize('inbox.cron.delete', context);
+          await cronJob(input.id, context);
           return invokeInbox('cron/delete', input) as Promise<{ deleted: boolean }>;
         }),
         fire: os.inbox.cron.fire.handler(async ({ input, context }) => {
           authorize('inbox.cron.fire', context);
           if (process.env.NODE_ENV !== 'test') throw new ORPCError('NOT_FOUND');
+          await cronJob(input.id, context);
           return invokeInbox('cron/fire', input) as Promise<{ ok: boolean }>;
         }),
       },

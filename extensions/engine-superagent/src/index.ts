@@ -10,7 +10,7 @@ import { loadPinnedSuperagent } from './pinned.js';
 import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './model.js';
 import { ModelRouteRejected } from '../../models/src/hub.js';
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
-import { NeoCronSource, type ScheduledAsk } from './cron-source.js';
+import { cronAsk, NeoCronSource, type ScheduledAsk } from './cron-source.js';
 import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './channel-source.js';
 import { blockedReason, isDestructive } from './ask-policy.js';
 import { DecisionLog } from './decision-log.js';
@@ -83,7 +83,7 @@ class SuperagentService {
     const now = Date.now();
     const report: Report = { status: input.status, summary: input.summary.slice(0, 2000),
       changes: [], tests: [], risks: [], options: [] };
-    const item: InboxItem = { id: randomUUID(), botId: input.profile, source: 'neo/dsh',
+    const item: InboxItem = { id: randomUUID(), botId: input.profile, source: 'neo/dsh', workspace: input.workspaceId,
       requesterRole: 'member', mode: 'observe', status: input.status,
       text: input.question.slice(0, 1000) || `DSH ${input.profile} session ${input.sessionId}`,
       report, createdAt: now, updatedAt: now };
@@ -269,8 +269,7 @@ class SuperagentService {
         await this.checkUpstream();
         return;
       }
-      await this.ask({ text: job.text, botId: job.botId, mode: job.mode,
-        requesterRole: job.requesterRole ?? 'member', ...(job.workspace ? { workspace: job.workspace } : {}) }, 'neo/cron');
+      await this.ask(cronAsk(job), 'neo/cron');
     });
     await this.cron.start();
     if (!this.cron.list().some((job) => job.botId === 'neo-system' && job.text === '@neo/upstream check')) {
