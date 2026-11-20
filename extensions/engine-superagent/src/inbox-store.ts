@@ -9,8 +9,10 @@ export class InboxStore {
   load(): InboxItem[] {
     if (!existsSync(this.filename)) return [];
     const records = inboxItemSchema.array().parse(JSON.parse(readFileSync(this.filename, 'utf8')));
-    // Upstream bump Suggestions hold no in-memory Eval (accepting one starts a new ticket), so they survive.
-    const resumable = (item: InboxItem) => item.status === 'suggestion' && item.source === 'neo/upstream';
+    // Upstream bump and memory dream Suggestions hold no in-memory Eval (their state lives outside the
+    // engine), so they survive a restart.
+    const resumable = (item: InboxItem) => item.status === 'suggestion'
+      && (item.source === 'neo/upstream' || item.source === 'neo/memory');
     return records.map(item => item.status === 'running' || (item.status === 'suggestion' && !resumable(item)) ? {
       ...item, status: 'blocked' as const, updatedAt: Date.now(), report: {
         status: 'blocked' as const, summary: 'Engine restarted; submit a new request to continue this item.',

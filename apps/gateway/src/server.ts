@@ -23,6 +23,7 @@ import {
   type ModelSelectionRecord,
   type ModelRolesRecord,
   type ModelRoleName,
+  type DreamReport,
 } from '@neometaharness/contracts';
 import {
   VaultService,
@@ -780,6 +781,16 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           if (!kernel.hasRoute('/x/memory-honcho/list')) return [];
           return invokeHoncho('list', input) as ReturnType<typeof db.memories.list>;
         }),
+        dream: {
+          run: os.x['memory-honcho'].dream.run.handler(async ({ input, context }) => {
+            authorize('x.memory-honcho.dream.run', context);
+            return invokeHoncho('dream/run', input) as Promise<DreamReport>;
+          }),
+          last: os.x['memory-honcho'].dream.last.handler(async ({ input, context }) => {
+            authorize('x.memory-honcho.dream.last', context);
+            return invokeHoncho('dream/last', input) as Promise<DreamReport | null>;
+          }),
+        },
       },
       'memory-local': {
         list: os.x['memory-local'].list.handler(async ({ input, context }) => {
@@ -802,6 +813,21 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           authorize('x.memory-local.export', context);
           return invokeMemory('export', input) as ReturnType<typeof db.memories.export>;
         }),
+        intents: {
+          list: os.x['memory-local'].intents.list.handler(async ({ input, context }) => {
+            authorize('x.memory-local.intents.list', context);
+            return invokeMemory('intents/list', input) as ReturnType<typeof db.memories.list>;
+          }),
+          // Provenance is the authenticated user, never caller-supplied.
+          add: os.x['memory-local'].intents.add.handler(async ({ input, context }) => {
+            authorize('x.memory-local.intents.add', context);
+            return invokeMemory('intents/add', { ...input, provenance: `user:${context.user!.id} via Neo app` }) as ReturnType<typeof db.memories.add>;
+          }),
+          retract: os.x['memory-local'].intents.retract.handler(async ({ input, context }) => {
+            authorize('x.memory-local.intents.retract', context);
+            return invokeMemory('intents/retract', input) as Promise<{ retracted: boolean }>;
+          }),
+        },
       },
       'engine-dsh': {
         create: os.x['engine-dsh'].create.handler(async ({ input, context }) => {
@@ -1251,10 +1277,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           const scoped = await invokeMemory('list', { workspace: consumer.workspace, query }) as Array<{
             text: string; source: string; trust: string; subject: 'user' | 'bot'; subject_id: string;
           }>;
-          const entries = scoped.filter((entry) => entry.subject_id === 'global' || entry.subject_id === name);
+          const entries = scoped.filter((entry) => (entry.subject_id === 'global' || entry.subject_id === name)
+            && entry.source !== 'neo.intent');
           const localContext = entries.slice(0, 15)
             .map((entry) => '- ' + entry.text + ' [' + entry.source + '; ' + entry.trust + ']')
             .join('\n').slice(0, 2800);
+          // Standing intents ride along on every turn, whatever the query; only confirmed ones count.
+          const intents = (await invokeMemory('intents/list', { workspace: consumer.workspace }) as Array<{
+            text: string; trust: string; provenance: string;
+          }>).filter((entry) => entry.trust === 'confirmed').slice(0, 20);
+          const intentContext = intents.length ? ('Standing intents:\n' + intents.map((entry) =>
+            '- ' + entry.text.replace(/\s+/g, ' ').slice(0, 300) + ' [neo.intent; confirmed; '
+            + entry.provenance.slice(0, 120) + ']').join('\n')).slice(0, 1500) : '';
           let honchoContext = '';
           if (kernel.hasRoute('/x/memory-honcho/context')) {
             try {
@@ -1265,7 +1299,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
                 '- honcho: ' + line.replace(/\s+/g, ' ').slice(0, 350)).join('\n');
             } catch { /* L2 outage cannot stop the turn */ }
           }
-          const context = [localContext, honchoContext].filter(Boolean).join('\n').slice(0, 6000);
+          const context = [intentContext, localContext, honchoContext].filter(Boolean).join('\n').slice(0, 6000);
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ context }));
         } else {
           const assistant = payload.assistant;

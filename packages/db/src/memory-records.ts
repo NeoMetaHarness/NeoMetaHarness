@@ -18,7 +18,7 @@ export interface MemoryEntry {
   updated_at: number;
 }
 
-export interface MemoryQuery { workspace: string; subjectId?: string; query?: string; limit?: number }
+export interface MemoryQuery { workspace: string; subjectId?: string; query?: string; limit?: number; source?: string }
 export interface MemoryDraft {
   workspace: string; subject: MemorySubject; subjectId: string;
   text: string; source: string; provenance: string; trust: MemoryTrust;
@@ -63,9 +63,10 @@ export class MemoryRecords implements MemoryStore {
     }
   }
 
-  async list({ workspace, subjectId, query = '', limit = 100 }: MemoryQuery): Promise<MemoryEntry[]> {
+  async list({ workspace, subjectId, query = '', limit = 100, source }: MemoryQuery): Promise<MemoryEntry[]> {
     let statement = this.db.selectFrom('memory_entry').selectAll()
       .where('workspace', '=', workspace);
+    if (source) statement = statement.where('source', '=', source);
     if (subjectId) statement = statement.where('subject_id', 'in', ['global', subjectId]);
     const search = query.trim();
     if (search) {

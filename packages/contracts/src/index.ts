@@ -259,7 +259,33 @@ export const memoryContract = {
   export: oc.input(z.object({ workspace: memoryWorkspace.default('default') })).output(z.object({
     'SOUL.md': z.string(), 'USER.md': z.string(), 'MEMORY.md': z.string(),
   })),
+  /** Standing intents: durable user-stated goals or preferences (L1, source `neo.intent`). */
+  intents: {
+    list: oc.input(z.object({ workspace: memoryWorkspace.default('default') })).output(z.array(memoryEntrySchema)),
+    add: oc.input(z.object({ workspace: memoryWorkspace.default('default'), text: z.string().trim().min(1).max(2000) }))
+      .output(memoryEntrySchema),
+    retract: oc.input(z.object({ workspace: memoryWorkspace.default('default'), id: z.string().uuid() }))
+      .output(z.object({ retracted: z.boolean() })),
+  },
 };
+
+/** One consolidation step a dream proposes. Destructive steps delete an L1 entry. */
+export const dreamProposalSchema = z.object({
+  kind: z.enum(['dedupe', 'retract', 'promote', 'sync-l2', 'sync-l1']),
+  target: z.string(), text: z.string(), reason: z.string(), destructive: z.boolean(),
+});
+export const dreamReportSchema = z.object({
+  id: z.string(), workspace: z.string(), createdAt: z.number(),
+  /** empty: nothing to change; applied: written under an `act` accept mode or after approval;
+   * proposed: waiting in the Inbox; undelivered: no Inbox available; rejected: denied or dismissed. */
+  status: z.enum(['empty', 'applied', 'proposed', 'undelivered', 'rejected']),
+  acceptMode: z.enum(['observe', 'act-with-approval', 'act']).optional(),
+  inboxId: z.string().optional(),
+  proposals: z.array(dreamProposalSchema), applied: z.number().int(), skipped: z.number().int(),
+  risks: z.array(z.string()), markdown: z.string(),
+});
+export type DreamProposal = z.infer<typeof dreamProposalSchema>;
+export type DreamReport = z.infer<typeof dreamReportSchema>;
 
 export const honchoContract = {
   status: oc.input(z.object({ workspace: memoryWorkspace.default('default') }))
@@ -267,6 +293,10 @@ export const honchoContract = {
   list: oc.input(z.object({ workspace: memoryWorkspace.default('default'),
     subjectId: z.string().max(100).optional(), query: z.string().max(500).default('') }))
     .output(z.array(memoryEntrySchema)),
+  dream: {
+    run: oc.input(z.object({ workspace: memoryWorkspace.default('default') })).output(dreamReportSchema),
+    last: oc.input(z.object({ workspace: memoryWorkspace.default('default') })).output(dreamReportSchema.nullable()),
+  },
 };
 
 const skillName = z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/);
@@ -612,11 +642,13 @@ export const inboxEpisodeSchema = z.object({
 export const inboxItemSchema = z.object({
   id: z.string(), text: z.string(), botId: z.string(),
   notification: z.object({ channelId: z.string(), deliveredAt: z.number().optional(), error: z.string().optional() }).optional(),
-  source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github', 'neo/dsh']).optional(),
+  source: z.enum(['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github', 'neo/dsh', 'neo/memory']).optional(),
   github: z.object({ repo: z.string(), issue: z.number().int().optional(),
     url: z.string(), kind: z.enum(['comment', 'check']), posted: z.boolean().optional() }).optional(),
   upstream: z.object({ name: z.string(), pinned: z.string(), latest: z.string(),
     changelog: z.string().url().nullable() }).optional(),
+  /** A memory dream report whose proposals this item accepts or approves. */
+  dream: z.object({ id: z.string(), workspace: z.string(), proposals: z.number().int() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).optional(),
   mode: z.enum(['observe', 'act']),
   status: z.enum(['suggestion', 'running', 'ready', 'question', 'approval', 'blocked', 'failed', 'dismissed']),

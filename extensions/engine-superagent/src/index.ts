@@ -21,6 +21,10 @@ import { PollingGitHubSource, type GitHubConfig, type GitHubEvent, type GitHubSo
 import { AcceptModeStore } from './accept-mode.js';
 
 type Role = 'viewer' | 'member' | 'admin' | 'owner';
+/** memory-honcho's dream applier (looked up per call, so toggling memory-honcho is always safe). */
+type MemoryDreams = { apply(id: string): Promise<{ applied: number; skipped: number; changes: string[] }>; reject(id: string): void };
+type DreamProposal = { dreamId: string; workspace: string; summary: string; proposals: number;
+  destructive: boolean; applied: boolean; changes: string[]; risks: string[] };
 const isAdmin = (role?: Role) => role === 'admin' || role === 'owner';
 
 // `neo upstream` (P6-8). Neo only proposes: a bump runs only when an admin approves it, and then as a
@@ -112,6 +116,53 @@ class SuperagentService {
   private acceptModeStored = false;
   private routine!: UpstreamRoutineStore;
   private upstreamChecker: UpstreamChecker = checkUpstreams;
+
+  private dreams?: () => MemoryDreams | undefined;
+  attachDreams(dreams: () => MemoryDreams | undefined): void { this.dreams = dreams; }
+
+  /**
+   * A memory dream report becomes one Inbox item. Applied dreams (accept mode `act`, nothing destructive)
+   * are a ready report; otherwise observe makes a Suggestion and act modes ask for approval. Deleting
+   * memory is destructive, so accepting or approving such a dream needs an admin.
+   */
+  proposeDream(input: DreamProposal): { id: string } {
+    if (this.closed) throw new Error('Inbox is disabled');
+    const acceptMode = this.acceptModes.get();
+    const now = Date.now();
+    const base = { id: randomUUID(), botId: 'neo-memory', source: 'neo/memory' as const, requesterRole: 'member' as const,
+      text: `Memory dream for workspace ${input.workspace}`, acceptMode, destructive: input.destructive,
+      dream: { id: input.dreamId, workspace: input.workspace, proposals: input.proposals },
+      report: { status: 'ready' as const, summary: input.summary.slice(0, 2000), changes: input.changes.slice(0, 100),
+        tests: [], risks: input.risks.slice(0, 20), options: [] }, createdAt: now, updatedAt: now };
+    const item: InboxItem = input.applied ? { ...base, mode: 'act', status: 'ready' }
+      : acceptMode === 'observe' ? { ...base, mode: 'observe', status: 'suggestion', kind: 'suggestion' }
+        : { ...base, mode: 'act', status: 'approval', kind: 'approval', approval: { destructive: input.destructive,
+          reason: input.destructive ? 'This dream deletes duplicate or stale memory; an admin must approve it'
+            : 'Approve writing these memory changes' } };
+    return { id: this.update(item, {}).id };
+  }
+
+  private async applyDream(item: InboxItem): Promise<InboxItem> {
+    const dreams = this.dreams?.();
+    // The item stays pending, so it can be accepted again once memory-honcho is enabled.
+    if (!dreams) throw new Error('Memory dreaming is disabled; enable memory-honcho to apply this dream');
+    const running = this.update(item, { status: 'running', kind: undefined, mode: 'act' });
+    try {
+      const result = await dreams.apply(item.dream!.id);
+      const skipped = result.skipped ? `; skipped ${result.skipped} that changed since the dream` : '';
+      return this.update(running, { status: 'ready', report: { status: 'ready',
+        summary: `Applied ${result.applied} memory changes${skipped}.`, changes: result.changes.slice(0, 100),
+        tests: [], risks: [], options: [] } });
+    } catch (error) {
+      const summary = `Dream could not be applied: ${error instanceof Error ? error.message : String(error)}`;
+      return this.update(running, { status: 'failed', report: { status: 'failed', summary,
+        changes: [], tests: [], risks: [summary], options: [] } });
+    }
+  }
+
+  private rejectDream(item: InboxItem): void {
+    try { this.dreams?.()?.reject(item.dream!.id); } catch { /* memory-honcho disabled; the dream stays unapplied */ }
+  }
 
   /** Inject the `neo upstream` check runner (tests use a scripted fake; production runs upstream:check). */
   useUpstreamChecker(checker: UpstreamChecker): void { this.upstreamChecker = checker; }
@@ -554,6 +605,7 @@ class SuperagentService {
     if ((item.destructive ?? isDestructive(item.text)) && role && !isAdmin(role)) {
       throw new Error('Accepting destructive work requires admin or owner');
     }
+    if (item.dream) return this.applyDream(item);
     const reason = blockedReason(role ?? item.requesterRole ?? 'member', 'act', item.text);
     if (reason) {
       return this.finish(item, { status: 'blocked', summary: reason,
@@ -578,6 +630,7 @@ class SuperagentService {
     const item = this.items.get(input.id);
     if (!item || item.status !== 'suggestion') throw new Error('Only Suggestions can be dismissed');
     const reason = input.reason?.trim() || `Dismissed by ${role ?? 'member'}`;
+    if (item.dream) this.rejectDream(item);
     const triggerId = `${item.source ?? 'neo/app'}:${item.id}`;
     const candidate = this.candidates.get(triggerId);
     if (candidate) {
@@ -615,6 +668,17 @@ class SuperagentService {
     if (!item || item.status !== 'approval') throw new Error('Ticket is not awaiting approval');
     if (item.approval?.destructive && role !== 'admin' && role !== 'owner') {
       throw new Error('Destructive approval requires admin or owner');
+    }
+    if (item.dream) {
+      const approval = { destructive: item.approval?.destructive ?? false, reason: input.reason.trim(),
+        decision: (input.decision === 'approve' ? 'approved' : 'denied') as 'approved' | 'denied' };
+      if (input.decision === 'deny') {
+        this.rejectDream(item);
+        const summary = `Dream denied: ${input.reason.trim()}`;
+        return this.update(item, { status: 'blocked', kind: undefined, approval,
+          report: { status: 'blocked', summary, changes: [], tests: [], risks: [summary], options: [] } });
+      }
+      return this.applyDream(this.update(item, { approval }));
     }
     if (item.source === 'neo/github') {
       if (role !== 'admin' && role !== 'owner') throw new Error('GitHub publishing requires admin approval');
@@ -892,6 +956,10 @@ export default defineExtension({
     }
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
     await github.start();
+    // memory-honcho dreams report here; their apply/reject comes back through memory-honcho's service.
+    service.attachDreams(() => ctx.inject<MemoryDreams>('memoryDreams'));
+    ctx.provide('memoryInboxSink', { acceptMode: () => service.acceptModeGet().mode,
+      propose: (input: DreamProposal) => service.proposeDream(input) });
     ctx.provide('dshInboxSink', { report: (input: Parameters<typeof service.reportDsh>[0]) =>
       service.reportDsh(input) });
     // Before the first poll (scheduled on a timer by start) so P6-4 installs keep their behaviour.

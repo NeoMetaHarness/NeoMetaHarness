@@ -161,6 +161,7 @@ export class HonchoStore implements MemoryStore {
         if (message.metadata?.deleted) continue;
         const item = entry(query.workspace, message);
         if (query.subjectId && item.subject_id !== query.subjectId) continue;
+        if (query.source && item.source !== query.source) continue;
         if (query.query && !item.text.toLowerCase().includes(query.query.toLowerCase())) continue;
         records.push(item);
       }

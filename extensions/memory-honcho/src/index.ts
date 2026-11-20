@@ -1,12 +1,18 @@
-﻿import { defineExtension } from '@neometaharness/kernel';
+﻿import { join } from 'node:path';
+import { defineExtension } from '@neometaharness/kernel';
 import type { VaultService } from '@neometaharness/vault';
 import type { MemoryQuery, MemoryDraft, MemoryStore } from '@neometaharness/db';
 import { HonchoStore } from './store.js';
+import { Dreamer, type MemoryInboxSink } from './dream.js';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export default defineExtension({
   activate(ctx) {
     const vault = ctx.inject<VaultService>('vault');
+    const dataDir = ctx.inject<string>('extensionDataDir');
     if (!vault) throw new Error('Honcho requires the vault service');
+    if (!dataDir) throw new Error('Honcho dreaming requires isolated extension storage');
     const store: MemoryStore & HonchoStore = new HonchoStore(vault);
     ctx.provide('honchoMemoryStore', store);
     ctx.health(async () => ({ ok: (await store.status('default')) !== 'degraded' }));
@@ -30,5 +36,22 @@ export default defineExtension({
       const value = body as { workspace: string; subjectId: string; query: string };
       return store.chat(value.workspace, value.subjectId, value.query);
     });
+
+    // Dreaming reads L1 through memory-local's `memoryStore` and L2 through Honcho's REST seam. Both
+    // that store and the Inbox sink are looked up per pass, so either extension can be toggled freely.
+    const dreamer = new Dreamer(join(dataDir, 'memory-honcho', 'dreams'), store,
+      () => ctx.inject<MemoryStore>('memoryStore'), () => ctx.inject<MemoryInboxSink>('memoryInboxSink'));
+    ctx.provide('memoryDreams', { apply: (id: string) => dreamer.apply(id), reject: (id: string) => dreamer.reject(id) });
+    ctx.route('dream/run', ({ body }) => dreamer.run((body as { workspace: string }).workspace));
+    ctx.route('dream/last', ({ body }) => dreamer.last((body as { workspace: string }).workspace));
+
+    // Nightly pass over the desktop workspace. Other workspaces dream on demand (`dream/run`).
+    const interval = process.env.NODE_ENV === 'test' && process.env.NMH_HONCHO_DREAM_INTERVAL_MS
+      ? Math.max(200, Number(process.env.NMH_HONCHO_DREAM_INTERVAL_MS)) : DAY_MS;
+    const timer = setInterval(() => {
+      void dreamer.run('default').catch((error) => console.error('Memory dream failed:', error instanceof Error ? error.message : error));
+    }, interval);
+    timer.unref();
+    ctx.effect(() => () => { clearInterval(timer); dreamer.close(); });
   },
 });

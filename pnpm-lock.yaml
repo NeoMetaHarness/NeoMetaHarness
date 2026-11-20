@@ -734,6 +734,9 @@ importers:
 
   extensions/memory-honcho:
     dependencies:
+      '@neometaharness/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@neometaharness/db':
         specifier: workspace:*
         version: link:../../packages/db
