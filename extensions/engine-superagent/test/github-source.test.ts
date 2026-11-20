@@ -3,17 +3,20 @@ import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { VaultService } from '@neometaharness/vault';
 import { PollingGitHubSource, type GitHubEvent } from '../src/github-source.js';
 
 const temp = await mkdtemp(join(tmpdir(), 'nmh-github-source-'));
 let status = 200;
+let beforeResponse: () => Promise<void> = async () => {};
 const requests: { method: string; url: string; token: string; body: string }[] = [];
 const server = createServer(async (req, res) => {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(Buffer.from(chunk));
   requests.push({ method: req.method ?? '', url: req.url ?? '', token: req.headers.authorization ?? '',
     body: Buffer.concat(chunks).toString('utf8') });
+  await beforeResponse();
   if (status !== 200) {
     res.writeHead(status, { 'retry-after': '120' }).end(JSON.stringify({ message: 'rate limited' }));
     return;
@@ -85,6 +88,40 @@ try {
     limited.stop();
   }
   console.log('FAKE_GITHUB_RATE_LIMIT PASS 403/429 backoff no-tight-loop');
+
+  for (const blocked of [429, 403]) {
+    status = blocked;
+    const scheduled = new PollingGitHubSource(join(temp, `scheduled-${blocked}.json`), vault, async () => {}, fetch, base);
+    try {
+      const before = requests.length;
+      await scheduled.configure({ repositories: [{ name: 'acme/sample', ref: 'main' }] });
+      // Let the real scheduled poll consume the error before there is an RPC caller.
+      for (let attempt = 0; attempt < 200 && !(await scheduled.status()).pausedUntil; attempt++) await sleep(5);
+      assert.ok((await scheduled.status()).pausedUntil);
+      await sleep(0);
+      await assert.rejects(scheduled.poll(), new RegExp(`HTTP ${blocked}`));
+      assert.equal((await scheduled.poll()).checked, 0);
+      assert.equal(requests.length, before + 1, 'Observing a scheduled error never retries HTTP');
+    } finally { scheduled.stop(); }
+  }
+
+  status = 429;
+  let requested!: () => void; let release!: () => void;
+  const started = new Promise<void>(done => { requested = done; });
+  const gate = new Promise<void>(done => { release = done; });
+  beforeResponse = async () => { requested(); await gate; };
+  const joined = new PollingGitHubSource(join(temp, 'joined-429.json'), vault, async () => {}, fetch, base);
+  try {
+    const before = requests.length;
+    await joined.configure({ repositories: [{ name: 'acme/sample', ref: 'main' }] });
+    await started;
+    const explicit = joined.poll();
+    release();
+    await assert.rejects(explicit, /HTTP 429/);
+    assert.equal((await joined.poll()).checked, 0, 'A caller that joins the scheduled failure already observed it');
+    assert.equal(requests.length, before + 1, 'Joining a scheduled poll never adds a concurrent HTTP request');
+  } finally { release(); joined.stop(); beforeResponse = async () => {}; }
+  console.log('FAKE_GITHUB_SCHEDULED_ERROR PASS unobserved_429_403=reported_once joined_error=not_replayed no_extra_HTTP=true');
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await rm(temp, { recursive: true, force: true });
