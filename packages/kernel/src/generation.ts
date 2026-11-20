@@ -10,6 +10,7 @@ export class ExtensionGeneration {
   readonly contributions = new Map<string, { id: string; [key: string]: unknown }>();
   readonly services = new Map<string, unknown>();
   readonly abort = new AbortController();
+  readonly injectedFrom = new Set<string>();
   private readonly requests = new Set<Promise<void>>();
   private readonly streams = new Set<AsyncIterator<unknown>>();
   private readonly connections = new Set<() => void | Promise<void>>();
@@ -20,7 +21,12 @@ export class ExtensionGeneration {
   changed: () => void = () => {};
   constructor(readonly id: string) {}
 
+  assertMutable(): void {
+    if (this.retiring) throw new Error('Extension generation is draining');
+  }
+
   route(path: string, handler: RouteHandler): () => void {
+    this.assertMutable();
     if (!/^[a-z][a-z0-9/-]*$/.test(path) || path.includes('//') || path.includes('..')) throw new Error(`Invalid route ${path}`);
     const route = `/x/${this.id}/${path}`;
     if (this.routes.has(route)) throw new Error(`Duplicate route ${route}`);
@@ -29,6 +35,7 @@ export class ExtensionGeneration {
     return () => { this.routes.delete(route); this.changed(); };
   }
   contribute(kind: string, value: { id: string; [key: string]: unknown }): () => void {
+    this.assertMutable();
     const key = `${kind}:${value.id}`;
     if (this.contributions.has(key)) throw new Error(`Duplicate contribution ${key}`);
     this.contributions.set(key, value);
@@ -36,12 +43,13 @@ export class ExtensionGeneration {
     return () => { this.contributions.delete(key); this.changed(); };
   }
   provide(name: string, value: unknown) {
+    this.assertMutable();
     if (this.services.has(name)) throw new Error(`Duplicate service ${name}`);
     this.services.set(name, value);
     try { this.changed(); } catch (error) { this.services.delete(name); throw error; }
   }
   onDrain(close: () => void | Promise<void>): () => void {
-    if (this.retiring) throw new Error('Extension generation is draining');
+    this.assertMutable();
     this.connections.add(close); return () => { this.connections.delete(close); };
   }
   private acquire(): () => void {
@@ -77,6 +85,7 @@ export class ExtensionGeneration {
   private async retire(drainMs: number) {
     this.retiring = true;
     this.changed = () => {};
+    if (drainMs === 0) this.abort.abort();
     // Closing owned sockets stops new work arriving through an old connection.
     const closing = Promise.allSettled([...this.connections].map((close) => Promise.resolve().then(close)));
     let timer: NodeJS.Timeout | undefined;

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { ExtensionGeneration } from '../src/generation.js';
+import { ExtensionProcess } from '../src/process.js';
 const generation = new ExtensionGeneration('sample-ts');
 let done!: () => void;
 const gate = new Promise<void>((resolve) => { done = resolve; });
@@ -34,5 +35,19 @@ const draining = errorGeneration.dispose(1000);
 rejectPending(routeError);
 await observed; await draining;
 assert.equal(invocations, 3, 'Each admitted request invokes its handler exactly once, including during drain');
+const processGeneration = new ExtensionGeneration('process-fixture');
+const runtime = new ExtensionProcess([process.execPath, '-e', `
+  require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+    const request=JSON.parse(line);
+    if(request.method==='shutdown') {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{ok:true}})+'\\n',()=>process.exit(0));
+    }
+  });
+`], process.cwd());
+processGeneration.cleanup = () => runtime.stop();
+const pending = assert.rejects(processGeneration.invoke(({ signal }) =>
+  runtime.call('route.invoke', {}, { signal, timeoutMs: null }), 'GET'), { name: 'AbortError' });
+await processGeneration.dispose(20);
+await pending;
 console.log('PASS staged generation: request drain, connection closure, unopened iterator release and bounded abort');
 console.log('PASS route failures: unchanged sync/async/draining errors and exactly one handler invocation');

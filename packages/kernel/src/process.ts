@@ -33,7 +33,7 @@ export function extensionEnv(source: NodeJS.ProcessEnv = process.env): Record<st
 
 export class ExtensionProcess {
   private readonly child: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private nextId = 1;
   private exited = false;
   readonly pid: number;
@@ -51,6 +51,7 @@ export class ExtensionProcess {
     const reader = createInterface({ input: this.child.stdout });
     reader.on('line', (line) => this.receive(line));
     this.child.stderr.resume();
+    this.child.stdin.on('error', error => this.failAll(error));
     this.child.once('error', (error) => { this.exited = true; this.failAll(error); });
     this.child.once('exit', () => {
       this.exited = true;
@@ -63,8 +64,6 @@ export class ExtensionProcess {
       const reply = JSON.parse(line) as { jsonrpc: string; id: number; result?: unknown; error?: { message: string } };
       const pending = this.pending.get(reply.id);
       if (!pending || reply.jsonrpc !== '2.0') return;
-      clearTimeout(pending.timer);
-      this.pending.delete(reply.id);
       if (reply.error) pending.reject(new Error(reply.error.message));
       else pending.resolve(reply.result);
     } catch {
@@ -74,44 +73,42 @@ export class ExtensionProcess {
 
   private failAll(error: Error): void {
     for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pending.clear();
   }
 
-  call(method: string, params: Record<string, unknown> = {}, timeoutMs = 5000): Promise<unknown> {
+  call(method: string, params: Record<string, unknown> = {}, options: { timeoutMs?: number | null; signal?: AbortSignal } = {}): Promise<unknown> {
     if (this.exited) return Promise.reject(new Error(`Extension process exited: ${this.pid}`));
+    const { signal, timeoutMs = 5000 } = options;
+    if (signal?.aborted) return Promise.reject(signal.reason);
     const id = this.nextId++;
+    const message = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Extension RPC ${method} timed out`));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n', (error) => {
-        if (error) {
-          const pending = this.pending.get(id);
-          if (pending) {
-            clearTimeout(pending.timer);
-            this.pending.delete(id);
-            reject(error);
-          }
-        }
-      });
+      const fail = (error: Error) => { if (cleanup()) reject(error); };
+      const abort = () => fail(signal!.reason);
+      const timer = timeoutMs === null ? undefined : setTimeout(() => fail(new Error(`Extension RPC ${method} timed out`)), timeoutMs);
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        return this.pending.delete(id);
+      };
+      this.pending.set(id, { resolve: value => { if (cleanup()) resolve(value); }, reject: fail });
+      signal?.addEventListener('abort', abort, { once: true });
+      this.child.stdin.write(message, error => { if (error) fail(error); });
     });
   }
 
-  async initialize(id: string, storage: { dataDir?: string; projectionDir?: string } = {}): Promise<ProcessInitialization> {
-    const result = await this.call('initialize', { id, ...storage });
+  async initialize(id: string, storage: { dataDir?: string; projectionDir?: string } = {}, signal?: AbortSignal): Promise<ProcessInitialization> {
+    const result = await this.call('initialize', { id, ...storage }, { signal });
     if (!result || typeof result !== 'object') throw new Error(`Invalid initialize response from ${id}`);
     const data = result as ProcessInitialization;
     if (!Array.isArray(data.routes) || !Array.isArray(data.contributions)) throw new Error(`Missing registrations from ${id}`);
     return data;
   }
 
-  async health(): Promise<{ ok: boolean; pid?: number }> {
-    const value = await this.call('health');
+  async health(signal?: AbortSignal): Promise<{ ok: boolean; pid?: number }> {
+    const value = await this.call('health', {}, { signal });
     if (!value || typeof value !== 'object' || (value as { ok?: unknown }).ok !== true) {
       throw new Error('Unhealthy process extension');
     }
@@ -123,7 +120,7 @@ export class ExtensionProcess {
     // Observe exit before shutdown, since a cooperative extension can exit
     // immediately after acknowledging the request.
     const exited = once(this.child, 'exit').then(() => true, () => true);
-    try { await this.call('shutdown', {}, 1500); } catch { /* Kill unresponsive extensions below. */ }
+    try { await this.call('shutdown', {}, { timeoutMs: 1500 }); } catch { /* Kill unresponsive extensions below. */ }
     this.child.stdin.end();
     if (this.exited) return;
     if (await Promise.race([exited, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 750))])) return;
