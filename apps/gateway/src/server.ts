@@ -1878,6 +1878,33 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
       const backupRoute = path === '/x/backup/backup' || path === '/x/backup/restore';
       if (backupRoute) authorize(path, context);
+
+      if (path === '/x/computer-boat/snapshot' && kernel.hasRoute(path)) {
+        authorize(path, context as GatewayAuthContext);
+        if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += (chunk as Buffer).length;
+          if (size > 16_384) { res.writeHead(413).end(); return; }
+          chunks.push(chunk as Buffer);
+        }
+        let payload: { id?: unknown };
+        try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { res.writeHead(400).end(); return; }
+        if (!payload || typeof payload.id !== 'string') { res.writeHead(400).end(); return; }
+        try {
+          const workspaceId = settingsWorkspace(context as GatewayAuthContext);
+          if (!workspaceId) { res.writeHead(403).end(); return; }
+          const result = await kernel.runInWorkspace(workspaceId,
+            () => kernel.invokeRoute(path, 'POST', { id: payload.id, workspaceId }));
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
+        } catch {
+          res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Boat snapshot failed' }));
+        }
+        return;
+      }
+
       if (kernel.hasRoute(path)) {
         if (!context?.user) {
           res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }));
