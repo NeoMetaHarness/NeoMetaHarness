@@ -7,7 +7,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
-import { approveHttpsEgress } from '@neometaharness/kernel';
+import { assertPublicEgressAddress, validateEgressUrl } from '../../../packages/egress/src/index.js';
 import { BoatComputerProvider } from '../../../extensions/computer-boat/src/provider.js';
 import { startGateway } from '../src/server.js';
 
@@ -52,15 +52,15 @@ try {
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Boat fake listener unavailable');
-  const fakeBoatHttp = (url: string, init: RequestInit) => {
-    assert.equal(new URL(url).host, 'fake-boat.example');
-    assert.equal(init.redirect, 'error', 'Boat must refuse HTTP redirects');
-    assert.ok(init.signal, 'Boat requests must have a timeout signal');
-    return fetch(`http://127.0.0.1:${address.port}${new URL(url).pathname}`, init);
+  const fakeBoatHttp: typeof fetch = (url, init) => {
+    assert.equal(new URL(String(url)).host, 'fake-boat.example');
+    assert.equal(init?.redirect, 'error', 'shared egress client must refuse HTTP redirects');
+    assert.ok(init?.signal, 'shared egress client must provide a timeout signal');
+    return fetch(`http://127.0.0.1:${address.port}${new URL(String(url)).pathname}`, init);
   };
   gateway = await startGateway({ databaseFile: join(root, 'neo.sqlite'), dataDir: root,
     extensionsDir: resolve('..', '..', 'extensions'), mode: 'desktop',
-    computerBoatHttp: fakeBoatHttp, computerBoatResolveHost: async () => ['8.8.8.8'] });
+    computerBoatHttp: fakeBoatHttp });
   const base = `http://127.0.0.1:${gateway.port}`;
   const token = gateway.desktopToken;
   assert.ok(token);
@@ -122,7 +122,7 @@ try {
   assert.ok(calls.every(call => !JSON.stringify(call.body).includes('fake-boat-api-key')), 'key never travels in bodies');
   const separateProvider = new BoatComputerProvider(
     () => ({ baseUrl: 'https://fake-boat.example/api/v1', apiKey: 'fake-boat-api-key' }),
-    fakeBoatHttp, async () => ['8.8.8.8'],
+    fakeBoatHttp,
   );
   await separateProvider.provision({ id: 'neo-0123456789abcdef01234567' }, { workspaceId: 'workspace-A' });
   await assert.rejects(separateProvider.saveSnapshot('neo-0123456789abcdef01234567', 'workspace-B'),
@@ -131,12 +131,13 @@ try {
     /same workspace/, 'other workspace cannot fork the source');
   assert.equal(calls.filter(call => call.path === '/api/v1/saved-snapshots').length, 1);
   await separateProvider.terminate('neo-0123456789abcdef01234567');
-  await assert.rejects(approveHttpsEgress('http://fake-boat.example', false, async () => ['8.8.8.8']), /HTTPS/);
+  const insecureProvider = new BoatComputerProvider(
+    () => ({ baseUrl: 'http://fake-boat.example/api/v1', apiKey: 'fake-boat-api-key' }), fakeBoatHttp);
+  await assert.rejects(insecureProvider.provision({ id: 'neo-0123456789abcdef01234569' }, { workspaceId: 'workspace-A' }), /HTTPS/);
   for (const address of ['127.0.0.1', '10.1.1.1', '172.16.2.3', '192.168.2.3', '169.254.169.254', '::1', 'fc00::1', 'fe80::1']) {
-    await assert.rejects(approveHttpsEgress('https://fake-boat.example', false, async () => [address]),
-      /forbidden/, `blocked egress address ${address}`);
+    assert.throws(() => assertPublicEgressAddress(address), /denied/, `blocked egress address ${address}`);
   }
-  assert.ok(await approveHttpsEgress('https://fake-boat.example', true, async () => ['192.168.1.2']));
+  assert.equal(validateEgressUrl('https://192.168.1.2/api/v1', true).host, '192.168.1.2');
   console.log('P3-11 PASS authenticated=true vaulted-settings=true fake-boat-server=true provision+fork+snapshot=true capture+input=true lease+kill+audit-path=true disable-cleanup=true siblings-healthy=true');
 } finally {
   if (gateway) await gateway.close();

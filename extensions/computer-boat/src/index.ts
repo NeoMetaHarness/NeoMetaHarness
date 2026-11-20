@@ -1,16 +1,13 @@
 import { defineExtension } from '@neometaharness/kernel';
 import type { ComputerRegistry } from '@neometaharness/computers';
 import { BoatComputerProvider, type BoatSettings, type BoatHttp } from './provider.js';
-import type { EgressResolver } from '@neometaharness/kernel';
 
 export default defineExtension({
   activate(ctx) {
     const computers = ctx.inject<ComputerRegistry>('computers');
     const settings = ctx.inject<BoatSettings>('settings');
     if (!computers || !settings) throw new Error('Boat requires computer registry and settings');
-    const provider = new BoatComputerProvider(() => settings,
-      ctx.inject<BoatHttp>('computerBoatHttp') ?? fetch,
-      ctx.inject<EgressResolver>('computerBoatResolveHost'));
+    const provider = new BoatComputerProvider(() => settings, ctx.inject<BoatHttp>('computerBoatHttp'));
     ctx.effect(() => {
       const unregister = computers.registerProvider('computer-boat', provider);
       return async () => { await unregister(); await provider.close(); };

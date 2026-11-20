@@ -15,7 +15,6 @@ import { managedCordisEntry, managedProcessCommand, pinCordisResolution } from '
 export { extensionIntegrity } from './install.js';
 export { ComputerMcpBridge, type ComputerMcpConfig, type ComputerMcpProjection } from './computer-mcp.js';
 export { SkillsBridge, type SkillProjection } from './skills.js';
-export { approveHttpsEgress, systemEgressResolver, type EgressResolver } from './egress.js';
 
 export { coerceSettingValues, dependencyProblem, loadManifest, resolveOrder, SettingsValidationError, validateSettings } from './manifest.js';
 export type { ExtensionManifest, LocatedExtension, ExtensionSettingsSchema, SettingPropertySchema, SettingPropertyType } from './manifest.js';

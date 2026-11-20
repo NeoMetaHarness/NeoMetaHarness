@@ -10,7 +10,7 @@
   "dependencies": {
     "@neometaharness/computers": "workspace:*",
     "@neometaharness/kernel": "workspace:*",
-    "undici": "8.11.2"
+    "@neometaharness/egress": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "22.18.13",

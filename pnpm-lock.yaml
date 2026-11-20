@@ -354,12 +354,12 @@ importers:
       '@neometaharness/computers':
         specifier: workspace:*
         version: link:../../packages/computers
+      '@neometaharness/egress':
+        specifier: workspace:*
+        version: link:../../packages/egress
       '@neometaharness/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
-      undici:
-        specifier: 8.11.2
-        version: 8.11.2
     devDependencies:
       '@types/node':
         specifier: 22.18.13
