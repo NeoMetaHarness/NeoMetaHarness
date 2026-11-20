@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "description": "Performance and bundle size budgets for Neo Meta Harness. Deterministic budgets are enforced by scripts/perf-budgets.mjs during pnpm check; runtime budgets are measured by specific exit tests.",
+  "budgets": {
+    "deterministic": [
+      {
+        "id": "neo-app-startup-js",
+        "name": "Neo App Startup JavaScript (gzip)",
+        "target": "apps/neo-app/dist",
+        "type": "startup-js-gzip",
+        "max_bytes": 307200,
+        "max_display": "300 KiB",
+        "doc_source": "docs/adr/0001-desktop-shell.md:46",
+        "secondary_sources": [
+          "docs/04-roadmap.md:37",
+          "docs/adr/0002-api-style.md:14,27",
+          "apps/neo-app/test/p1-2.mjs:166",
+          "apps/neo-app/test/p3-2.mjs:150"
+        ],
+        "description": "Total gzip size of initial module scripts and modulepreloads in apps/neo-app/dist/index.html."
+      },
+      {
+        "id": "neo-app-startup-css",
+        "name": "Neo App Startup CSS (gzip)",
+        "target": "apps/neo-app/dist",
+        "type": "startup-css-gzip",
+        "max_bytes": 81920,
+        "max_display": "80 KiB",
+        "doc_source": "docs/adr/0001-desktop-shell.md:18,46",
+        "secondary_sources": [
+          "apps/neo-app/test/p1-2.mjs:165",
+          "apps/neo-app/test/p4-2.mjs:183"
+        ],
+        "description": "Total gzip size of initial stylesheet links in apps/neo-app/dist/index.html."
+      },
+      {
+        "id": "neo-app-total-dist-gzip",
+        "name": "Neo App Total Bundle (gzip)",
+        "target": "apps/neo-app/dist",
+        "type": "total-dist-gzip",
+        "max_bytes": 768000,
+        "max_display": "750 KiB",
+        "doc_source": "docs/03-PRD.md:40",
+        "secondary_sources": [
+          "docs/04-roadmap.md:37"
+        ],
+        "description": "Total gzipped size of all client-side distribution assets in apps/neo-app/dist."
+      },
+      {
+        "id": "docs-site-startup-js",
+        "name": "Docs Site Startup JavaScript (gzip)",
+        "target": "apps/docs/dist",
+        "type": "startup-js-gzip",
+        "max_bytes": 512000,
+        "max_display": "500 KiB",
+        "doc_source": "docs/04-roadmap.md:77",
+        "secondary_sources": [
+          "docs/01-project-map.md:14",
+          "apps/docs/scripts/build.mjs"
+        ],
+        "description": "Initial JavaScript payload required for rendering the static documentation site."
+      },
+      {
+        "id": "docs-site-total-dist-gzip",
+        "name": "Docs Site Total Distribution (gzip)",
+        "target": "apps/docs/dist",
+        "type": "total-dist-gzip",
+        "max_bytes": 819200,
+        "max_display": "800 KiB",
+        "doc_source": "docs/04-roadmap.md:77",
+        "secondary_sources": [
+          "docs/03-PRD.md:40"
+        ],
+        "description": "Total gzipped distribution size of the pre-rendered documentation site."
+      }
+    ],
+    "runtime": [
+      {
+        "id": "desktop-installer-size",
+        "name": "Desktop Installer Size (without sidecar)",
+        "max_bytes": 41943040,
+        "max_display": "40 MB",
+        "doc_source": "docs/03-PRD.md:40",
+        "measured_by": "installer:check",
+        "description": "Tauri desktop bundle installer package size without Node sidecar payload."
+      },
+      {
+        "id": "streaming-chat-script-time",
+        "name": "Streaming Chat Script Time",
+        "max_display": "<= 2x PandaCode",
+        "doc_source": "docs/03-PRD.md:40",
+        "secondary_sources": [
+          "docs/adr/0001-desktop-shell.md:46"
+        ],
+        "measured_by": "spikes/P0-3g-astryx-tauri",
+        "description": "PandaCode W1 streaming-chat benchmark execution time ratio."
+      },
+      {
+        "id": "onboarding-duration",
+        "name": "First-Time Onboarding Duration",
+        "max_ms": 240000,
+        "max_display": "4 minutes (automated) / 15 minutes (human)",
+        "doc_source": "docs/04-roadmap.md:77",
+        "secondary_sources": [
+          "docs/03-PRD.md:43",
+          "docs/onboarding.md:41"
+        ],
+        "measured_by": "test:p7-8",
+        "description": "End-to-end first-run onboarding wizard completion duration in Astryx desktop shell."
+      },
+      {
+        "id": "chat-delta-coalescing-interval",
+        "name": "Streaming Chat Delta Coalescing Interval",
+        "target_ms": 33,
+        "max_display": "33 ms",
+        "doc_source": "docs/adr/0001-desktop-shell.md:18",
+        "measured_by": "test:p2-1",
+        "description": "Direct DOM update throttling interval to eliminate per-delta UI re-renders."
+      },
+      {
+        "id": "desktop-cold-start-time",
+        "name": "Desktop Shell Cold Start",
+        "max_ms": 1500,
+        "max_display": "1.5 s",
+        "doc_source": "spikes/P0-3g-astryx-tauri/README.md:104",
+        "measured_by": "bench/tauri-run.mjs",
+        "description": "Desktop application cold startup time to initial interactive window."
+      },
+      {
+        "id": "router-fast-model-timeout",
+        "name": "Router Fast Model Tier Timeout",
+        "max_ms": 100,
+        "max_display": "100 ms",
+        "doc_source": "docs/07-research-nuggets.md:12",
+        "secondary_sources": [
+          "docs/02-architecture.md:201"
+        ],
+        "measured_by": "test:p2-9",
+        "description": "Panda router fast tier timeout before escalation to fallback model."
+      },
+      {
+        "id": "orpc-stream-first-delta-latency",
+        "name": "oRPC Stream First Delta Latency",
+        "max_ms": 50,
+        "max_display": "50 ms",
+        "doc_source": "docs/adr/0002-api-style.md:16-22",
+        "secondary_sources": [
+          "spikes/P0-5-adr-drafts/ADR-api-style.md:61"
+        ],
+        "measured_by": "spikes/P0-5-adr-drafts/api-benchmark.mjs",
+        "description": "Median first delta latency over WebSocket loopback connection."
+      }
+    ]
+  }
+}

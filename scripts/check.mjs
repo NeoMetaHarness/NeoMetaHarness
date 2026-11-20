@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
+import { checkPerfBudgets } from './perf-budgets.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const failures = []
@@ -59,8 +60,14 @@ if (!repos.some(r => r.name === 'NeoMetaHarness')) fail('repos', 'product repo m
 const dup = repos.map(r => r.name).filter((n, i, a) => a.indexOf(n) !== i)
 if (dup.length) fail('repos', `duplicate names: ${dup.join(', ')}`)
 
+// 6. Performance budgets: built bundle gzip sizes and docs site size.
+const perf = checkPerfBudgets({ root })
+for (const problem of perf.failures) {
+  fail('perf-budgets', problem)
+}
+
 if (failures.length) {
   console.error(`neo check: ${failures.length} problem(s)\n` + failures.map(f => '  ✗ ' + f).join('\n'))
   process.exit(1)
 }
-console.log('neo check: all checks passed (guardrails, machine, links, registry, repos)')
+console.log('neo check: all checks passed (guardrails, machine, links, registry, repos, perf-budgets)')

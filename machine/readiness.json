@@ -219,8 +219,9 @@
     },
     "P1-12": {
       "title": "Perf budgets wired into neo check",
-      "status": "in_progress",
-      "owner": "antigravity"
+      "status": "done",
+      "owner": "antigravity",
+      "evidence": "PM review 2026-11-21: scripts/perf-budgets.mjs (gzip startup JS/CSS + docs size vs machine/perf-budgets.json) wired into scripts/check.mjs; perf-budgets.test.mjs x2 pass; fresh clone (dist removed) pnpm check passes and leaves tree clean; gateway, toggle, secret scan OK; full regression 56/58 (p1-5 load flake, passed in same run; p6-9 skipped, known main restart hang tracked in P1-10)."
     },
     "P1-13": {
       "title": "Per-workspace extension settings and secrets in the kernel (settings/vault currently scoped to workspace \"default\")",
