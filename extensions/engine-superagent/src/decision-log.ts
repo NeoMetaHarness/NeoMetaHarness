@@ -6,6 +6,8 @@ import { dirname, join } from 'node:path';
 export type DecisionTrace = {
   trace_id: string;
   ticketId: string;
+  /** The item's workspace (P6-10); absent for deployment-level items and records written before P6-10. */
+  workspace?: string;
   source: string;
   inputsSummary: string;
   candidates: string[];
@@ -60,7 +62,8 @@ export class DecisionLog {
     return task.then(() => trace.trace_id);
   }
 
-  async list(input: { ticketId?: string; limit?: number } = {}): Promise<DecisionTrace[]> {
+  /** `workspace` keeps only that workspace's records (records with no workspace are then excluded). */
+  async list(input: { ticketId?: string; limit?: number; workspace?: string } = {}): Promise<DecisionTrace[]> {
     await this.pending;
     const paths = [this.path, ...Array.from({ length: this.archives }, (_, i) => `${this.path}.${i + 1}`)];
     const batches = await Promise.all(paths.map(async (path) => {
@@ -70,7 +73,8 @@ export class DecisionLog {
       });
       return raw.split('\n').filter(Boolean).map((line) => JSON.parse(line) as DecisionTrace);
     }));
-    return batches.flat().filter((entry) => !input.ticketId || entry.ticketId === input.ticketId)
+    return batches.flat().filter((entry) => (!input.ticketId || entry.ticketId === input.ticketId)
+      && (input.workspace === undefined || entry.workspace === input.workspace))
       .sort((a, b) => b.at - a.at).slice(0, input.limit ?? 100);
   }
 }

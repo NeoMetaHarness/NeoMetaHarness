@@ -671,7 +671,7 @@ export const inboxItemSchema = z.object({
 });
 export const inboxEventSchema = z.object({ seq: z.number().int(), item: inboxItemSchema });
 export const inboxDecisionSchema = z.object({
-  trace_id: z.string(), ticketId: z.string(), source: z.string(), inputsSummary: z.string(),
+  trace_id: z.string(), ticketId: z.string(), workspace: z.string().optional(), source: z.string(), inputsSummary: z.string(),
   candidates: z.array(z.string()), chosenAction: z.string(), modelRole: z.enum(['eval', 'coding']),
   latencyMs: z.number(), outcome: z.string(), model_id: z.string(), success: z.boolean(),
   actual_latency_ms: z.number(), choice: z.object({ model_id: z.string() }),

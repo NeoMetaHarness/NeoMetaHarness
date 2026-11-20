@@ -81,6 +81,8 @@ export {
 
 export interface GatewayOptions {
   databaseFile: string;
+  /** Test seam: who may see deployment-level Inbox items in server mode (default: nobody; see canSeeDeploymentItems). */
+  canSeeDeploymentItems?: (context: GatewayAuthContext, role: GatewayAuthContext['role']) => boolean;
   dataDir?: string;
   extensionsDir?: string;
   port?: number;
@@ -417,11 +419,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     return context.workspaceId;
   };
   /**
-   * An item (or schedule) with no workspace is deployment-level: channel/Hermes bindings, GitHub, upstream bumps,
-   * the system upstream schedule. In server mode only owners see and act on those.
+   * Who may see and act on deployment-level Inbox items and schedules (no workspace: GitHub, upstream bumps,
+   * the system upstream schedule) in server mode. Nobody, for now: "owner" is a per-workspace role and any
+   * admin can create a workspace and own it, so it cannot stand for the deployment. A deployment-owner concept
+   * (pending the owner's decision) replaces this one function.
    */
-  const inboxVisible = (item: { workspace?: string }, context: GatewayAuthContext, role = context.role) =>
-    mode === 'desktop' || (item.workspace ? item.workspace === inboxWorkspace(context) : role === 'owner');
+  const canSeeDeploymentItems = options.canSeeDeploymentItems ?? ((_context: GatewayAuthContext, _role: GatewayAuthContext['role']) => false);
+  const inboxVisible = (item: { workspace?: string; source?: string }, context: GatewayAuthContext, role = context.role) => {
+    if (mode === 'desktop') return true;
+    if (item.workspace) return item.workspace === inboxWorkspace(context);
+    // Channel/Hermes bindings carry other people's conversations: never deployment-visible.
+    if (item.source === 'neo/channel') return false;
+    return canSeeDeploymentItems(context, role);
+  };
   const ROLE_RANK = { viewer: 0, member: 1, admin: 2, owner: 3 } as const;
   /**
    * The caller's role now (null: no longer a member), never above the role the stream opened with. Long-lived
@@ -444,6 +454,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   };
   /** The caller's schedule, or NOT_FOUND (another workspace's schedule is indistinguishable from a missing one). */
   const cronJob = async (id: string, context: GatewayAuthContext) => {
+    // Desktop keeps its old answers for unknown ids ({ deleted: false } and the like).
+    if (mode === 'desktop') return;
     const job = (await invokeInbox('cron/list', {}) as { id: string; workspace?: string }[]).find((entry) => entry.id === id);
     if (!job || !inboxVisible(job, context)) throw new ORPCError('NOT_FOUND', { message: 'Schedule not found' });
     return job;
@@ -549,12 +561,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           authorize('inbox.decisions.list', context);
           type Decision = import('@neometaharness/contracts').InboxDecision;
           if (mode === 'desktop') return invokeInbox('decisions/list', input) as Promise<Decision[]>;
-          // A decision belongs to its item's workspace: only decisions about items the caller can see are returned.
-          const visible = new Set((await invokeInbox('list', {}) as InboxItem[])
-            .filter((item) => inboxVisible(item, context)).map((item) => item.id));
-          if (input.ticketId && !visible.has(input.ticketId)) return [];
-          const all = await invokeInbox('decisions/list', { ...input, limit: 100_000 }) as Decision[];
-          return all.filter((decision) => visible.has(decision.ticketId)).slice(0, input.limit ?? 100);
+          // Decision records carry their item's workspace; the store returns only the caller's (bounded by limit).
+          return invokeInbox('decisions/list', { ...input, workspace: inboxWorkspace(context) }) as Promise<Decision[]>;
         }),
       },
       accept: os.inbox.accept.handler(async ({ input, context }) => {

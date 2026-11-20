@@ -11,6 +11,10 @@ import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './mod
 import { ModelRouteRejected } from '../../models/src/hub.js';
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
 import { cronAsk, NeoCronSource, type ScheduledAsk } from './cron-source.js';
+import { dshReportItem } from './dsh-report.js';
+
+/** Decision records carry their item's workspace (P6-10), so listing can filter at the source. */
+const scoped = (item: { workspace?: string }) => (item.workspace ? { workspace: item.workspace } : {});
 import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './channel-source.js';
 import { blockedReason, isDestructive } from './ask-policy.js';
 import { DecisionLog } from './decision-log.js';
@@ -80,14 +84,8 @@ class SuperagentService {
   async reportDsh(input: { sessionId: string; workspaceId: string; profile: string;
     turn: string; status: 'ready' | 'failed'; summary: string; question: string }): Promise<void> {
     if (this.closed) return;
-    const now = Date.now();
-    const report: Report = { status: input.status, summary: input.summary.slice(0, 2000),
-      changes: [], tests: [], risks: [], options: [] };
-    const item: InboxItem = { id: randomUUID(), botId: input.profile, source: 'neo/dsh', workspace: input.workspaceId,
-      requesterRole: 'member', mode: 'observe', status: input.status,
-      text: input.question.slice(0, 1000) || `DSH ${input.profile} session ${input.sessionId}`,
-      report, createdAt: now, updatedAt: now };
-    await this.finish(item, report);
+    const item = dshReportItem(input, randomUUID(), Date.now());
+    await this.finish(item, item.report as Report);
   }
   private readonly candidates = new Map<string, Candidate>();
   private readonly events: InboxEvent[] = [];
@@ -350,7 +348,7 @@ class SuperagentService {
       return this.update(item, patch);
     }
     const prior = await this.decisions.list({ ticketId: item.id, limit: 20 });
-    const traceId = await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+    const traceId = await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
       inputsSummary: item.text.slice(0, 240), candidates: [], chosenAction: 'ticket.complete',
       modelRole: 'eval', latencyMs: 0, outcome: complete.status });
     const episode: InboxItem['episode'] = {
@@ -507,7 +505,7 @@ class SuperagentService {
     } catch (error) {
       summary = { ...summary, failed: `${summary.failed}. Post-mortem review: ${error instanceof Error ? error.message : String(error)}` };
     } finally {
-      if (!this.closed) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+      if (!this.closed) await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: [], chosenAction: 'postmortem',
         modelRole: 'eval', model_id: modelId, latencyMs: Date.now() - started, outcome });
     }
@@ -581,7 +579,7 @@ class SuperagentService {
         escalated = true;
         await initial.runEscalated({ text: item.text, ticketId: item.id, source: item.source ?? 'neo/app' },
           evaluateBinding, async (entry) => {
-            await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+            await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
               inputsSummary: item.text.slice(0, 240), candidates: candidate.triggers.map((trigger) => trigger.id),
               chosenAction: entry.attempt === 1 ? 'eval' : 'escalate', modelRole: 'eval',
               model_id: `${entry.selection.providerId}/${entry.selection.model}`,
@@ -596,7 +594,7 @@ class SuperagentService {
       if (error instanceof ModelRouteRejected) outcome = 'declined';
       throw error;
     } finally {
-      if (!escalated) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+      if (!escalated) await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: candidate.triggers.map((trigger) => trigger.id),
         chosenAction: 'eval', modelRole: 'eval', model_id: modelId, latencyMs: Date.now() - started, outcome });
     }
@@ -609,7 +607,7 @@ class SuperagentService {
       reason: 'Explicit Ask Neo request', evalId: candidate.evalId,
     });
     this.candidates.delete(`${source}:${item.id}`);
-    await this.decisions.record({ ticketId: item.id, source, inputsSummary: item.text.slice(0, 240),
+    await this.decisions.record({ ticketId: item.id, ...scoped(item), source, inputsSummary: item.text.slice(0, 240),
       candidates: [candidate.evalId], chosenAction: 'accept', modelRole: 'eval',
       latencyMs: Date.now() - started, outcome: 'accepted' });
   }
@@ -656,7 +654,7 @@ class SuperagentService {
       catch { /* The Eval already ended upstream; the Inbox record is still dismissed. */ }
       this.candidates.delete(triggerId);
     }
-    await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+    await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
       inputsSummary: reason.slice(0, 240), candidates: candidate ? [candidate.evalId] : [],
       chosenAction: 'dismiss', modelRole: 'eval', latencyMs: 0, outcome: 'dismissed' });
     return this.update(item, { status: 'dismissed', kind: 'suggestion' });
@@ -819,7 +817,7 @@ class SuperagentService {
     }
     return this.items.get(item.id)!;
   }
-  listDecisions(input: { ticketId?: string; limit?: number }) { return this.decisions.list(input); }
+  listDecisions(input: { ticketId?: string; limit?: number; workspace?: string }) { return this.decisions.list(input); }
 
   cronList(): ScheduledAsk[] { return this.cron!.list(); }
   cronCreate(input: unknown): Promise<ScheduledAsk> {
@@ -898,7 +896,7 @@ class SuperagentService {
       }
       await this.finish(this.update(item, { kind: status === 'failed' ? 'failure' : undefined }), report);
     } finally {
-      if (!this.closed) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+      if (!this.closed) await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: [assignmentId], chosenAction: 'delegate',
         modelRole: 'coding', latencyMs: Date.now() - started, outcome });
     }
@@ -990,7 +988,7 @@ export default defineExtension({
     });
     ctx.route('ask', ({ body }) => service.ask(body));
     ctx.route('list', () => service.list());
-    ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number }));
+    ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number; workspace?: string }));
     ctx.route('accept', ({ body }) => service.accept(body as { id: string }, (body as { role?: Role }).role));
     ctx.route('dismiss', ({ body }) => service.dismiss(body as { id: string; reason?: string }, (body as { role?: Role }).role));
     ctx.route('accept-mode/get', ({ body }) => service.acceptModeGet((body ?? {}) as { workspace?: string }));
