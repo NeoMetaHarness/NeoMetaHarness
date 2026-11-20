@@ -15,6 +15,11 @@ import { XSearchService } from '../src/index.js';
 const root = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const home = await mkdtemp(join(tmpdir(), 'neo-x-search-'));
 const apiKey = 'FAKE_XAI_KEY_FOR_TEST_9876';
+const { assertSafeProviderUrl } = await import('@neometaharness/kernel');
+await assertSafeProviderUrl(new URL('https://provider.example'), { resolveHost: async () => ['8.8.8.8'] });
+for (const blockedIp of ['127.0.0.1', '169.254.169.254', '10.0.0.8', '::1', 'fe80::1', '::ffff:127.0.0.1']) {
+  await assert.rejects(assertSafeProviderUrl(new URL('https://provider.example'), { resolveHost: async () => [blockedIp] }), /Private provider endpoint is disabled/);
+}
 let requestCount = 0;
 let recordedBody: any;
 let statusCode = 200;
@@ -74,7 +79,7 @@ try {
   await assert.rejects(rpcClient().x['x-search'].status(), (e: any) => e.code === 'UNAUTHORIZED');
   await assert.rejects(rpc.x['x-search'].search({ query: 'test' }), (e: any) => e.code === 'NOT_FOUND');
 
-  const saved = await rpc.settings.set({ extension: 'x-search', values: { apiKey, baseUrl: endpoint, model: 'grok-4.7' } });
+  const saved = await rpc.settings.set({ extension: 'x-search', values: { apiKey, baseUrl: endpoint, model: 'grok-4.7', allowPrivateNetwork: true } });
   assert.deepEqual(saved.values.apiKey, { set: true });
   const settings = await rpc.settings.get({ extension: 'x-search' });
   assert.deepEqual(settings.values.apiKey, { set: true });
@@ -82,6 +87,8 @@ try {
 
   assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
   assert.equal((await rpc.extensions.enable({ id: 'x-search' })).status, 'running');
+  await assert.rejects(new XSearchService({ apiKey, baseUrl: endpoint }).search({ query: 'blocked' }), /Private provider endpoint is disabled/);
+  await assert.rejects(new XSearchService({ apiKey, baseUrl: 'http://1.1.1.1' }, { request: async () => { throw new Error('unexpected fetch'); } }).search({ query: 'blocked' }), /Provider endpoint requires HTTPS/);
   assert.deepEqual(await rpc.x['x-search'].status(), { providerId: 'xai', configured: true });
   assert.ok(gateway.kernel.contributionIds().includes('tools:x-search.search'));
   const result = await rpc.x['x-search'].search({
@@ -105,6 +112,7 @@ try {
   const injected = new XSearchService({ apiKey }, {
     request: async (url, request) => {
       assert.equal(url, 'https://api.x.ai/v1/responses');
+      assert.equal(request.redirect, 'error');
       assert.equal((request.headers as Record<string, string>).authorization, `Bearer ${apiKey}`);
       throw new Error(`network failure ${apiKey}`);
     },

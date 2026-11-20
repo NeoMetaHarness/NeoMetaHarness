@@ -9,7 +9,8 @@
     "properties": {
       "apiKey": { "type": "string", "title": "xAI API key", "secret": true },
       "baseUrl": { "type": "string", "title": "xAI API origin", "default": "https://api.x.ai" },
-      "model": { "type": "string", "title": "Search model", "default": "grok-4.7" }
+      "model": { "type": "string", "title": "Search model", "default": "grok-4.7" },
+      "allowPrivateNetwork": { "type": "boolean", "title": "Allow private-network endpoints (admin only)", "default": false }
     }
   }
 }

@@ -1,4 +1,4 @@
-import { defineExtension } from '@neometaharness/kernel';
+import { assertSafeProviderUrl, defineExtension } from '@neometaharness/kernel';
 import { xSearchInput, type NeoSearchService, type XSearchInput, type XSearchOutput } from '@neometaharness/contracts';
 
 export interface SearchHttpClient {
@@ -9,21 +9,23 @@ export interface SearchSettings {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  allowPrivateNetwork?: boolean;
 }
 
 const defaultHttpClient: SearchHttpClient = {
   request: (url, init) => fetch(url, init),
 };
 
-function searchEndpoint(origin: string): string {
-  const url = new URL(origin);
+function searchEndpoint(origin: string): URL {
+  let url: URL;
+  try { url = new URL(origin); } catch { throw new Error('Invalid X Search endpoint configuration'); }
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
     throw new Error('Invalid X Search endpoint configuration');
   }
   if (url.pathname !== '/' && url.pathname !== '/v1' && url.pathname !== '/v1/') {
     throw new Error('Invalid X Search endpoint configuration');
   }
-  return `${url.origin}/v1/responses`;
+  return new URL('/v1/responses', url.origin);
 }
 
 function validCitation(value: unknown): string | undefined {
@@ -85,6 +87,7 @@ export class XSearchService implements NeoSearchService {
     const key = this.settings.apiKey?.trim();
     if (!key) throw new Error('X Search API key is not configured');
     const endpoint = searchEndpoint(this.settings.baseUrl ?? 'https://api.x.ai');
+    await assertSafeProviderUrl(endpoint, { allowPrivateNetwork: this.settings.allowPrivateNetwork });
     const tool: Record<string, unknown> = { type: 'x_search' };
     if (input.allowedHandles) tool.allowed_x_handles = input.allowedHandles;
     if (input.excludedHandles) tool.excluded_x_handles = input.excludedHandles;
@@ -92,8 +95,9 @@ export class XSearchService implements NeoSearchService {
     if (input.toDate) tool.to_date = input.toDate;
     let response: Response;
     try {
-      response = await this.httpClient.request(endpoint, {
+      response = await this.httpClient.request(endpoint.href, {
         method: 'POST',
+        redirect: 'error',
         headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
         body: JSON.stringify({ model: this.settings.model || 'grok-4.7', input: [{ role: 'user', content: input.query }], tools: [tool], max_turns: 2, store: false }),
       });
