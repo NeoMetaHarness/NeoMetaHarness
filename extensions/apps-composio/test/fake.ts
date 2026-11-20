@@ -1,0 +1,23 @@
+import { createServer } from 'node:http';
+export async function fakeComposio() {
+  const calls: { path: string; method: string; body?: any }[] = [];
+  let fail = false;
+  const server = createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
+    const path = req.url!; calls.push({ path, method: req.method!, body });
+    if (req.headers['x-api-key'] !== 'fake-composio-only') { res.writeHead(401).end(); return; }
+    if (fail) { res.writeHead(503).end('fake-composio-only'); return; }
+    let result: unknown;
+    if (path.startsWith('/api/v3/toolkits?')) result = { items: [{ slug: 'github', name: 'GitHub' }] };
+    else if (path === '/api/v3/auth_configs/ac_test') result = { toolkit: { slug: 'github' } };
+    else if (path === '/api/v3/connected_accounts') result = { id: 'ca_test', redirect_url: 'https://auth.composio.dev/connect/fake' };
+    else if (path.startsWith('/api/v3/tools/execute/')) result = { successful: true, data: { done: path.split('/').at(-1), arguments: body.arguments } };
+    else if (path.startsWith('/api/v3/tools/')) { const slug = path.split('/').at(-1); result = { slug, toolkit: { slug: 'github' }, tags: slug === 'GITHUB_LIST' ? ['readOnlyHint'] : ['destructiveHint'] }; }
+    else { res.writeHead(404).end(); return; }
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
+  });
+  await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  const port = (server.address() as { port: number }).port;
+  return { calls, endpoint: `http://127.0.0.1:${port}`, setFail(value: boolean) { fail = value; }, close: () => new Promise<void>(done => { server.closeAllConnections(); server.close(() => done()); }) };
+}

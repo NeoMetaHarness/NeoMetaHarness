@@ -6,7 +6,7 @@ export interface ComputerMcpProjection {
   forget(engine: ComputerEngine, profile: string, workspace?: string): Promise<void>;
   removeAll(): Promise<void>;
 }
-export class ComputerMcpBridge {
+export class McpProjectionBridge {
   private projection?: ComputerMcpProjection;
   private readonly consumers = new Map<string, { engine: ComputerEngine; profile: string; home: string; workspace: string }>();
   async attach(projection: ComputerMcpProjection) {
@@ -34,3 +34,6 @@ export class ComputerMcpBridge {
     }
   }
 }
+
+/** Compatibility name for the computer projection. */
+export class ComputerMcpBridge extends McpProjectionBridge {}

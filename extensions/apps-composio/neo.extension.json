@@ -1,0 +1,28 @@
+{
+  "id": "apps-composio",
+  "version": "0.1.0",
+  "displayName": "Connected Apps (Composio)",
+  "kind": [
+    "tool"
+  ],
+  "runtime": {
+    "type": "cordis",
+    "entry": "./src/index.ts"
+  },
+  "settings": {
+    "type": "object",
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "default": "https://backend.composio.dev",
+        "title": "Composio API endpoint"
+      },
+      "apiKey": {
+        "type": "string",
+        "secret": true,
+        "title": "Composio API key",
+        "description": "Stored encrypted in the vault; never projected to engines."
+      }
+    }
+  }
+}

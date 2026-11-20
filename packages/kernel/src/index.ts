@@ -13,7 +13,7 @@ import { ExtensionProcess } from './process.js';
 import { ExtensionInstalls } from './install.js';
 import { managedCordisEntry, managedProcessCommand, pinCordisResolution } from './managed-runtime.js';
 export { extensionIntegrity } from './install.js';
-export { ComputerMcpBridge, type ComputerMcpConfig, type ComputerMcpProjection } from './computer-mcp.js';
+export { McpProjectionBridge, ComputerMcpBridge, type ComputerMcpConfig, type ComputerMcpProjection } from './computer-mcp.js';
 export { SkillsBridge, type SkillProjection } from './skills.js';
 
 export { coerceSettingValues, dependencyProblem, loadManifest, resolveOrder, SettingsValidationError, validateSettings } from './manifest.js';
@@ -828,3 +828,4 @@ async function deadline<T>(operation: Promise<T>, ms: number, message: string): 
   try { return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); })]); }
   finally { if (timer) clearTimeout(timer); }
 }
+export * from './apps.js';
