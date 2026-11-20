@@ -121,7 +121,22 @@ try {
     assert.equal((await joined.poll()).checked, 0, 'A caller that joins the scheduled failure already observed it');
     assert.equal(requests.length, before + 1, 'Joining a scheduled poll never adds a concurrent HTTP request');
   } finally { release(); joined.stop(); beforeResponse = async () => {}; }
-  console.log('FAKE_GITHUB_SCHEDULED_ERROR PASS unobserved_429_403=reported_once joined_error=not_replayed no_extra_HTTP=true');
+  status = 429;
+  const expired = new PollingGitHubSource(join(temp, 'expired-429.json'), vault, async () => {}, fetch, base);
+  const originalNow = Date.now;
+  try {
+    await expired.configure({ repositories: [{ name: 'acme/sample', ref: 'main' }] });
+    for (let attempt = 0; attempt < 200 && !(await expired.status()).pausedUntil; attempt++) await sleep(5);
+    const pausedUntil = (await expired.status()).pausedUntil;
+    assert.ok(pausedUntil);
+    await sleep(0);
+    const before = requests.length;
+    Date.now = () => pausedUntil + 1;
+    status = 200;
+    assert.ok((await expired.poll()).checked > 0, 'An expired unobserved failure allows a fresh poll');
+    assert.ok(requests.length > before);
+  } finally { Date.now = originalNow; expired.stop(); }
+  console.log('FAKE_GITHUB_SCHEDULED_ERROR PASS unobserved_429_403=reported_once joined_error=not_replayed expired_error=cleared');
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await rm(temp, { recursive: true, force: true });
