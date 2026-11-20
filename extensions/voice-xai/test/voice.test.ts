@@ -134,6 +134,12 @@ async function main() {
       await assert.rejects(rebound.request('https://rebound.example.test:443/unknown', { method: 'POST' }));
       assert.ok(resolutions >= 2, 'The connection must resolve and validate the destination again');
     } finally { await rebound.close(); }
+
+    const poisonedOfficial = createSafeProviderClient({ resolveHost: async () => ['169.254.169.254'] });
+    try {
+      await assert.rejects(poisonedOfficial.request('https://api.x.ai/v1/stt', { method: 'POST' }),
+        /fetch failed|Private provider endpoint is disabled/);
+    } finally { await poisonedOfficial.close(); }
     await assert.rejects(new XaiVoiceService({ apiKey: key, baseUrl: `http://127.0.0.1:${fake.port}` }, injected)
       .transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' }), /Private provider endpoint is disabled/);
 
