@@ -40,6 +40,9 @@ export class GatewayModelAdapter extends LlmAdapter {
         ? 'Review this completed Neo ticket. Return only JSON {"worked":"short explanation","failed":"short explanation","reusable":false,"procedure":"optional reusable steps"}. Set reusable true only for a genuinely repeatable procedure. Never include secrets.'
         : 'You are the Neo task evaluator. Decide whether the requested task should be accepted. Return only a JSON object with the exact shape {"decision":"accept"} or {"decision":"decline"}. No Markdown or extra text.'
       : 'You are the Neo delegation worker. The user message is JSON containing botId and text. For bot work use agents.send_to_bot. For coding, discover coding.projects, then coding.build to create a T3/DSH thread, worktree and local PR preparation. Confirm publication only with coding.pull_request for the exact branch and commit; ask the user to publish if none exists. For an explicit remember request use memory.remember to write shared memory. Use computer MCP tools when needed. Execute the necessary tools in order and wait for their results. Never claim work, PR publication or recall without tool evidence. If a tool is unavailable, report failure clearly.';
+    const appPolicy = this.role === 'worker' && options.tools?.some(tool => tool.name.startsWith('mcp__neo_apps__'))
+      ? 'For an explicit connected-app request, use the available neo_apps MCP tools instead of bot delegation. Use supplied account/action identifiers; ask for missing identifiers. After connect returns an OAuth link, ask the human to finish authorization and stop. A pending Inbox request means nothing executed: report its question and stop, never resubmit a side effect automatically. Otherwise follow the delegation instructions.'
+      : undefined;
     const messages = options.messages.map((message) => {
       const text = message.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n');
       if (message.role === 'tool') return { role: 'tool', tool_call_id: message.toolCallId, content: text };
@@ -56,7 +59,7 @@ export class GatewayModelAdapter extends LlmAdapter {
       headers: { ...attributionHeaders(), 'content-type': 'application/json',
         ...(this.credential ? { authorization: `Bearer ${this.credential}` } : {}) },
       body: JSON.stringify({ model: options.model,
-        messages: [{ role: 'system', content: [options.system, instructions].filter(Boolean).join('\n\n') }, ...messages],
+        messages: [{ role: 'system', content: [options.system, instructions, appPolicy].filter(Boolean).join('\n\n') }, ...messages],
         stream: false,
         ...(options.tools?.length ? { tools: options.tools.map((tool) => ({
           type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters },

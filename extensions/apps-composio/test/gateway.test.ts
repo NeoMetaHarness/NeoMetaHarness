@@ -73,7 +73,7 @@ try {
     assert.ok(!JSON.stringify(config).includes('fake-composio-only'));
     const mcp = new FakeMcpEngine(config); clients.push(mcp);
     const tools = await mcp.initialize(); assert.deepEqual(tools.tools.map((t: any) => t.name).sort(), ['connect','run','toolkits']);
-    assert.equal(JSON.parse((await mcp.call('toolkits')).content[0].text)[0].id, 'github');
+    assert.equal(JSON.parse((await mcp.call('toolkits')).content[0].text).toolkits[0].id, 'github');
     assert.equal(JSON.parse((await mcp.call('run', request)).content[0].text).status, 'completed');
     assert.equal((await fetch(base + '/internal/apps-mcp/action', { method: 'POST', headers: { authorization: `Bearer ${binding.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ engine, profile: 'wrong', action: { operation: 'run', ...request } }) })).status, 403);
   }

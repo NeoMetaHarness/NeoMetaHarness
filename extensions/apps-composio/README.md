@@ -95,5 +95,7 @@ isolated Gateway drill. A scripted random-port fake validates the v3.1 request
 shapes; real stdio MCP is exercised by three fake engine consumers. It checks
 role enforcement, OAuth links, encrypted settings, all accept modes, destructive
 approval, duplicate decisions, settings rotation, token scope, hot disable,
-provider outages and unrelated-extension health. No real Composio API, keys,
+provider outages and unrelated-extension health. A scripted real DSH preset worker
+also runs multiple apps tools, reports the final result, and surfaces pending
+approval as a question without executing the destructive action. No real Composio API, keys,
 OAuth accounts, subscriptions or external actions are used.

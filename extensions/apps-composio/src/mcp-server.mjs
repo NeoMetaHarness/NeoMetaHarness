@@ -12,7 +12,14 @@ async function action(action) {
       headers: { authorization: `Bearer ${binding.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ engine: binding.engine, profile: binding.profile, action }) });
     if (!response.ok) throw Error();
-    return { content: [{ type: 'text', text: JSON.stringify(await response.json()) }] };
+    const data = await response.json();
+    const pending = action.operation === 'run' && data.status !== 'completed';
+    const result = action.operation === 'toolkits' ? { summary: `${data.length} app toolkits available`, toolkits: data }
+      : action.operation === 'connect' ? { ...data, summary: `Complete account authorization: ${data.redirectUrl}`, kind: 'question', question: `Open ${data.redirectUrl} and finish OAuth before running an action. This link does not confirm an active connection.` }
+      : { ...data, summary: pending ? `Connected-app action awaits review in Inbox (${data.inboxId})`
+          : `Connected-app action completed: ${JSON.stringify(data.result).slice(0, 4000)}`,
+          ...(pending ? { kind: 'question', question: `Review request ${data.inboxId} in Inbox. Nothing has executed yet; do not resubmit this action automatically.` } : {}) };
+    return { content: [{ type: 'text', text: JSON.stringify(result) }] };
   } catch { return { isError: true, content: [{ type: 'text', text: 'Apps capability unavailable; do not retry a side effect automatically' }] }; }
 }
 const provider = z.string().default('composio');
