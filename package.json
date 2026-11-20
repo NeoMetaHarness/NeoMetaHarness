@@ -43,10 +43,14 @@
     "docs:check": "pnpm --dir apps/docs check",
     "test:p7-8": "pnpm --dir apps/neo-app test:p7-8",
     "test:p2-8": "pnpm --dir apps/neo-app build && pnpm --dir extensions/models-router-panda typecheck && pnpm --dir extensions/models exec tsx test/router.test.ts && pnpm --dir extensions/models-router-panda test && pnpm --dir extensions/models-router-panda exec tsx test/gateway.test.ts",
+<<<<<<< HEAD
 
     "test:p1-10": "pnpm --dir apps/neo-app build && pnpm --dir packages/kernel typecheck && pnpm --dir packages/kernel test",
     "test:p1-14": "pnpm --dir apps/gateway exec tsx --test test/p1-14.test.ts"
 
+=======
+    "test:p2-11": "pnpm --dir apps/neo-app build && pnpm --dir extensions/x-search typecheck && pnpm --dir extensions/x-search test"
+>>>>>>> 482dbaa (test(x-search): cover authenticated fake provider and disable isolation)
   },
   "devDependencies": {
     "ajv": "8.17.1",
