@@ -46,7 +46,8 @@ const runtime = new ExtensionProcess([process.execPath, '-e', `
 `], process.cwd());
 processGeneration.cleanup = () => runtime.stop();
 const pending = assert.rejects(processGeneration.invoke(({ signal }) =>
-  runtime.call('route.invoke', {}, { signal, timeoutMs: null }), 'GET'), { name: 'AbortError' });
+  runtime.call('route.invoke', {}, { signal, timeoutMs: 30000 }), 'GET'), { name: 'AbortError' });
+await assert.rejects(runtime.call('route.invoke', {}, { timeoutMs: 20 }), /Extension RPC route.invoke timed out/);
 await processGeneration.dispose(20);
 await pending;
 console.log('PASS staged generation: request drain, connection closure, unopened iterator release and bounded abort');

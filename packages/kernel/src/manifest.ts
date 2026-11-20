@@ -30,7 +30,7 @@ export interface ExtensionManifest {
   dependsOn?: Record<string, string>;
   runtime:
     | { type: 'cordis'; entry: string }
-    | { type: 'process'; command: string[]; protocol: 'jsonrpc' | 'jsonrpc+mcp' }
+    | { type: 'process'; command: string[]; protocol: 'jsonrpc' | 'jsonrpc+mcp'; routeTimeoutMs?: Record<string, number> }
     | { type: 'ui-only' | 'content' };
   settings?: ExtensionSettingsSchema;
 }
@@ -96,6 +96,7 @@ export async function loadManifest(directory: string): Promise<ExtensionManifest
 export interface LocatedExtension {
   manifest: ExtensionManifest;
   directory: string;
+  managed?: true;
 }
 
 /** Resolving all extensions detects cycles even when the cycle is disabled. */

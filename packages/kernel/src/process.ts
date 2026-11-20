@@ -40,9 +40,14 @@ export class ExtensionProcess {
 
   constructor(command: string[], directory: string) {
     const [executable, ...args] = command;
+    const env = extensionEnv();
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase() === 'PYTHONDONTWRITEBYTECODE') delete env[key];
+    }
+    env.PYTHONDONTWRITEBYTECODE = '1';
     this.child = spawn(executable!, args, {
       cwd: directory,
-      env: extensionEnv(),
+      env,
       windowsHide: true,
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -78,7 +83,7 @@ export class ExtensionProcess {
     this.pending.clear();
   }
 
-  call(method: string, params: Record<string, unknown> = {}, options: { timeoutMs?: number | null; signal?: AbortSignal } = {}): Promise<unknown> {
+  call(method: string, params: Record<string, unknown> = {}, options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<unknown> {
     if (this.exited) return Promise.reject(new Error(`Extension process exited: ${this.pid}`));
     const { signal, timeoutMs = 5000 } = options;
     if (signal?.aborted) return Promise.reject(signal.reason);
@@ -87,9 +92,9 @@ export class ExtensionProcess {
     return new Promise((resolve, reject) => {
       const fail = (error: Error) => { if (cleanup()) reject(error); };
       const abort = () => fail(signal!.reason);
-      const timer = timeoutMs === null ? undefined : setTimeout(() => fail(new Error(`Extension RPC ${method} timed out`)), timeoutMs);
+      const timer = setTimeout(() => fail(new Error(`Extension RPC ${method} timed out`)), timeoutMs);
       const cleanup = () => {
-        if (timer) clearTimeout(timer);
+        clearTimeout(timer);
         signal?.removeEventListener('abort', abort);
         return this.pending.delete(id);
       };

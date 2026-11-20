@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, symlink, writeFile, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, symlink, writeFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { extensionIntegrity, NeoKernel } from '../src/index.js';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
+import { unsealFixtureTree } from './upgrade-fixtures.js';
 const root = await mkdtemp(join(tmpdir(), 'neo-upgrade-core-'));
 const installed = join(root, 'installed'); await mkdir(installed);
 const versions = new Map<number, string>();
@@ -147,6 +149,44 @@ try {
   db.setExtensionInstall = persist;
   assert.ok(fixture.events.includes('6:stop'));
   assert.equal((await db.getExtensionInstall('sample-ts'))?.version, '2.0.0');
+  const portable = join(root, 'portable');
+  await mkdir(portable);
+  const portableFile = join(portable, 'script');
+  await writeFile(portableFile, 'portable\n');
+  const sha = (value: string) => createHash('sha256').update(value).digest('hex');
+  const portableDigest = sha(JSON.stringify([['script', 'file', sha('portable\n')]]));
+  assert.equal(await extensionIntegrity(portable), portableDigest);
+  await chmod(portableFile, 0o755);
+  assert.equal(await extensionIntegrity(portable), portableDigest, 'Modes do not enter the published digest');
+
+  const rejected = join(root, 'rejected');
+  await mkdir(rejected);
+  await writeFile(join(rejected, 'package.json'), '{"type":"module"}');
+  await writeFile(join(rejected, 'index.mjs'), 'export default { activate() {} };');
+  async function rejectRuntime(runtime: object, reason: RegExp) {
+    await writeFile(join(rejected, 'neo.extension.json'), JSON.stringify({
+      id: 'sample-ts', version: '7.0.0', displayName: 'Rejected candidate', runtime,
+    }));
+    const result = await kernel.upgrade('sample-ts', rejected, { integrity: await extensionIntegrity(rejected) });
+    assert.equal(result.upgraded, false);
+    assert.match(result.reason!, reason);
+  }
+  for (const command of [
+    ['node', join(portable, 'script')],
+    ['python', '../portable/script'],
+    ['node', 'index.mjs', '../portable/script'],
+    ['node', '-e', ''],
+  ]) {
+    await rejectRuntime({ type: 'process', protocol: 'jsonrpc', command }, /requires a relative in-tree path|escapes generation/);
+  }
+  // uv is on the test runner's PATH and works for the bundled fixture.
+  await rejectRuntime({ type: 'process', protocol: 'jsonrpc', command: ['uv', 'index.mjs'] }, /PATH lookup is disabled/);
+  const ancestor = join(root, 'node_modules', 'outside-fixture');
+  await mkdir(ancestor, { recursive: true });
+  await writeFile(join(ancestor, 'package.json'), '{"type":"module","exports":"./index.mjs"}');
+  await writeFile(join(ancestor, 'index.mjs'), 'export default {};');
+  await writeFile(join(rejected, 'index.mjs'), "import 'outside-fixture'; export default { activate() {} };");
+  await rejectRuntime({ type: 'cordis', entry: 'index.mjs' }, /Managed Cordis import escapes generation: outside-fixture/);
   assert.equal((await kernel.invokeRoute('/x/sample-ts/hello', 'GET') as any).version, 2);
   await writeFile(join(versions.get(3)!, 'neo.extension.json'), '{bad json');
   assert.equal((await upgradeVersion(3)).upgraded, false);
@@ -158,5 +198,12 @@ try {
   assert.equal((await upgradeVersion(3)).upgraded, false);
   assert.equal((await kernel.getSettings('sample-ts')).values.label, 'default-v2');
   assert.equal(kernel.contributionIds().length, 1);
+  assert.equal((await kernel.disable('sample-ts')).status, 'disabled');
+  assert.equal((await db.getExtensionInstall('sample-ts'))?.version, '2.0.0');
+  assert.equal((await kernel.enable('sample-ts')).version, '2.0.0');
   console.log('PASS blue/green core: private staging, atomic route switch, old request drain, health/manifest rollback and stable storage/vault, generation settings, serialized saves and secret carryover');
-} finally { finish(); healthy(); await kernel.close(); await rm(root, { recursive: true, force: true }); }
+} finally {
+  finish(); healthy(); await kernel.close();
+  await unsealFixtureTree(join(root, 'extensions', 'generations'));
+  await rm(root, { recursive: true, force: true });
+}

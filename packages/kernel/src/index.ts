@@ -1,7 +1,7 @@
 import { ExtensionGeneration } from './generation.js';
 import { Context } from '@deepseek-ai/cordis';
 import semver from 'semver';
-import { readdir } from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DatabaseProvider, ExtensionInstall } from '@neometaharness/db';
@@ -10,6 +10,7 @@ import type { ComputerNotice } from '@neometaharness/computers';
 import { dependencyProblem, loadManifest, resolveOrder, type LocatedExtension, type ExtensionSettingsSchema } from './manifest.js';
 import { ExtensionProcess } from './process.js';
 import { ExtensionInstalls } from './install.js';
+import { managedCordisEntry, managedProcessCommand, pinCordisResolution } from './managed-runtime.js';
 export { extensionIntegrity } from './install.js';
 export { ComputerMcpBridge, type ComputerMcpConfig, type ComputerMcpProjection } from './computer-mcp.js';
 export { SkillsBridge, type SkillProjection } from './skills.js';
@@ -131,8 +132,9 @@ export class NeoKernel {
   private operation: Promise<unknown> = Promise.resolve();
   private order: string[] = [];
 
-  constructor(private readonly db: DatabaseProvider, private readonly services: Readonly<Record<string, unknown>> = {}, dataDir?: string) {
-    this.installs = new ExtensionInstalls(dataDir);
+  constructor(private readonly db: DatabaseProvider, private readonly services: Readonly<Record<string, unknown>> = {},
+    private readonly dataDir?: string, private readonly pythonExecutable?: string) {
+    this.installs = new ExtensionInstalls(dataDir, pythonExecutable);
   }
 
   async discover(root: string): Promise<void> {
@@ -204,6 +206,7 @@ export class NeoKernel {
 
   enable(id: string): Promise<ExtensionStatus> { return this.setEnabled(id, true); }
   disable(id: string): Promise<ExtensionStatus> { return this.setEnabled(id, false); }
+  uninstall(id: string): Promise<ExtensionStatus> { return this.setEnabled(id, false, true); }
 
   /** Stage and health-check a local immutable version; old registrations remain live until commit. */
   upgrade(id: string, directory: string, options: { integrity: string; healthTimeoutMs?: number; drainTimeoutMs?: number }): Promise<{
@@ -306,12 +309,13 @@ export class NeoKernel {
     return cleanupFailed;
   }
 
-  private setEnabled(id: string, enabled: boolean): Promise<ExtensionStatus> {
+  private setEnabled(id: string, enabled: boolean, uninstall = false): Promise<ExtensionStatus> {
     const work = this.operation.then(async () => {
       const entry = this.entries.get(id);
       if (!entry) throw new Error(`Unknown extension: ${id}`);
       let remove = false;
-      if (!enabled && this.stored.has(id)) {
+      if (uninstall) {
+        if (!this.stored.has(id)) throw new Error(`No managed install for extension: ${id}`);
         if (!this.db.deleteExtensionInstall) throw new Error('Database provider cannot remove installed extension versions');
         await this.db.deleteExtensionInstall(id);
         this.stored.delete(id);
@@ -575,7 +579,11 @@ export class NeoKernel {
   }
 
   private async start(id: string, located = this.discovered.get(id)!, generation = new ExtensionGeneration(id), staged = false): Promise<ExtensionGeneration> {
-    const { manifest, directory } = located;
+    const { manifest, directory, managed } = located;
+    const dataRoot = typeof this.services.extensionDataDir === 'string' ? this.services.extensionDataDir
+      : managed && this.dataDir ? join(this.dataDir, 'extensions') : undefined;
+    const dataDir = dataRoot && join(dataRoot, id);
+    if (managed && dataDir) await mkdir(dataDir, { recursive: true });
     generation.settingsSchema = structuredClone(manifest.settings);
     Object.assign(generation.settings, structuredClone((await this.readSettings(id, manifest.settings)).values));
     generation.assertMutable();
@@ -583,7 +591,10 @@ export class NeoKernel {
       const scope = new Context();
       generation.cleanup = () => scope.fiber.dispose();
       try {
-        const entryUrl = pathToFileURL(resolve(directory, manifest.runtime.entry)).href;
+        const entry = managed ? await managedCordisEntry(directory, manifest.runtime.entry) : resolve(directory, manifest.runtime.entry);
+        generation.assertMutable();
+        if (managed) pinCordisResolution(directory);
+        const entryUrl = pathToFileURL(entry).href;
         const module = await import(entryUrl) as { default: NeoExtension };
         generation.assertMutable();
         if (typeof module.default?.activate !== 'function') throw new Error(`Missing activate() in ${id}`);
@@ -597,6 +608,7 @@ export class NeoKernel {
               provide: (name, value) => generation.provide(name, value),
               inject: <T>(name: string) => {
                 if (name === 'settings') return generation.settings as T;
+                if (managed && name === 'dataDir') return dataDir as T | undefined;
                 if (generation.services.has(name)) return generation.services.get(name) as T;
                 const provider = this.snapshot.serviceOwners.get(name);
                 if (provider && provider !== id && !generation.injectedFrom.has(provider)) {
@@ -621,15 +633,19 @@ export class NeoKernel {
       return generation;
     }
     if (manifest.runtime.type === 'process') {
-      const runtime = new ExtensionProcess(manifest.runtime.command, directory);
+      const { command, routeTimeoutMs } = manifest.runtime;
+      const executable = managed ? await managedProcessCommand(directory, command, this.pythonExecutable) : command;
+      generation.assertMutable();
+      const runtime = new ExtensionProcess(executable, directory);
       generation.cleanup = () => runtime.stop();
       generation.check = () => runtime.health(generation.abort.signal);
       try {
-        const registered = await runtime.initialize(id, typeof this.services.extensionDataDir === 'string'
-          ? { dataDir: join(this.services.extensionDataDir, id), projectionDir: join(this.services.extensionDataDir, id, 'projections') } : {}, generation.abort.signal);
+        const registered = await runtime.initialize(id, dataDir
+          ? { dataDir, projectionDir: join(dataDir, 'projections') } : {}, generation.abort.signal);
         for (const route of registered.routes) {
           if (typeof route.path !== 'string') throw new Error(`Invalid route from ${id}`);
-          generation.route(route.path, ({ method, body, signal }) => runtime.call('route.invoke', { path: route.path, method, body }, { timeoutMs: null, signal }));
+          const timeoutMs = routeTimeoutMs && Object.hasOwn(routeTimeoutMs, route.path) ? routeTimeoutMs[route.path] : 30_000;
+          generation.route(route.path, ({ method, body, signal }) => runtime.call('route.invoke', { path: route.path, method, body }, { timeoutMs, signal }));
         }
         for (const contribution of registered.contributions) {
           if (typeof contribution.id !== 'string' || typeof contribution.kind !== 'string') throw new Error(`Invalid contribution from ${id}`);

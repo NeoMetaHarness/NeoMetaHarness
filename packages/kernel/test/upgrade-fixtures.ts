@@ -1,10 +1,29 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { chmod, lstat, mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
+
+export async function unsealFixtureTree(directory: string): Promise<void> {
+  const info = await lstat(directory).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+  });
+  if (!info?.isDirectory()) return;
+  if (process.platform === 'win32') {
+    await promisify(execFile)(join(process.env.SystemRoot!, 'System32', 'icacls.exe'),
+      [directory, '/reset', '/T', '/Q'], { windowsHide: true, timeout: 10000 });
+    return;
+  }
+  await chmod(directory, 0o755);
+  for (const name of await readdir(directory)) await unsealFixtureTree(join(directory, name));
+}
+
 export async function sampleVersion(directory: string, id: 'sample-ts' | 'sample-py', version: number, control: string) {
   await mkdir(directory, { recursive: true }); await mkdir(control, { recursive: true });
   await writeFile(join(directory, 'package.json'), '{"type":"module"}');
   await writeFile(join(directory, 'neo.extension.json'), JSON.stringify({ id, version: `${version}.0.0`, displayName: id, kind: ['feature'],
-    runtime: id === 'sample-ts' ? { type: 'cordis', entry: './index.ts' } : { type: 'process', protocol: 'jsonrpc', command: ['uv', 'run', '--no-project', '--offline', 'python', 'extension.py'] } }));
+    runtime: id === 'sample-ts' ? { type: 'cordis', entry: './index.mjs' } : { type: 'process', protocol: 'jsonrpc',
+      command: version === 1 || version === 4 ? ['uv', 'run', '--no-project', '--offline', 'python', 'extension.py'] : ['python', 'extension.py'],
+      routeTimeoutMs: { hang: 150 } } }));
   if (id === 'sample-ts') {
     const code = `import { createServer } from 'node:net';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -27,11 +46,12 @@ export default { async activate(ctx) {
   ctx.route('hello',response);
   ctx.route('slow',async()=>{await writeFile(join(control,'slow-v'+version),'yes');await wait(join(control,'release-v'+version));return response();});
 } };`;
-    await writeFile(join(directory, 'index.ts'), code.replaceAll('@@ID@@', JSON.stringify(id)).replaceAll('@@VERSION@@', String(version)).replaceAll('@@CONTROL@@', JSON.stringify(control)));
+    await writeFile(join(directory, 'index.mjs'), code.replaceAll('@@ID@@', JSON.stringify(id)).replaceAll('@@VERSION@@', String(version)).replaceAll('@@CONTROL@@', JSON.stringify(control)));
   } else {
+    await writeFile(join(directory, 'fixture_values.py'), `VERSION=${version}\n`);
     const code = `import json, os, sys, time, socket, threading, hashlib
+from fixture_values import VERSION
 ID=@@ID@@
-VERSION=@@VERSION@@
 CONTROL=@@CONTROL@@
 data=None
 listener=socket.socket(); listener.bind(('127.0.0.1',0)); listener.listen()
@@ -48,17 +68,20 @@ def wait(file):
 def response():
     with open(os.path.join(data,'settings.json')) as file: setting=json.load(file)['value']
     with open(os.path.join(data,'projections','capability'),'rb') as file: digest=hashlib.sha256(file.read()).hexdigest()
-    return {'version':VERSION,'port':PORT,'pid':os.getpid(),'setting':setting,'projectionDigest':digest}
+    return {'version':VERSION,'port':PORT,'pid':os.getpid(),'setting':setting,'projectionDigest':digest,'noBytecode':os.environ.get('PYTHONDONTWRITEBYTECODE')=='1'}
 def handle(method,params):
     global data
     if method=='initialize':
         data=params['dataDir']; os.makedirs(data,exist_ok=True)
-        return {'routes':[{'path':'hello'},{'path':'slow'}],'contributions':[{'kind':'tools','id':ID+'.echo','name':'v'+str(VERSION)}]}
+        with open(os.path.join(data,'initialized'),'w') as file: file.write(str(VERSION))
+        return {'routes':[{'path':'hello'},{'path':'slow'},{'path':'hang'}],'contributions':[{'kind':'tools','id':ID+'.echo','name':'v'+str(VERSION)}]}
     if method=='health':
         with open(os.path.join(CONTROL,'health-v'+str(VERSION)),'w') as file: json.dump({'port':PORT,'pid':os.getpid()},file)
         if VERSION==2: wait(os.path.join(CONTROL,'allow-v2'))
         return {'ok':VERSION!=3,'pid':os.getpid()}
     if method=='route.invoke':
+        if params['path']=='hang':
+            open(os.path.join(CONTROL,'hang-v'+str(VERSION)),'w').close(); wait(os.path.join(CONTROL,'release-hang'))
         if params['path']=='slow':
             open(os.path.join(CONTROL,'slow-v'+str(VERSION)),'w').close(); wait(os.path.join(CONTROL,'release-v'+str(VERSION)))
         return response()
@@ -75,6 +98,6 @@ for line in sys.stdin:
     print(json.dumps(result),flush=True)
     if request['method']=='shutdown': break
 `;
-    await writeFile(join(directory, 'extension.py'), code.replaceAll('@@ID@@', JSON.stringify(id)).replaceAll('@@VERSION@@', String(version)).replaceAll('@@CONTROL@@', JSON.stringify(control)));
+    await writeFile(join(directory, 'extension.py'), code.replaceAll('@@ID@@', JSON.stringify(id)).replaceAll('@@CONTROL@@', JSON.stringify(control)));
   }
 }

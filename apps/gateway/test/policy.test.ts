@@ -307,6 +307,8 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
     const adminClient = makeClient(gateway.port, { authorization: `Bearer ${adminSignup.token}` });
     assert.equal((await adminClient.extensions.enable({ id: 'test-custom' })).status, 'running');
     await assert.rejects(adminClient.extensions.upgrade(upgrade), (error: any) => error.code === 'FORBIDDEN');
+    assert.equal((await adminClient.extensions.disable({ id: 'test-custom' })).status, 'disabled');
+    await assert.rejects(adminClient.extensions.uninstall({ id: 'test-custom' }), (error: any) => error.code === 'FORBIDDEN');
 
     // 2. Disabled extension check:
     // Extensions (engine-t3, engine-hermes, engine-superagent, skills-registry) are NOT running in this test environment.

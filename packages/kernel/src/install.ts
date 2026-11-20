@@ -4,15 +4,11 @@ import { cp, lstat, mkdir, mkdtemp, readdir, readlink, realpath, rename, rm } fr
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import semver from 'semver';
 import { loadManifest, type LocatedExtension } from './manifest.js';
-
-function inside(root: string, path: string): boolean {
-  const part = relative(root, path);
-  return part !== '..' && !part.startsWith('..' + sep) && !isAbsolute(part);
-}
+import { isInside, managedCordisEntry, managedProcessCommand, sealGeneration } from './managed-runtime.js';
 
 async function checkedLink(root: string, path: string): Promise<string> {
   const target = await readlink(path);
-  if (isAbsolute(target) || !inside(root, resolve(dirname(path), target)) || !inside(root, await realpath(path))) {
+  if (isAbsolute(target) || !isInside(root, resolve(dirname(path), target)) || !isInside(root, await realpath(path))) {
     throw new Error(`Symlink escapes extension tree: ${relative(root, path)}`);
   }
   return target;
@@ -36,7 +32,7 @@ export async function extensionIntegrity(directory: string): Promise<string> {
       } else if (info.isFile()) {
         const hash = createHash('sha256');
         for await (const chunk of createReadStream(path)) hash.update(chunk);
-        records.set(key, [key, 'file', info.mode & 0o111, hash.digest('hex')]);
+        records.set(key, [key, 'file', hash.digest('hex')]);
       } else throw new Error(`Unsupported extension file: ${key}`);
     }
   }
@@ -48,19 +44,16 @@ async function checkedManifest(directory: string, integrity: string) {
   if (!/^[a-f0-9]{64}$/i.test(integrity) || await extensionIntegrity(directory) !== integrity.toLowerCase()) {
     throw new Error('Extension integrity mismatch');
   }
-  const manifest = await loadManifest(directory);
-  if (manifest.runtime.type === 'process') {
-    const executable = manifest.runtime.command[0]!;
-    if (/[/\\:]/.test(executable) &&
-        (isAbsolute(executable) || /^[a-z]:/i.test(executable) || !inside(directory, resolve(directory, executable)))) {
-      throw new Error('Extension executable escapes install root');
-    }
-  }
-  return manifest;
+  return loadManifest(directory);
 }
 
 export class ExtensionInstalls {
-  constructor(private readonly dataDir?: string) {}
+  constructor(private readonly dataDir?: string, private readonly pythonExecutable?: string) {}
+
+  private async validateRuntime(directory: string, manifest: LocatedExtension['manifest']) {
+    if (manifest.runtime.type === 'process') await managedProcessCommand(directory, manifest.runtime.command, this.pythonExecutable);
+    if (manifest.runtime.type === 'cordis') await managedCordisEntry(directory, manifest.runtime.entry);
+  }
 
   private async root() {
     if (!this.dataDir) throw new Error('Kernel extension storage is unavailable');
@@ -82,7 +75,9 @@ export class ExtensionInstalls {
     }
     const manifest = await checkedManifest(directory, integrity);
     if (manifest.id !== id || manifest.version !== version) throw new Error('Installed manifest identity changed');
-    return { directory, manifest };
+    await this.validateRuntime(directory, manifest);
+    await sealGeneration(directory);
+    return { directory, manifest, managed: true };
   }
 
   async copy(id: string, source: string, integrity: string, previous: LocatedExtension): Promise<LocatedExtension> {
@@ -90,7 +85,7 @@ export class ExtensionInstalls {
     if (!/^[a-f0-9]{64}$/i.test(integrity)) throw new Error('Extension integrity must be a SHA-256 hex digest');
     source = await realpath(source);
     const root = await this.root();
-    if (inside(root, source) || inside(source, root) || source === previous.directory) {
+    if (isInside(root, source) || isInside(source, root) || source === previous.directory) {
       throw new Error('Upgrade requires a separate candidate directory');
     }
     const staging = await mkdtemp(join(root, '.staged-'));
@@ -107,6 +102,7 @@ export class ExtensionInstalls {
       if (manifest.id !== id || !semver.gt(manifest.version, previous.manifest.version)) {
         throw new Error('Upgrade requires the same id and a newer version');
       }
+      await this.validateRuntime(copy, manifest);
       const directory = join(root, `${id}@${manifest.version}`);
       // Never overwrite code already present at a generation path.
       const exists = await lstat(directory).then(() => true, error => {
@@ -114,9 +110,11 @@ export class ExtensionInstalls {
         return false;
       });
       if (exists) {
-        await this.restore({ id, version: manifest.version, directory, integrity });
-      } else await rename(copy, directory);
-      return { directory, manifest };
+        return await this.restore({ id, version: manifest.version, directory, integrity });
+      }
+      await rename(copy, directory);
+      await sealGeneration(directory);
+      return { directory, manifest, managed: true };
     } finally {
       await rm(staging, { recursive: true, force: true });
     }

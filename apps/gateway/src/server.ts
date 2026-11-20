@@ -301,7 +301,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     skillsBridge,
     extensionDataDir,
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
-  }, dataDir);
+  }, dataDir, process.env.NMH_EXTENSION_PYTHON);
 
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
     authorize(`vault.${operation}`, context);
@@ -1039,7 +1039,12 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       disable: os.extensions.disable.handler(async ({ input, context }) => {
         authorize('extensions.disable', context);
         if (input.id === 'engine-hermes') await agentApi.stop();
-        const extension = await kernel.disable(input.id);
+        return withHealth(await kernel.disable(input.id));
+      }),
+      uninstall: os.extensions.uninstall.handler(async ({ input, context }) => {
+        authorize('extensions.uninstall', context);
+        const extension = await kernel.uninstall(input.id);
+        if (input.id === 'engine-hermes') await agentApi.stop();
         syncBackupVersion(input.id);
         return withHealth(extension);
       }),

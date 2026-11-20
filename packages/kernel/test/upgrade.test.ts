@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { connect, type Socket } from 'node:net';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, stat, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,9 +12,11 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
 import { extensionIntegrity } from '../src/index.js';
-import { sampleVersion } from './upgrade-fixtures.js';
+import { sampleVersion, unsealFixtureTree } from './upgrade-fixtures.js';
 const repo=resolve(fileURLToPath(new URL('../../..',import.meta.url)));
 const home=await mkdtemp(join(tmpdir(),'neo-p110-'));
+const python = execFileSync('uv', ['run','--no-project','--offline','python','-c','import sys; print(sys.executable)'],
+  {encoding:'utf8',windowsHide:true}).trim();
 const installed=join(home,'installed');await mkdir(installed);
 const secret='TEST_ONLY_UPGRADE_VAULT_PROJECTION';
 const digest=createHash('sha256').update(secret).digest('hex');
@@ -39,7 +41,7 @@ let child:ChildProcess|undefined;let token='';let port=0;let logs='';
 async function start(){
   token='';
   child=spawn(process.execPath,['--import','tsx','src/main.ts'],{cwd:join(repo,'apps/gateway'),windowsHide:true,stdio:['pipe','pipe','pipe'],
-    env:{...process.env,NEO_MODE:'desktop',NEO_PRINT_DESKTOP_TOKEN:'1',NMH_DB_PATH:join(home,'gateway.db'),NMH_EXTENSIONS_DIR:installed,NMH_PORT:'0'}});
+    env:{...process.env,NEO_MODE:'desktop',NEO_PRINT_DESKTOP_TOKEN:'1',NMH_DB_PATH:join(home,'gateway.db'),NMH_EXTENSIONS_DIR:installed,NMH_PORT:'0',NMH_EXTENSION_PYTHON:python}});
   child.stdout!.on('data',chunk=>{logs+=chunk;});child.stderr!.on('data',chunk=>{logs+=chunk;});
   port=await new Promise<number>((done,reject)=>{
     const timer=setTimeout(()=>reject(Error('Gateway startup timed out')),30000);const reader=createInterface({input:child!.stdout!});
@@ -95,8 +97,27 @@ try{
     const response=await hello(id);assert.equal(response.version,2);assert.equal(response.projectionDigest,digest);assert.equal(response.setting,`preserved-${id}`);
     assert.equal((await rpc.extensions.list()).find(value=>value.id===id)?.version,'2.0.0');
   }
+  const managedPython=join(home,'extensions','generations','sample-py@2.0.0');
+  assert.equal((await hello('sample-py')).noBytecode,true);
+  await assert.rejects(stat(join(managedPython,'__pycache__')),{code:'ENOENT'});
+  assert.equal(await readFile(join(home,'extensions','sample-py','initialized'),'utf8'),'2');
+  if (process.getuid?.() !== 0) {
+    await assert.rejects(writeFile(join(managedPython,'attempted-write'),'x'),{code:/EACCES|EPERM/});
+    await assert.rejects(writeFile(join(managedPython,'fixture_values.py'),'VERSION=2\n'),{code:/EACCES|EPERM/});
+  }
+  const pyControl=controls.get('sample-py')!;
+  try{
+    const hung=await fetch(`http://127.0.0.1:${port}/x/sample-py/hang`,{headers:{authorization:`Bearer ${token}`},signal:AbortSignal.timeout(3000)});
+    assert.equal(hung.status,500);
+    await waitFile(join(pyControl,'hang-v2'));
+  }finally{await writeFile(join(pyControl,'release-hang'),'yes');}
+  assert.equal((await hello('sample-py')).version,2);
+  assert.equal((await rpc.extensions.disable({id:'sample-py'})).version,'2.0.0');
+  assert.equal((await rpc.extensions.enable({id:'sample-py'})).version,'2.0.0');
   await stop();
-  await rm(join(home,'extensions','generations','sample-ts@2.0.0'),{recursive:true});
+  const deleted=join(home,'extensions','generations','sample-ts@2.0.0');
+  await unsealFixtureTree(deleted);
+  await rm(deleted,{recursive:true});
   await sampleVersion(join(installed,'sample-py'),'sample-py',4,controls.get('sample-py')!);
   rpc=await start();
   const fallback=(await rpc.extensions.list()).find(value=>value.id==='sample-ts');
@@ -104,12 +125,12 @@ try{
   assert.equal((await hello('sample-ts')).version,1);
   assert.equal((await hello('sample-py')).version,4);
   assert.equal((await rpc.extensions.list()).find(value=>value.id==='sample-py')?.status,'running');
-  await rpc.extensions.disable({id:'sample-ts'});
+  await rpc.extensions.uninstall({id:'sample-ts'});
   await stop();
   await rm(join(installed,'sample-py'),{recursive:true});
   rpc=await start();
   assert.ok(!(await rpc.extensions.list()).some(extension=>extension.id==='sample-py'),'The stale upgrade row was removed');
-  assert.equal((await rpc.extensions.enable({id:'sample-ts'})).status,'running','Disable removes the broken persisted install');
+  assert.equal((await rpc.extensions.enable({id:'sample-ts'})).status,'running','Owner uninstall removes the broken persisted install');
   const standalone=candidates.get('sample-ts:2')!;
   await sampleVersion(standalone,'sample-ts',2,controls.get('sample-ts')!);
   assert.equal((await rpc.extensions.upgrade(await upgradeInput('sample-ts',2))).upgraded,true);
@@ -118,10 +139,14 @@ try{
   rpc=await start();
   assert.equal((await hello('sample-ts')).version,2,'A verified kernel-owned copy can run without a bundled version');
   assert.equal((await rpc.extensions.disable({id:'sample-ts'})).status,'disabled');
+  assert.equal((await rpc.extensions.enable({id:'sample-ts'})).version,'2.0.0');
+  assert.equal((await rpc.extensions.uninstall({id:'sample-ts'})).status,'disabled');
   assert.ok(!(await rpc.extensions.list()).some(extension=>extension.id==='sample-ts'));
   assert.ok(!logs.includes(secret));
   console.log('PASS P1-10 authenticated TS/Python local upgrades: in-flight v1 survives atomic v2 switch, old sockets close, broken/invalid v3 rolls back, settings/vault projections and selected versions survive restart');
 }finally{
   for(const control of controls.values())await writeFile(join(control,'release-v1'),'yes').catch(()=>{});
-  for(const socket of sockets)socket.destroy();await stop();await rm(home,{recursive:true,force:true,maxRetries:8,retryDelay:100});
+  for(const socket of sockets)socket.destroy();await stop();
+  await unsealFixtureTree(join(home,'extensions','generations'));
+  await rm(home,{recursive:true,force:true,maxRetries:8,retryDelay:100});
 }

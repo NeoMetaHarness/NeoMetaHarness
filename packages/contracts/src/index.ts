@@ -462,6 +462,7 @@ const baseNeoContract = {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
     disable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
+    uninstall: oc.input(z.object({ id: z.string().min(1) })).output(extensionStatusSchema),
     upgrade: oc.input(z.object({ id: z.string().min(1), directory: z.string().min(1), integrity: z.string().regex(/^[a-f0-9]{64}$/i),
       healthTimeoutMs: z.number().int().min(10).max(30000).optional(), drainTimeoutMs: z.number().int().min(10).max(30000).optional(),
     })).output(z.object({ extension: extensionStatusSchema, previousVersion: z.string(), upgraded: z.boolean(), reason: z.string().optional() })),
