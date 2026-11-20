@@ -10,15 +10,20 @@ An unconfigured extension or remote outage stays lifecycle-healthy.
 ## API and connection flow
 
 - `apps.toolkits({provider})`: viewer; lists available toolkits.
-- `apps.connect({provider, toolkit, authConfigId, callbackUrl})`: member; returns
+- `apps.connect({provider, toolkit, authConfigId})`: member; returns
   an account ID and OAuth `redirectUrl`. The human must open the link and complete
-  authorization. Returning the link does not mean OAuth has completed.
+  authorization. Returning the link does not mean OAuth has completed. The Gateway
+  supplies its own origin as the callback; callers cannot choose a destination.
 - `apps.run({provider, accountId, action, arguments})`: member; returns completion
-  data or a pending Inbox ID. Account IDs must have been connected through Neo.
+  data or a pending Inbox ID. Only the connecting user in that workspace can run it.
+- `apps.grant({provider, accountId, engine, profile, enabled})`: member and account
+  owner; explicitly grants or revokes a named engine profile in the same workspace.
+  Revocation is checked again immediately before an approved action executes.
 
-These installation-owned connections are available to members of this Gateway,
-including its member-authorized engine consumers. Keep separate Gateways for
-separate trust boundaries. An action cannot select a foreign account by ID.
+Accounts live in separate hashed workspace directories with an owner user ID.
+Composio's entity ID is derived from workspace plus user. Account existence alone
+never authorizes use. Legacy installation-wide `accounts.json` records have no
+ownership evidence and are ignored: reconnect them under the intended user.
 
 Only HTTP is consumed, with an injected fetch client and no Composio SDK:
 
@@ -32,23 +37,31 @@ Only HTTP is consumed, with an injected fetch client and no Composio SDK:
 - [Execute](https://docs.composio.dev/reference/api-reference/tools/postToolsExecuteByToolSlug):
   `POST /api/v3.1/tools/execute/{slug}` with the reviewed version and connected account.
 
-The default endpoint uses HTTPS. HTTP is allowed only on numeric loopback for
-self-hosted adapters/tests. Credential-bearing URLs and redirects are rejected.
+The default endpoint is `https://backend.composio.dev`. Custom endpoints must use
+HTTPS. Private, loopback, link-local, metadata and reserved IPs are denied, including
+DNS answers checked in the socket lookup, without a second DNS resolution.
+The admin-only `allowPrivateNetwork` setting is off by default and permits private
+destinations when explicitly enabled; it never permits HTTP. Credential-bearing
+URLs and redirects are rejected. Tests inject a client that maps a synthetic
+HTTPS endpoint to the random-port loopback fake; no real key or service is used.
 Errors never echo upstream bodies or credentials. Side effects are never retried
 automatically, including after a transport timeout.
 
 ## Inbox safety
 
-Provider metadata must explicitly contain `readOnlyHint` and omit
-`destructiveHint` to qualify as non-destructive. Missing/unknown metadata is
-conservative. Clients cannot supply the destructive classification.
+Only exact action IDs in the local read-only allowlist qualify as non-destructive.
+Remote `destructiveHint` can make policy stricter; remote `readOnlyHint` never
+relaxes it. Unknown actions always require approval, including actions whose
+metadata claims they are safe. Clients cannot supply the classification.
 
 - `observe`: create an Inbox Suggestion; nothing executes until accepted.
 - `act-with-approval`: every action creates an approval card.
 - `act`: only explicit read-only actions execute immediately; all others wait.
 
 Destructive approval requires admin/owner through the existing Inbox decision
-route. The card contains the account, action and exact arguments. Decisions are
+route. Viewers see the action and argument keys; member+ reviewers see full
+arguments. List and event responses enforce the same redaction and workspace
+boundary. Cross-workspace decisions are denied. Decisions are
 consumed before execution, so repeated/concurrent approvals cannot execute twice.
 Changing settings or disabling the provider invalidates pending approvals.
 Disabling the Inbox blocks execution; listing toolkits and creating links remain
@@ -60,11 +73,16 @@ again. They never replay automatically.
 The existing optional projection bridge now has the generic name
 `McpProjectionBridge`; `ComputerMcpBridge` retains compatibility. The independent
 apps projection publishes `toolkits`, `connect` and `run` to Hermes, DSH and
-superagent. Its capabilities delegate the member action floor and cannot approve
+superagent. The `connect` tool asks an authenticated human to connect through the
+App and grant this profile access; it cannot create accounts or choose callbacks.
+Its capabilities delegate the member action floor and cannot approve
 destructive work. Each engine/profile has a separate random vault capability.
 Restricted binding files contain that capability, never the Composio key. Every
-call rereads its binding and validates profile plus token at the loopback internal
-callback. Disable removes files, vault capabilities and Hermes configuration;
+call rereads its binding and validates workspace, profile, token and the token's
+vault record at the loopback callback. The Apps bridge never falls back to a
+shared default workspace: unscoped Hermes/superagent profiles get no token or tool
+until an owner grant assigns their workspace. DSH supplies its session workspace.
+One profile cannot be rebound across workspaces. Disable removes files, vault capabilities and Hermes configuration;
 engine tools then fail clearly while the engines remain healthy.
 
 Pinned seams (also documented by `computers-mcp`):
@@ -83,10 +101,9 @@ projections on their next session. Hermes refreshes its projection at run startu
 
 ## Merge dependency
 
-On base `830587e`, live Hermes MCP discovery needs the startup/cleanup fix from
-P6-9 (`7222e6e`, queued separately in `work/sol61-p69`). Land that fix before
-using connected-app tools in live Hermes runs. The P2-12 transport drill uses
-three fake engine consumers, as required by this task.
+The Hermes startup/cleanup fix was kept in P6-9 and landed on main as `aeedfc3`.
+This branch consumes it through the rebase; it does not duplicate that fix.
+The P2-12 transport drill uses fake engine consumers, as required by this task.
 
 ## Verification
 
