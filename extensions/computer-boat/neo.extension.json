@@ -1,0 +1,14 @@
+{
+  "id": "computer-boat",
+  "version": "0.1.0",
+  "displayName": "Boat cloud and self-hosted computers",
+  "kind": ["computer"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" },
+  "settings": {
+    "type": "object",
+    "properties": {
+      "baseUrl": { "type": "string", "title": "Boat API base URL", "default": "https://boat.dev/api/v1" },
+      "apiKey": { "type": "string", "title": "Boat API key", "secret": true }
+    }
+  }
+}

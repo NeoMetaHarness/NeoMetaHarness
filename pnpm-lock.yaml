@@ -349,6 +349,25 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  extensions/computer-boat:
+    dependencies:
+      '@neometaharness/computers':
+        specifier: workspace:*
+        version: link:../../packages/computers
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+    devDependencies:
+      '@types/node':
+        specifier: 22.18.13
+        version: 22.18.13
+      tsx:
+        specifier: 4.20.6
+        version: 4.20.6
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   extensions/computer-docker:
     dependencies:
       '@neometaharness/computer-vnc':
