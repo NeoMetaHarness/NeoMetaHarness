@@ -24,6 +24,10 @@ import {
   type ModelRolesRecord,
   type ModelRoleName,
   type DreamReport,
+  type VoiceTranscribeInput,
+  type VoiceTranscribeOutput,
+  type VoiceSynthesizeInput,
+  type VoiceSynthesizeOutput,
 } from '@neometaharness/contracts';
 import {
   VaultService,
@@ -588,6 +592,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
     return context.workspaceId;
   };
+  const invokeVoice = async (route: string, body: unknown) => {
+    const path = `/x/voice-xai/${route}`;
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Voice provider is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   const invokePanda = async (route: string, body: unknown) => {
     const path = `/x/models-router-panda/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Panda router extension is disabled' });
@@ -853,6 +862,20 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         health: os.x['models-router-panda'].health.handler(async ({ context }) => {
           requireViewer(context);
           return invokePanda('health', { workspace: modelsWorkspace(context) }) as Promise<{ ok: boolean; configured: boolean }>;
+        }),
+      },
+      'voice-xai': {
+        status: os.x['voice-xai'].status.handler(async ({ context }) => {
+          requireViewer(context);
+          return invokeVoice('status', {}) as Promise<{ providerId: 'xai'; configured: boolean }>;
+        }),
+        transcribe: os.x['voice-xai'].transcribe.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeVoice('transcribe', input as VoiceTranscribeInput) as Promise<VoiceTranscribeOutput>;
+        }),
+        synthesize: os.x['voice-xai'].synthesize.handler(async ({ input, context }) => {
+          requireMember(context);
+          return invokeVoice('synthesize', input as VoiceSynthesizeInput) as Promise<VoiceSynthesizeOutput>;
         }),
       },
       models: {
@@ -1798,7 +1821,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/coding-workflow/') || path.startsWith('/x/models-router-panda/') || path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/') || path.startsWith('/x/metrics/')) {
+      if (path.startsWith('/x/coding-workflow/') || path.startsWith('/x/models-router-panda/') || path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/') || path.startsWith('/x/voice-xai/') || path.startsWith('/x/metrics/')) {
         // Order for every role: authorize the procedure, then report availability,
         // then let oRPC validate method and input. Authorization runs before
         // anything else, so no role learns more than its policy allows, and a

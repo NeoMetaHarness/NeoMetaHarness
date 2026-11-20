@@ -169,6 +169,11 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.models-router-panda.deployment.settings.get': 'deployment-owner',
   'x.models-router-panda.deployment.settings.set': 'deployment-owner',
 
+  // x.voice-xai
+  'x.voice-xai.status': 'viewer',
+  'x.voice-xai.transcribe': 'member',
+  'x.voice-xai.synthesize': 'member',
+
   // extensions
   'extensions.list': 'viewer',
   'extensions.upgrade': 'deployment-owner',
