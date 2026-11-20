@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
-"test": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts test/vault-rpc.test.ts test/auth-gateway.test.ts test/policy.test.ts test/security.test.ts test/settings.test.ts test/channel-bus.test.ts test/memory-workspace.test.ts test/inbox-workspace.test.ts && tsc --noEmit",
+"test": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts test/vault-rpc.test.ts test/auth-gateway.test.ts test/policy.test.ts test/security.test.ts test/settings.test.ts test/channel-bus.test.ts test/memory-workspace.test.ts test/inbox-workspace.test.ts test/settings-workspace.test.ts && tsc --noEmit",
     "test:p1": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts test/vault-rpc.test.ts && tsc --noEmit"
   },
   "dependencies": {

@@ -1,13 +1,14 @@
 import { ExtensionGeneration } from './generation.js';
 import { Context } from '@deepseek-ai/cordis';
 import semver from 'semver';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdir, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DatabaseProvider, ExtensionInstall } from '@neometaharness/db';
 import type { ExtensionStatus, GatewayEvent } from '@neometaharness/contracts';
 import type { ComputerNotice } from '@neometaharness/computers';
-import { dependencyProblem, loadManifest, resolveOrder, type LocatedExtension, type ExtensionSettingsSchema } from './manifest.js';
+import { coerceSettingValues, dependencyProblem, loadManifest, resolveOrder, type LocatedExtension, type ExtensionSettingsSchema } from './manifest.js';
 import { ExtensionProcess } from './process.js';
 import { ExtensionInstalls } from './install.js';
 import { managedCordisEntry, managedProcessCommand, pinCordisResolution } from './managed-runtime.js';
@@ -15,7 +16,7 @@ export { extensionIntegrity } from './install.js';
 export { ComputerMcpBridge, type ComputerMcpConfig, type ComputerMcpProjection } from './computer-mcp.js';
 export { SkillsBridge, type SkillProjection } from './skills.js';
 
-export { dependencyProblem, loadManifest, resolveOrder, validateSettings } from './manifest.js';
+export { coerceSettingValues, dependencyProblem, loadManifest, resolveOrder, SettingsValidationError, validateSettings } from './manifest.js';
 export type { ExtensionManifest, LocatedExtension, ExtensionSettingsSchema, SettingPropertySchema, SettingPropertyType } from './manifest.js';
 
 export type RouteHandler = (input: { method: string; body?: unknown; signal?: AbortSignal }) => unknown | Promise<unknown>;
@@ -65,8 +66,9 @@ export class GatewayEvents {
     for (const listener of this.listeners) listener(event);
   }
 
-  publishSettings(extension: string, values: Record<string, unknown>): void {
-    const event: GatewayEvent = { seq: ++this.nextSeq, extension, type: 'settings.change', values };
+  publishSettings(extension: string, values: Record<string, unknown>, workspaceId?: string): void {
+    const event: GatewayEvent = { seq: ++this.nextSeq, extension, type: 'settings.change', values,
+      ...(workspaceId ? { workspaceId } : {}) };
     this.history.push(event);
     if (this.history.length > 1000) this.history.shift();
     for (const listener of this.listeners) listener(event);
@@ -129,12 +131,15 @@ export class NeoKernel {
   private readonly pendingRestarts = new Set<string>();
   private readonly retirements = new Set<Promise<unknown>>();
   private closing = false;
+  private readonly workspaceScope = new AsyncLocalStorage<string | undefined>();
+  private readonly fallbackWorkspace: string | undefined;
   private operation: Promise<unknown> = Promise.resolve();
   private order: string[] = [];
 
   constructor(private readonly db: DatabaseProvider, private readonly services: Readonly<Record<string, unknown>> = {},
-    private readonly dataDir?: string, private readonly pythonExecutable?: string) {
+    private readonly dataDir?: string, private readonly pythonExecutable?: string, options: KernelOptions = {}) {
     this.installs = new ExtensionInstalls(dataDir, pythonExecutable);
+    this.fallbackWorkspace = options.fallbackWorkspace === null ? undefined : options.fallbackWorkspace ?? 'default';
   }
 
   async discover(root: string): Promise<void> {
@@ -173,6 +178,7 @@ export class NeoKernel {
       }
     }
     this.order = resolveOrder(this.discovered);
+    if (this.fallbackWorkspace) await this.migrateLegacySettings(this.fallbackWorkspace);
     for (const id of this.order) {
       this.entries.set(id, { desired: await this.db.getEnabled(id), status: 'disabled' });
     }
@@ -464,118 +470,176 @@ export class NeoKernel {
     return structuredClone(this.active.get(id)?.settingsSchema ?? this.discovered.get(id)?.manifest.settings);
   }
 
-  async getSettings(id: string): Promise<{
+  /** The workspace whose settings apply right now: the request's (runInWorkspace), else the fallback one. */
+  currentWorkspace(): string | undefined {
+    return this.workspaceScope.getStore() ?? this.fallbackWorkspace;
+  }
+
+  /**
+   * Run request work inside one workspace (P1-13). Each active generation loads that workspace's settings first,
+   * so `ctx.inject('settings')` (read synchronously) answers with them. Without a workspace (server mode) work
+   * sees schema defaults and no secrets.
+   */
+  async runInWorkspace<T>(workspaceId: string | undefined, work: () => T | Promise<T>): Promise<T> {
+    if (workspaceId && workspaceId !== this.fallbackWorkspace) {
+      for (const [id, generation] of this.active) {
+        if (generation.settingsSchema && !generation.workspaceSettings.has(workspaceId)) {
+          await this.generationSettings(id, generation, workspaceId);
+        }
+      }
+    }
+    return this.workspaceScope.run(workspaceId, work);
+  }
+
+  /** A generation's snapshot for the current workspace (synchronous; defaults when none is loaded). */
+  private generationValues(generation: ExtensionGeneration): Record<string, unknown> {
+    const workspaceId = this.currentWorkspace();
+    if (workspaceId && workspaceId === this.fallbackWorkspace) return generation.settings;
+    return (workspaceId && generation.workspaceSettings.get(workspaceId)) || this.defaultSettings(generation.settingsSchema);
+  }
+
+  /** A generation's snapshot for one workspace, loaded on first use (a concurrent save's newer copy wins). */
+  private async generationSettings(id: string, generation: ExtensionGeneration, workspaceId: string): Promise<Record<string, unknown>> {
+    if (workspaceId === this.fallbackWorkspace) return generation.settings;
+    const loaded = generation.workspaceSettings.get(workspaceId);
+    if (loaded) return loaded;
+    const values = (await this.readSettings(id, generation.settingsSchema, workspaceId)).values;
+    if (!generation.workspaceSettings.has(workspaceId)) generation.workspaceSettings.set(workspaceId, values);
+    return generation.workspaceSettings.get(workspaceId)!;
+  }
+
+  private defaultSettings(schema?: ExtensionSettingsSchema): Record<string, unknown> {
+    const defaults: Record<string, unknown> = {};
+    for (const [key, prop] of Object.entries(schema?.properties ?? {})) {
+      if (prop.default !== undefined && !prop.secret) defaults[key] = prop.default;
+    }
+    return defaults;
+  }
+
+  private vaultService() {
+    return this.services.vault as {
+      get(scope: SettingsScope, name: string): Promise<string | undefined>;
+      put(scope: SettingsScope, name: string, value: string): Promise<unknown>;
+      delete?(scope: SettingsScope, name: string): Promise<boolean>;
+    } | undefined;
+  }
+
+  /** Secret settings live in the vault, per workspace. */
+  private secretScope(id: string, workspaceId: string): SettingsScope {
+    return { kind: 'engine', workspaceId, subjectId: id };
+  }
+
+  private sanitize(values: Record<string, unknown>, schema?: ExtensionSettingsSchema): Record<string, unknown> {
+    const sanitized = { ...values };
+    for (const [key, property] of Object.entries(schema?.properties ?? {})) {
+      if (property.secret) sanitized[key] = { set: typeof values[key] === 'string' && (values[key] as string).length > 0 };
+    }
+    return sanitized;
+  }
+
+  /** One extension's settings in a workspace (default: the current one), from the active generation's snapshot. */
+  async getSettings(id: string, workspaceId = this.currentWorkspace()): Promise<{
     values: Record<string, unknown>;
     sanitized: Record<string, unknown>;
     schema?: ExtensionSettingsSchema;
   }> {
     const active = this.active.get(id);
-    if (!active) return this.readSettings(id, this.discovered.get(id)?.manifest.settings);
-    const values = structuredClone(active.settings);
+    if (!active) return this.readSettings(id, this.discovered.get(id)?.manifest.settings, workspaceId);
     const schema = structuredClone(active.settingsSchema);
-    const sanitized = { ...values };
-    for (const [key, property] of Object.entries(schema?.properties ?? {})) {
-      if (property.secret) sanitized[key] = { set: typeof values[key] === 'string' && values[key].length > 0 };
-    }
-    return { values, sanitized, schema };
+    const values = structuredClone(workspaceId ? await this.generationSettings(id, active, workspaceId)
+      : this.defaultSettings(active.settingsSchema));
+    return { values, sanitized: this.sanitize(values, schema), schema };
   }
 
-  private async readSettings(id: string, schema?: ExtensionSettingsSchema): Promise<{
+  private async readSettings(id: string, schema: ExtensionSettingsSchema | undefined, workspaceId: string | undefined): Promise<{
     values: Record<string, unknown>; sanitized: Record<string, unknown>; schema?: ExtensionSettingsSchema;
   }> {
-    const defaults: Record<string, unknown> = {};
-    if (schema?.properties) {
-      for (const [key, prop] of Object.entries(schema.properties)) {
-        if (prop.default !== undefined) {
-          defaults[key] = prop.default;
-        }
+    const stored = workspaceId ? (await this.db.getWorkspaceSettings?.(id, workspaceId)) ?? {} : {};
+    const values: Record<string, unknown> = { ...this.defaultSettings(schema), ...stored };
+    const vault = this.vaultService();
+    for (const [key, prop] of Object.entries(schema?.properties ?? {})) {
+      if (!prop.secret) continue;
+      let secret: string | undefined;
+      if (workspaceId && vault) {
+        try { secret = await vault.get(this.secretScope(id, workspaceId), secretNameForKey(key)); } catch {}
       }
+      if (secret !== undefined && secret.length > 0) values[key] = secret; else delete values[key];
     }
-    const dbValues = (await this.db.getExtensionSettings?.(id)) ?? {};
-    const values: Record<string, unknown> = { ...defaults, ...dbValues };
-    const sanitized: Record<string, unknown> = { ...defaults, ...dbValues };
-
-    const vault = this.services.vault as {
-      get(scope: { kind: string; workspaceId: string; subjectId?: string }, name: string): Promise<string | undefined>;
-    } | undefined;
-
-    if (schema?.properties && vault) {
-      const scope = { kind: 'engine', workspaceId: 'default', subjectId: id };
-      for (const [key, prop] of Object.entries(schema.properties)) {
-        if (prop.secret) {
-          const secretName = secretNameForKey(key);
-          let secretVal: string | undefined;
-          try {
-            secretVal = await vault.get(scope, secretName);
-          } catch {}
-          const hasSecret = secretVal !== undefined && secretVal.length > 0;
-          if (hasSecret) {
-            values[key] = secretVal;
-          } else {
-            delete values[key];
-          }
-          sanitized[key] = { set: hasSecret };
-        }
-      }
-    }
-
-    return { values, sanitized, schema: structuredClone(schema) };
+    return { values, sanitized: this.sanitize(values, schema), schema: structuredClone(schema) };
   }
 
-  saveSettings(id: string, incomingValues: Record<string, unknown>): Promise<Record<string, unknown>> {
+  saveSettings(id: string, incomingValues: Record<string, unknown>, workspaceId = this.currentWorkspace()): Promise<Record<string, unknown>> {
     // Serialize configuration with activation/upgrade so a health-gated candidate
     // cannot capture stale settings while a save mutates the serving generation.
     const input = structuredClone(incomingValues);
-    const work = this.operation.then(() => this.writeSettings(id, input));
+    const work = this.operation.then(() => this.writeSettings(id, input, workspaceId));
     this.operation = work.catch(() => {});
     return work;
   }
 
-  private async writeSettings(id: string, incomingValues: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const discovered = this.discovered.get(id);
-    const schema = discovered?.manifest.settings;
-    const vault = this.services.vault as {
-      get(scope: { kind: string; workspaceId: string; subjectId?: string }, name: string): Promise<string | undefined>;
-      put(scope: { kind: string; workspaceId: string; subjectId?: string }, name: string, value: string): Promise<unknown>;
-    } | undefined;
-    const scope = { kind: 'engine', workspaceId: 'default', subjectId: id };
-
-    const currentDb = (await this.db.getExtensionSettings?.(id)) ?? {};
-    const updatedDb: Record<string, unknown> = { ...currentDb };
-    const secretUpdates: Record<string, string> = {};
-
-    for (const [key, val] of Object.entries(incomingValues)) {
-      const isSecret = Boolean(schema?.properties?.[key]?.secret);
-      if (isSecret && vault) {
-        if (typeof val === 'string' && val.length > 0) {
-          secretUpdates[key] = val;
-        }
-      } else if (!isSecret) {
-        updatedDb[key] = val;
-      }
+  /**
+   * Validate values against the serving schema (wrong types such as the string "false" are refused with a
+   * SettingsValidationError), store them for one workspace, and refresh only the active generation's snapshot:
+   * a draining generation keeps the settings it started with. null clears a value; '' leaves a secret as is.
+   */
+  private async writeSettings(id: string, incomingValues: Record<string, unknown>, workspaceId: string | undefined): Promise<Record<string, unknown>> {
+    if (!workspaceId) throw new Error('Settings are saved for a workspace');
+    const active = this.active.get(id);
+    const schema = active?.settingsSchema ?? this.discovered.get(id)?.manifest.settings;
+    const accepted = coerceSettingValues(id, schema, incomingValues);
+    const vault = this.vaultService();
+    const stored: Record<string, unknown> = { ...((await this.db.getWorkspaceSettings?.(id, workspaceId)) ?? {}) };
+    const secretWrites: [string, string | null][] = [];
+    for (const [key, value] of Object.entries(accepted)) {
+      if (schema?.properties?.[key]?.secret) {
+        if (!vault) throw new Error('Secret settings need the vault');
+        secretWrites.push([key, value as string | null]);
+      } else if (value === null) delete stored[key];
+      else stored[key] = value;
     }
-
-    if (this.db.setExtensionSettings) {
-      await this.db.setExtensionSettings(id, updatedDb);
+    await this.db.setWorkspaceSettings?.(id, workspaceId, stored);
+    for (const [key, value] of secretWrites) {
+      const scope = this.secretScope(id, workspaceId);
+      if (value === null) await vault!.delete?.(scope, secretNameForKey(key));
+      else await vault!.put(scope, secretNameForKey(key), value);
     }
-
-    for (const [key, secretVal] of Object.entries(secretUpdates)) {
-      const secretName = secretNameForKey(key);
-      await vault!.put(scope, secretName, secretVal);
+    const { values, sanitized } = await this.readSettings(id, schema, workspaceId);
+    if (active) {
+      const target = workspaceId === this.fallbackWorkspace ? active.settings : active.workspaceSettings.get(workspaceId);
+      if (target) {
+        for (const key of Object.keys(target)) if (!(key in values)) delete target[key];
+        Object.assign(target, values);
+      } else active.workspaceSettings.set(workspaceId, values);
     }
-
-    const { values, sanitized } = await this.readSettings(id, schema);
-
-    const runningSettings = this.active.get(id)?.settings;
-    if (runningSettings) {
-      for (const key of Object.keys(runningSettings)) {
-        if (!(key in values)) delete runningSettings[key];
-      }
-      Object.assign(runningSettings, values);
-    }
-
-    this.events.publishSettings(id, sanitized);
+    this.events.publishSettings(id, sanitized, workspaceId);
     return sanitized;
+  }
+
+  /**
+   * Upgrade from before P1-13: settings stored without a workspace (the legacy table, and secrets in the vault's
+   * 'default' scope) become the fallback workspace's (desktop: its one workspace). Values already stored per
+   * workspace win; nothing is removed before it is copied.
+   */
+  private async migrateLegacySettings(workspaceId: string): Promise<void> {
+    for (const legacy of (await this.db.listLegacyExtensionSettings?.()) ?? []) {
+      const current = await this.db.getWorkspaceSettings?.(legacy.id, workspaceId);
+      await this.db.setWorkspaceSettings?.(legacy.id, workspaceId, { ...legacy.values, ...(current ?? {}) });
+      await this.db.deleteLegacyExtensionSettings?.(legacy.id);
+    }
+    const vault = this.vaultService();
+    if (!vault || workspaceId === 'default') return;
+    for (const [id, { manifest }] of this.discovered) {
+      for (const [key, prop] of Object.entries(manifest.settings?.properties ?? {})) {
+        if (!prop.secret) continue;
+        const name = secretNameForKey(key);
+        const from = this.secretScope(id, 'default');
+        const old = await vault.get(from, name);
+        if (old === undefined) continue;
+        const to = this.secretScope(id, workspaceId);
+        if ((await vault.get(to, name)) === undefined) await vault.put(to, name, old);
+        await vault.delete?.(from, name);
+      }
+    }
   }
 
   private async start(id: string, located = this.discovered.get(id)!, generation = new ExtensionGeneration(id), staged = false): Promise<ExtensionGeneration> {
@@ -585,7 +649,22 @@ export class NeoKernel {
     const dataDir = dataRoot && join(dataRoot, id);
     if (managed && dataDir) await mkdir(dataDir, { recursive: true });
     generation.settingsSchema = structuredClone(manifest.settings);
-    Object.assign(generation.settings, structuredClone((await this.readSettings(id, manifest.settings)).values));
+    // The fallback workspace's snapshot (server mode: none, so defaults only); other workspaces load per request.
+    Object.assign(generation.settings, structuredClone((await this.readSettings(id, manifest.settings, this.fallbackWorkspace)).values));
+    // `settings` keeps its plain-object shape for extensions but reads the current workspace's snapshot.
+    const settingsView = new Proxy({} as Record<string, unknown>, {
+      get: (_target, key) => typeof key === 'string' ? this.generationValues(generation)[key] : undefined,
+      has: (_target, key) => typeof key === 'string' && key in this.generationValues(generation),
+      ownKeys: () => Reflect.ownKeys(this.generationValues(generation)),
+      getOwnPropertyDescriptor: (_target, key) => {
+        const values = this.generationValues(generation);
+        return typeof key === 'string' && key in values ? { value: values[key], enumerable: true, configurable: true, writable: false } : undefined;
+      },
+      set: () => false,
+      deleteProperty: () => false,
+    });
+    // Background work names the workspace it serves.
+    const settingsFor = (workspaceId: string) => this.generationSettings(id, generation, workspaceId).then((values) => structuredClone(values));
     generation.assertMutable();
     if (manifest.runtime.type === 'cordis') {
       const scope = new Context();
@@ -607,7 +686,8 @@ export class NeoKernel {
               signal: generation.abort.signal,
               provide: (name, value) => generation.provide(name, value),
               inject: <T>(name: string) => {
-                if (name === 'settings') return generation.settings as T;
+                if (name === 'settings') return settingsView as T;
+                if (name === 'settingsFor') return settingsFor as T;
                 if (managed && name === 'dataDir') return dataDir as T | undefined;
                 if (generation.services.has(name)) return generation.services.get(name) as T;
                 const provider = this.snapshot.serviceOwners.get(name);
@@ -667,6 +747,17 @@ export class NeoKernel {
     }
     await this.db.close();
   }
+}
+
+type SettingsScope = { kind: 'engine'; workspaceId: string; subjectId: string };
+
+export interface KernelOptions {
+  /**
+   * The workspace whose settings apply outside a request (P1-13). Default 'default' (single tenant, as before);
+   * desktop passes its one workspace (legacy settings move into it); server mode passes null: work outside a
+   * request sees schema defaults and no secrets.
+   */
+  fallbackWorkspace?: string | null;
 }
 
 async function deadline<T>(operation: Promise<T>, ms: number, message: string): Promise<T> {

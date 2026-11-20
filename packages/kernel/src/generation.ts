@@ -5,6 +5,11 @@ import type { RouteHandler } from './index.js';
 export class ExtensionGeneration {
   /** Values and schema belong to this activation, including while staged/draining. */
   readonly settings: Record<string, unknown> = {};
+  /**
+   * P1-13: this generation's snapshots for other workspaces (`settings` holds the kernel's fallback workspace).
+   * Loaded when a request in that workspace starts; a save updates only the active generation's.
+   */
+  readonly workspaceSettings = new Map<string, Record<string, unknown>>();
   settingsSchema?: ExtensionSettingsSchema;
   readonly routes = new Map<string, RouteHandler>();
   readonly contributions = new Map<string, { id: string; [key: string]: unknown }>();

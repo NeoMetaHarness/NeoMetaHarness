@@ -49,7 +49,9 @@ export const gatewayEventSchema = z.discriminatedUnion('type', [
     providerId: z.string(), engine: z.string(), targetId: z.string(),
     action: z.enum(['click', 'move', 'type', 'capture', 'key', 'scroll', 'navigate', 'status']),
     outcome: z.enum(['allowed', 'denied', 'failed']) }),
-  z.object({ seq: z.number().int(), type: z.literal('settings.change'), extension: z.string(), values: z.record(z.string(), z.unknown()) }),
+  // workspaceId (P1-13): whose settings changed; server-mode subscribers only receive their own workspace's.
+  z.object({ seq: z.number().int(), type: z.literal('settings.change'), extension: z.string(), values: z.record(z.string(), z.unknown()),
+    workspaceId: z.string().optional() }),
 ]);
 
 export type GatewayEvent = z.infer<typeof gatewayEventSchema>;

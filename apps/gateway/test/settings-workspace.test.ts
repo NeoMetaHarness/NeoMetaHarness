@@ -1,0 +1,180 @@
+// P1-13: extension settings and secrets are per workspace. Server mode keeps two workspaces apart (values,
+// secrets, what an extension sees while serving each), saveSettings refuses wrong types, and a desktop upgrade
+// moves the pre-P1-13 settings into the desktop workspace without loss.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
+import { neoContract } from '@neometaharness/contracts';
+import { startGateway } from '../src/server.js';
+
+const json = (body: unknown, headers: Record<string, string> = {}) => ({
+  method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
+});
+const EXT = 'p113-settings';
+const SECRET_NAME = 'SEC_APIKEY';
+
+async function fixture(root: string) {
+  const extensions = join(root, 'extensions');
+  await mkdir(join(extensions, EXT, 'src'), { recursive: true });
+  await writeFile(join(extensions, 'package.json'), '{"type":"module"}');
+  await writeFile(join(extensions, EXT, 'neo.extension.json'), JSON.stringify({ id: EXT, version: '0.1.0',
+    displayName: 'P1-13 settings fixture', runtime: { type: 'cordis', entry: './src/index.mjs' },
+    settings: { type: 'object', properties: {
+      greeting: { type: 'string', default: 'Hello' },
+      enabled: { type: 'boolean', default: true },
+      retries: { type: 'integer', default: 3, minimum: 0, maximum: 10 },
+      apiKey: { type: 'string', secret: true },
+    } } }));
+  // The extension API is unchanged: it reads ctx.inject('settings') synchronously, and may use settingsFor(ws)
+  // for background work.
+  await writeFile(join(extensions, EXT, 'src', 'index.mjs'), `
+export default { activate(ctx) {
+  const settings = ctx.inject('settings');
+  const settingsFor = ctx.inject('settingsFor');
+  ctx.health(() => ({ ok: true }));
+  ctx.route('hello', () => ({ greeting: settings.greeting, enabled: settings.enabled, retries: settings.retries,
+    apiKey: settings.apiKey ?? null, keys: Object.keys(settings).sort() }));
+  ctx.route('background', async ({ body }) => { const values = await settingsFor(body.workspace); return { greeting: values.greeting, apiKey: values.apiKey ?? null }; });
+} };`);
+  return extensions;
+}
+
+test('P1-13 server: two workspaces keep their own settings and secrets; wrong types are refused', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'nmh-p113-server-'));
+  const gateway = await startGateway({ databaseFile: join(root, 'state/gateway.db'), dataDir: join(root, 'data'),
+    extensionsDir: await fixture(root), mode: 'server', signup: 'open' });
+  const base = `http://127.0.0.1:${gateway.port}`;
+  try {
+    const signUp = async (email: string) => {
+      const response = await fetch(`${base}/auth/sign-up/email`, json({ email, password: 'Member!Pass123', name: 'x' }));
+      assert.equal(response.status, 200, email);
+      return (await response.json() as { token: string }).token;
+    };
+    const as = (token: string) => ({ authorization: `Bearer ${token}` });
+    // Only the instance owner may create workspaces; Finance gets its own admin.
+    const corpOwner = await signUp('owner@corp.test');
+    const corp = await (await fetch(`${base}/auth/organization/create`, json({ name: 'Corp', slug: 'corp' }, as(corpOwner)))).json() as { id: string };
+    const finance = await (await fetch(`${base}/auth/organization/create`,
+      json({ name: 'Finance', slug: 'finance', keepCurrentActiveOrganization: true }, as(corpOwner)))).json() as { id: string };
+    const financeOwner = await signUp('admin@finance.test');
+    const invite = await (await fetch(`${base}/auth/organization/invite-member`,
+      json({ organizationId: finance.id, email: 'admin@finance.test', role: 'admin' }, as(corpOwner)))).json() as { id: string };
+    assert.equal((await fetch(`${base}/auth/organization/accept-invitation`, json({ invitationId: invite.id }, as(financeOwner)))).status, 200);
+    assert.equal((await fetch(`${base}/extensions/enable`, json({ json: { id: EXT } }, as(corpOwner)))).status, 200);
+    const rpc = async (token: string, path: string, input: unknown) => {
+      const response = await fetch(`${base}/${path}`, json({ json: input }, as(token)));
+      return { status: response.status, body: response.ok ? (await response.json() as { json: any }).json : undefined };
+    };
+    const hello = async (token: string) => (await fetch(`${base}/x/${EXT}/hello`, { headers: as(token) })).json() as Promise<any>;
+
+    assert.equal((await rpc(corpOwner, 'settings/set', { extension: EXT, values: { greeting: 'Hello Corp', retries: 5, apiKey: 'corp-key' } })).status, 200);
+    assert.equal((await rpc(financeOwner, 'settings/set', { extension: EXT, values: { greeting: 'Hello Finance', enabled: false, apiKey: 'finance-key' } })).status, 200);
+
+    const corpSettings = (await rpc(corpOwner, 'settings/get', { extension: EXT })).body.values;
+    const financeSettings = (await rpc(financeOwner, 'settings/get', { extension: EXT })).body.values;
+    assert.deepEqual(corpSettings, { greeting: 'Hello Corp', enabled: true, retries: 5, apiKey: { set: true } });
+    assert.deepEqual(financeSettings, { greeting: 'Hello Finance', enabled: false, retries: 3, apiKey: { set: true } });
+
+    // The running extension sees the settings of the workspace whose request it serves.
+    assert.deepEqual(await hello(corpOwner), { greeting: 'Hello Corp', enabled: true, retries: 5, apiKey: 'corp-key',
+      keys: ['apiKey', 'enabled', 'greeting', 'retries'] });
+    assert.deepEqual(await hello(financeOwner), { greeting: 'Hello Finance', enabled: false, retries: 3, apiKey: 'finance-key',
+      keys: ['apiKey', 'enabled', 'greeting', 'retries'] });
+    // Secrets are stored per workspace in the vault.
+    assert.equal(await gateway.vault.get({ kind: 'engine', workspaceId: corp.id, subjectId: EXT }, SECRET_NAME), 'corp-key');
+    assert.equal(await gateway.vault.get({ kind: 'engine', workspaceId: finance.id, subjectId: EXT }, SECRET_NAME), 'finance-key');
+    assert.equal(await gateway.vault.get({ kind: 'engine', workspaceId: 'default', subjectId: EXT }, SECRET_NAME), undefined);
+    // Background work names its workspace; work outside any workspace sees defaults and no secret (fails closed).
+    assert.deepEqual(await gateway.kernel.invokeRoute(`/x/${EXT}/background`, 'RPC', { workspace: finance.id }),
+      { greeting: 'Hello Finance', apiKey: 'finance-key' });
+    const outside = await gateway.kernel.invokeRoute(`/x/${EXT}/hello`, 'GET') as any;
+    assert.deepEqual([outside.greeting, outside.apiKey], ['Hello', null]);
+    // settings.change events carry their workspace; a server-mode subscriber hears only its own.
+    const heard = async (token: string) => {
+      const client = createORPCClient<ContractRouterClient<typeof neoContract>>(new RPCLink({
+        url: base, headers: () => as(token) }));
+      const controller = new AbortController();
+      const events: any[] = [];
+      setTimeout(() => controller.abort(), 1500);
+      try {
+        for await (const event of await client.events.subscribe({ since: 0 }, { signal: controller.signal })) {
+          if (event.type === 'settings.change') events.push(event);
+        }
+      } catch (error) { if (!controller.signal.aborted) throw error; }
+      return events.map((event) => [event.workspaceId, event.values.greeting]);
+    };
+    assert.deepEqual(await heard(corpOwner), [[corp.id, 'Hello Corp']]);
+    assert.deepEqual(await heard(financeOwner), [[finance.id, 'Hello Finance']]);
+    console.log('P1-13_WORKSPACES PASS two workspaces keep separate settings and secrets, in the API and inside the extension');
+
+    // Validation against the manifest schema: wrong types are refused, nothing is stored.
+    for (const values of [{ enabled: 'false' }, { retries: 'abc' }, { retries: 2.5 }, { retries: 99 }, { greeting: 42 },
+      { unknownKey: 'x' }, { apiKey: 123 }]) {
+      assert.equal((await rpc(corpOwner, 'settings/set', { extension: EXT, values })).status, 400, JSON.stringify(values));
+    }
+    assert.deepEqual((await rpc(corpOwner, 'settings/get', { extension: EXT })).body.values, corpSettings, 'refused writes change nothing');
+    const coerced = await rpc(corpOwner, 'settings/set', { extension: EXT, values: { retries: '7', enabled: false } });
+    assert.deepEqual([coerced.body.values.retries, coerced.body.values.enabled], [7, false], 'a numeric string is coerced; a real boolean is kept');
+    const cleared = await rpc(corpOwner, 'settings/set', { extension: EXT, values: { greeting: null, apiKey: null } });
+    assert.deepEqual([cleared.body.values.greeting, cleared.body.values.apiKey], ['Hello', { set: false }], 'null restores the default and removes a secret');
+    assert.equal((await hello(financeOwner)).apiKey, 'finance-key', 'clearing Corp leaves Finance alone');
+    console.log('P1-13_VALIDATION PASS "false", non-numbers, out-of-range and unknown keys are refused; null clears');
+  } finally {
+    await gateway.close();
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('P1-13 desktop: pre-P1-13 settings move into the desktop workspace without loss, and behave as before', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'nmh-p113-desktop-'));
+  const extensionsDir = await fixture(root);
+  const options = { databaseFile: join(root, 'state/gateway.db'), dataDir: join(root, 'data'), extensionsDir, mode: 'desktop' as const };
+  try {
+    // An install from before P1-13: workspace-less settings in the legacy table and the 'default' vault scope.
+    const before = await startGateway(options);
+    await (before.db as any).setExtensionSettings(EXT, { greeting: 'Legacy hello', retries: 4 });
+    await before.vault.put({ kind: 'engine', workspaceId: 'default', subjectId: EXT }, SECRET_NAME, 'legacy-key');
+    await before.close();
+
+    const gateway = await startGateway(options);
+    try {
+      const token = gateway.desktopToken!;
+      const base = `http://127.0.0.1:${gateway.port}`;
+      const rpc = async (path: string, input: unknown) => {
+        const response = await fetch(`${base}/${path}`, json({ json: input }, { authorization: `Bearer ${token}` }));
+        return { status: response.status, body: response.ok ? (await response.json() as { json: any }).json : undefined };
+      };
+      assert.equal((await rpc('extensions/enable', { id: EXT })).status, 200);
+      assert.deepEqual((await rpc('settings/get', { extension: EXT })).body.values,
+        { greeting: 'Legacy hello', enabled: true, retries: 4, apiKey: { set: true } }, 'legacy values and secret survive');
+      const hello = async () => (await fetch(`${base}/x/${EXT}/hello`, { headers: { authorization: `Bearer ${token}` } })).json() as Promise<any>;
+      assert.equal((await hello()).apiKey, 'legacy-key');
+      assert.deepEqual(await (gateway.db as any).listLegacyExtensionSettings(), [], 'the legacy rows were moved');
+      assert.equal(await gateway.vault.get({ kind: 'engine', workspaceId: 'default', subjectId: EXT }, SECRET_NAME), undefined);
+      // Desktop behaves as before: a change shows up in requests and in background work alike.
+      assert.equal((await rpc('settings/set', { extension: EXT, values: { greeting: 'Desktop hello' } })).status, 200);
+      assert.equal((await hello()).greeting, 'Desktop hello');
+      assert.equal(((await gateway.kernel.invokeRoute(`/x/${EXT}/hello`, 'GET')) as any).greeting, 'Desktop hello',
+        'outside a request, desktop still reads its one workspace');
+      assert.equal((await rpc('settings/set', { extension: EXT, values: { enabled: 'false' } })).status, 400, '"false" is refused on desktop too');
+    } finally {
+      await gateway.close();
+    }
+    // A second start finds nothing left to migrate and keeps the values.
+    const again = await startGateway(options);
+    try {
+      assert.equal((await again.kernel.getSettings(EXT)).values.greeting, 'Desktop hello');
+      assert.equal((await again.kernel.getSettings(EXT)).values.apiKey, 'legacy-key');
+    } finally {
+      await again.close();
+    }
+    console.log('P1-13_DESKTOP PASS legacy settings and secrets migrate once into the desktop workspace; desktop reads are unchanged');
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});

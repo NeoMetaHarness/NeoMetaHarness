@@ -33,7 +33,7 @@ import {
   type VaultScope,
 } from '@neometaharness/vault';
 import { SqliteDatabaseProvider } from '@neometaharness/db';
-import { NeoKernel, SkillsBridge } from '@neometaharness/kernel';
+import { NeoKernel, SettingsValidationError, SkillsBridge } from '@neometaharness/kernel';
 import { ComputerRegistry } from '@neometaharness/computers';
 import {
   createNeoAuth,
@@ -209,10 +209,13 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
   let desktopToken: string | undefined;
   let desktopOwnerId: string | undefined;
+  // Desktop is one workspace: its settings apply everywhere, and pre-P1-13 settings move into it.
+  let desktopWorkspace: string | undefined;
   if (mode === 'desktop') {
     const desktop = await bootstrapDesktopAuth(auth, { dataDir });
     desktopToken = desktop.token;
     desktopOwnerId = desktop.user.id;
+    desktopWorkspace = desktop.workspace.id;
   }
   const isServerDeploymentOwner = deploymentOwnerLookup(db.sqlite);
   const resolveGatewayAuth = async (headers: Parameters<typeof resolveAuthContext>[1]): Promise<GatewayAuthContext> => {
@@ -321,7 +324,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     skillsBridge,
     extensionDataDir,
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
-  }, dataDir, process.env.NMH_EXTENSION_PYTHON);
+  }, dataDir, process.env.NMH_EXTENSION_PYTHON, { fallbackWorkspace: mode === 'desktop' ? desktopWorkspace : null });
 
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
     const procedure = `vault.${operation}`;
@@ -368,7 +371,13 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   for (const extension of kernel.list()) {
     if (extension.version) backupStorage.versions[extension.id] = extension.version;
   }
-  const os = implement(neoContract).$context<GatewayAuthContext>().use(policyMiddleware as any);
+  // P1-13: every procedure runs inside the caller's workspace, so extension settings resolve per workspace
+  // (desktop: always its one workspace; server: the caller's, or none, which yields schema defaults only).
+  const settingsWorkspace = (context: GatewayAuthContext | null | undefined): string | undefined =>
+    mode === 'desktop' ? desktopWorkspace : context?.workspaceId ?? undefined;
+  const os = implement(neoContract).$context<GatewayAuthContext>().use(policyMiddleware as any)
+    .use((async ({ context, next }: { context: GatewayAuthContext; next: () => Promise<unknown> }) =>
+      kernel.runInWorkspace(settingsWorkspace(context), () => next())) as any);
 
   const invokeT3 = async (route: string, body: unknown) => {
     const path = `/x/engine-t3/${route}`;
@@ -1252,7 +1261,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         if (!kernel.hasExtension(input.extension)) {
           throw new ORPCError('NOT_FOUND', { message: `Extension ${input.extension} not found` });
         }
-        const { sanitized, schema } = await kernel.getSettings(input.extension);
+        const { sanitized, schema } = await kernel.getSettings(input.extension, settingsWorkspace(context));
         return {
           extension: input.extension,
           schema,
@@ -1265,8 +1274,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         if (!kernel.hasExtension(input.extension)) {
           throw new ORPCError('NOT_FOUND', { message: `Extension ${input.extension} not found` });
         }
-        const rawValues = input.values;
-        const sanitized = await kernel.saveSettings(input.extension, rawValues);
+        const workspace = settingsWorkspace(context);
+        if (!workspace) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
+        let sanitized: Record<string, unknown>;
+        try {
+          sanitized = await kernel.saveSettings(input.extension, input.values, workspace);
+        } catch (error) {
+          if (error instanceof SettingsValidationError) throw new ORPCError('BAD_REQUEST', { message: error.message });
+          throw error;
+        }
         return {
           extension: input.extension,
           values: sanitized,
@@ -1363,7 +1379,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     events: {
       subscribe: os.events.subscribe.handler(async function* ({ input, signal, context }) {
         authorize('events.subscribe', context);
-        yield* kernel.events.subscribe(input.since, signal);
+        // Settings changes are per workspace (P1-13): a server-mode subscriber only hears its own workspace's.
+        for await (const event of kernel.events.subscribe(input.since, signal)) {
+          if (event.type === 'settings.change' && mode !== 'desktop' && event.workspaceId !== context.workspaceId) continue;
+          yield event;
+        }
       }),
     },
   };
@@ -1614,7 +1634,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             return;
           }
         }
-        const matched = await httpRPC.handle(req, res, { context: context as GatewayAuthContext });
+        const matched = await kernel.runInWorkspace(settingsWorkspace(context as GatewayAuthContext),
+          () => httpRPC.handle(req, res, { context: context as GatewayAuthContext }));
         if (!matched.matched) res.writeHead(404).end();
         return;
       }
@@ -1631,7 +1652,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           res.writeHead(405).end();
           return;
         }
-        const result = await kernel.invokeRoute(path, 'GET');
+        const result = await kernel.runInWorkspace(settingsWorkspace(context as GatewayAuthContext),
+          () => kernel.invokeRoute(path, 'GET'));
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify(result));
         return;
       }
@@ -1646,7 +1668,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      const matched = await httpRPC.handle(req, res, { context: context as GatewayAuthContext });
+      const matched = await kernel.runInWorkspace(settingsWorkspace(context as GatewayAuthContext),
+        () => httpRPC.handle(req, res, { context: context as GatewayAuthContext }));
       if (!matched.matched) res.writeHead(404).end();
     } catch (error) {
       if (!res.headersSent) {
