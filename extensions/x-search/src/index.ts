@@ -1,4 +1,5 @@
-import { assertSafeProviderUrl, createSafeProviderClient, defineExtension } from '@neometaharness/kernel';
+import { defineExtension } from '@neometaharness/kernel';
+import { assertSafeProviderUrl, createSafeProviderClient } from '@neometaharness/egress';
 import { xSearchInput, type NeoSearchService, type XSearchInput, type XSearchOutput } from '@neometaharness/contracts';
 
 export interface SearchHttpClient {

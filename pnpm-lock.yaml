@@ -1057,6 +1057,10 @@ importers:
         version: 5.9.3
 
   packages/egress:
+    dependencies:
+      undici:
+        specifier: 8.11.2
+        version: 8.11.2
     devDependencies:
       '@types/node':
         specifier: 22.18.13
@@ -1088,9 +1092,6 @@ importers:
       semver:
         specifier: 7.7.3
         version: 7.7.3
-      undici:
-        specifier: 8.11.2
-        version: 8.11.2
     devDependencies:
       '@orpc/client':
         specifier: 1.16.2
