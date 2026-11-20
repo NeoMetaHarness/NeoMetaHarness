@@ -209,9 +209,9 @@
     },
     "P1-10": {
       "title": "Blue/green extension upgrade in the kernel",
-      "status": "in_progress",
+      "status": "review",
       "owner": "sol61",
-      "note": "Returned 2026-11-20: makes test:p6-4 flaky (GitHub 429 poll resolves instead of rejecting; 3/4 fail vs main 3/3 pass)."
+      "evidence": "Windows at a0ef5da: test:p6-9, test:p4-3 and test:p1-5 each passed 3 consecutive runs. Replacement gateway startup was 19.7, 20.1 and 15.5 seconds, with clean SQLite cleanup in all runs. A forced P6-9 deadline exited 1 with a timeout diagnostic."
     },
     "P1-11": {
       "title": "Desktop auto-updater (Tauri updater): real signing key and update flow",
