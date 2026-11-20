@@ -8,6 +8,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
 import { gatewayToken, gatewayUrl } from './config';
+import { checkForUpdates } from './updater';
 import './shell.css';
 
 const Extensions = lazy(() => import('./pages/Extensions'));
@@ -69,6 +70,11 @@ function NeoApp() {
   const [path, setPath] = useState(activePath);
   const [shellError, setShellError] = useState('');
   const [setupIncomplete, setSetupIncomplete] = useState(false);
+  useEffect(() => {
+    if (inTauri) {
+      void checkForUpdates();
+    }
+  }, []);
   useEffect(() => {
     const onPop = () => setPath(activePath());
     window.addEventListener('popstate', onPop);

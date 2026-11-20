@@ -4,7 +4,8 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type ExtensionStatus, type GatewayEvent } from '@neometaharness/contracts';
-import { Button, Switch } from '@neometaharness/ui';
+import { Badge, Button, Switch } from '@neometaharness/ui';
+import { checkForUpdates, getUpdateState, installUpdate, subscribeUpdateState, type UpdateInfo } from '../updater';
 import { gatewayUrl, gatewayToken } from '../config';
 import './settings.css';
 
@@ -306,20 +307,14 @@ function ExtensionSchemaForm({
 export default function Settings({ onOpen }: { onOpen: (path: '/settings/channels' | '/settings/models' | '/settings/metrics' | '/onboarding') => void }) {
   const [extensions, setExtensions] = useState<ExtensionStatus[]>([]);
   const latest = useRef(0);
-  const [updateStatus, setUpdateStatus] = useState('');
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo>(getUpdateState);
   const native = (window as unknown as { __TAURI_INTERNALS__?: {
     invoke: (name: string) => Promise<string | null>;
   } }).__TAURI_INTERNALS__;
 
-  async function checkUpdates() {
-    setUpdateStatus('Checking for updates…');
-    try {
-      const version = await native?.invoke('check_for_updates');
-      setUpdateStatus(version ? `Version ${version} is available` : 'No newer version found');
-    } catch (error) {
-      setUpdateStatus(String(error));
-    }
-  }
+  useEffect(() => {
+    return subscribeUpdateState(setUpdateInfo);
+  }, []);
 
   const loadExtensions = () => {
     http.extensions.list().then((list) => {
@@ -421,10 +416,22 @@ export default function Settings({ onOpen }: { onOpen: (path: '/settings/channel
       {native && (
         <section aria-label="Desktop updates">
           <h2>Desktop updates</h2>
-          <Button label="Check for updates" data-testid="settings-update-check" onClick={() => void checkUpdates()}>
-            Check for updates
-          </Button>
-          {updateStatus && <p role="status">{updateStatus}</p>}
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <Button label="Check for updates" data-testid="settings-update-check" onClick={() => void checkForUpdates()}>
+              Check for updates
+            </Button>
+            {updateInfo.available && (
+              <Button label="Install and restart" data-testid="settings-update-install" onClick={() => void installUpdate()}>
+                Install and restart
+              </Button>
+            )}
+          </div>
+          {updateInfo.available && (
+            <div style={{ margin: '0.5rem 0' }} data-testid="settings-update-available">
+              <Badge variant="success" label={`Update available: ${updateInfo.version}`} />
+            </div>
+          )}
+          {updateInfo.status && <p role="status">{updateInfo.status}</p>}
         </section>
       )}
 

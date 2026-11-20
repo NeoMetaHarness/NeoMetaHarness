@@ -3,6 +3,7 @@ export { SideNavHeading } from '@astryxdesign/core/SideNav';
 export { Markdown } from '@astryxdesign/core/Markdown';
 export { Switch } from '@astryxdesign/core/Switch';
 export { Button } from '@astryxdesign/core/Button';
+export { Badge, type BadgeProps } from '@astryxdesign/core/Badge';
 export { StreamView, type StreamViewHandle } from './StreamView';
 
 export { ChatLayout, ChatMessageList, ChatMessage, ChatMessageBubble, ChatComposer } from '@astryxdesign/core/Chat';

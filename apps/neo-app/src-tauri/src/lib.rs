@@ -36,16 +36,43 @@ fn forward_deep_link(app: &tauri::AppHandle, url: &str) {
 
 #[tauri::command]
 async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let endpoint = std::env::var("NMH_UPDATER_ENDPOINT")
-        .map_err(|_| "Updater endpoint is not configured".to_string())?;
-    let public_key = std::env::var("NMH_UPDATER_PUBLIC_KEY")
-        .map_err(|_| "Updater public key is not configured".to_string())?;
-    let endpoint = endpoint.parse().map_err(|error| format!("Invalid updater URL: {error}"))?;
-    let updater = app.updater_builder()
-        .endpoints(vec![endpoint]).map_err(|error| error.to_string())?
-        .pubkey(public_key).build().map_err(|error| error.to_string())?;
+    let mut builder = app.updater_builder();
+    if let Ok(endpoint) = std::env::var("NMH_UPDATER_ENDPOINT") {
+        if !endpoint.trim().is_empty() {
+            let endpoint = endpoint.parse().map_err(|error| format!("Invalid updater URL: {error}"))?;
+            builder = builder.endpoints(vec![endpoint]).map_err(|error| error.to_string())?;
+        }
+    }
+    if let Ok(public_key) = std::env::var("NMH_UPDATER_PUBLIC_KEY") {
+        if !public_key.trim().is_empty() {
+            builder = builder.pubkey(public_key);
+        }
+    }
+    let updater = builder.build().map_err(|error| error.to_string())?;
     let update = updater.check().await.map_err(|error| error.to_string())?;
     Ok(update.map(|candidate| candidate.version))
+}
+
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let mut builder = app.updater_builder();
+    if let Ok(endpoint) = std::env::var("NMH_UPDATER_ENDPOINT") {
+        if !endpoint.trim().is_empty() {
+            let endpoint = endpoint.parse().map_err(|error| format!("Invalid updater URL: {error}"))?;
+            builder = builder.endpoints(vec![endpoint]).map_err(|error| error.to_string())?;
+        }
+    }
+    if let Ok(public_key) = std::env::var("NMH_UPDATER_PUBLIC_KEY") {
+        if !public_key.trim().is_empty() {
+            builder = builder.pubkey(public_key);
+        }
+    }
+    let updater = builder.build().map_err(|error| error.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|error| error.to_string())? {
+        update.download_and_install(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
+        app.restart();
+    }
+    Ok(())
 }
 
 struct GatewaySidecar {
@@ -143,13 +170,25 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![check_for_updates])
+        .invoke_handler(tauri::generate_handler![check_for_updates, install_update])
         .setup(|app| {
             let data_dir = std::env::var_os("NMH_DESKTOP_DATA_DIR")
                 .map(PathBuf::from)
                 .map(Ok)
                 .unwrap_or_else(|| app.path().app_data_dir())?;
             let (sidecar, port) = GatewaySidecar::launch(app.handle(), data_dir.clone())?;
+            let app_handle_for_update = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(Some(version)) = check_for_updates(app_handle_for_update.clone()).await {
+                    if let Some(window) = app_handle_for_update.get_webview_window("main") {
+                        if let Ok(payload) = serde_json::to_string(&version) {
+                            let _ = window.eval(&format!(
+                                "window.dispatchEvent(new CustomEvent('neo:update-available', {{detail: {payload}}}))"
+                            ));
+                        }
+                    }
+                }
+            });
             let gateway_pid = sidecar.child.id();
             app.manage(GatewayState(Mutex::new(Some(sidecar))));
 

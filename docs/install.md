@@ -28,9 +28,62 @@ The bundle-only override runs `installer:prepare` from `beforeBuildCommand`, pre
 
 ### Updates and signing
 
-The updater endpoint is configured at `https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json`. Replace `REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY` in `apps/neo-app/src-tauri/tauri.conf.json` with the real **public** minisign key before distributing signed update manifests. Publish the matching `latest.json` and platform-specific signatures/assets in a release. Until the key and release feed are published, updater delivery remains unconfigured for end users.
+The updater endpoint is configured at `https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json`.
 
-Development bundles set `createUpdaterArtifacts` to `false`. For a signed release, set `TAURI_SIGNING_PRIVATE_KEY` and, if needed, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` **in the release environment**, enable updater artifacts using a temporary Tauri config override, and build for each platform. Keep signing keys, passwords, generated payloads, and private certificates out of the repository. `pnpm installer:check` validates the repository configuration offline.
+#### Key pair generation
+The application owner generates the minisign key pair using the Tauri CLI:
+
+```sh
+# Generate a new updater signing key pair with an optional password prompt
+cargo tauri signer generate -w ~/.tauri/neo.key
+# or via pnpm in apps/neo-app:
+pnpm --dir apps/neo-app tauri signer generate -w ~/.tauri/neo.key
+```
+
+This command outputs:
+- A private key file (written to `~/.tauri/neo.key` or a secure location outside the repository).
+- A base64 public key printed to stdout.
+
+#### Secret hygiene and private key storage
+The private signing key is owned solely by the application owner and **MUST NEVER be committed to Git or stored inside the repository**:
+- On local release machines, keep the private key in a secure directory outside the repository (e.g. `~/.tauri/neo.key`).
+- In automated release environments or CI, store the private key in CI secrets and provide it via the `TAURI_SIGNING_PRIVATE_KEY` environment variable (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if password-protected).
+- Never commit private key files, `.pem`, `.env`, or credentials to Git. `pnpm installer:check` enforces secret hygiene across build files and configuration.
+
+#### Public key configuration
+Replace `REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY` in `apps/neo-app/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) with the generated base64 public key before distributing signed update manifests. In custom deployments or tests, `NMH_UPDATER_PUBLIC_KEY` may be provided as an environment variable override.
+
+#### Publishing latest.json
+To distribute an update:
+1. Build signed release bundles with updater artifacts enabled (override `createUpdaterArtifacts: true` in the release environment):
+   ```sh
+   cargo tauri build --config tauri.bundle.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}'
+   ```
+   Tauri compiles the release installer and produces a signature file (e.g., `<bundle>.msi.zip.sig`).
+2. Construct `latest.json` describing the release version, release notes, ISO 8601 publish timestamp, and platform-specific signatures and download URLs:
+   ```json
+   {
+     "version": "0.2.0",
+     "notes": "Release notes for version 0.2.0",
+     "pub_date": "2026-11-20T12:00:00Z",
+     "platforms": {
+       "windows-x86_64": {
+         "signature": "<contents of .msi.zip.sig>",
+         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app-0.2.0-x64-setup.nsis.zip"
+       },
+       "darwin-aarch64": {
+         "signature": "<contents of .tar.gz.sig>",
+         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app.app.tar.gz"
+       },
+       "linux-x86_64": {
+         "signature": "<contents of .AppImage.tar.gz.sig>",
+         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app.AppImage.tar.gz"
+       }
+     }
+   }
+   ```
+3. Upload `latest.json` along with the update archives and signatures to the release assets at `https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json`.
+4. When desktop clients start up or when the user checks for updates in Settings, the app fetches `latest.json`. If a newer version is announced, Settings displays an "Update available" badge with the version and an "Install and restart" button using Astryx components.
 
 ## PWA
 

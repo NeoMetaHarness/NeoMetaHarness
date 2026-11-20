@@ -11,10 +11,15 @@ The packaged Windows installer registers `neo://` deep links. The app accepts
 `neo://inbox/<id>` and `neo://coding/<thread>`, selects the appropriate page,
 and focuses the referenced item or thread when it exists.
 
-The Settings page provides a **check-only** updater path. Release packaging should set
-`NMH_UPDATER_ENDPOINT` to a trusted HTTPS update manifest and
-`NMH_UPDATER_PUBLIC_KEY` to its public verification key. The **private** updater signing
-key belongs in the release machine's secret store, supplied to the Tauri bundler using
-`TAURI_SIGNING_PRIVATE_KEY` and optionally `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-Do not place a private key or password in Git or desktop application configuration.
-The updater never installs a release without a separate user-directed workflow.
+The Settings page provides desktop auto-updater management using Astryx components.
+The shell checks for updates on startup in the background and on demand when the user
+clicks "Check for updates". When an update is available, Settings displays an "Update available"
+indicator and an "Install and restart" button.
+
+Endpoints come from configuration (`apps/neo-app/src-tauri/tauri.conf.json`). In custom
+deployments, `NMH_UPDATER_ENDPOINT` and `NMH_UPDATER_PUBLIC_KEY` may be supplied via the
+environment. The private updater signing key belongs in the owner's secret store (or CI
+secrets), supplied to the Tauri bundler using `TAURI_SIGNING_PRIVATE_KEY` and optionally
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Do not place a private key or password in Git or
+desktop application configuration. See [Install and updates](install.md#updates-and-signing)
+for key generation and `latest.json` publication.
