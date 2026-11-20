@@ -1,8 +1,9 @@
-import { assertSafeProviderUrl, defineExtension } from '@neometaharness/kernel';
+import { assertSafeProviderUrl, createSafeProviderClient, defineExtension } from '@neometaharness/kernel';
 import { xSearchInput, type NeoSearchService, type XSearchInput, type XSearchOutput } from '@neometaharness/contracts';
 
 export interface SearchHttpClient {
   request(url: string, init: RequestInit): Promise<Response>;
+  close?(): Promise<void>;
 }
 
 export interface SearchSettings {
@@ -12,9 +13,6 @@ export interface SearchSettings {
   allowPrivateNetwork?: boolean;
 }
 
-const defaultHttpClient: SearchHttpClient = {
-  request: (url, init) => fetch(url, init),
-};
 
 function searchEndpoint(origin: string): URL {
   let url: URL;
@@ -70,10 +68,15 @@ function parseSearchResponse(data: SearchResponse, apiKey: string): XSearchOutpu
 }
 
 export class XSearchService implements NeoSearchService {
+  private readonly httpClient: SearchHttpClient;
   constructor(
     private readonly settings: SearchSettings,
-    private readonly httpClient: SearchHttpClient = defaultHttpClient,
-  ) {}
+    httpClient?: SearchHttpClient,
+  ) {
+    this.httpClient = httpClient ?? createSafeProviderClient({ allowPrivateNetwork: settings.allowPrivateNetwork });
+  }
+
+  dispose(): void { void this.httpClient.close?.().catch(() => undefined); }
 
   get configured(): boolean {
     return Boolean(this.settings.apiKey?.trim());
@@ -116,9 +119,10 @@ export class XSearchService implements NeoSearchService {
 export default defineExtension({
   activate(ctx) {
     const settings = ctx.inject<SearchSettings>('settings') ?? {};
-    const client = ctx.inject<SearchHttpClient>('searchHttpClient') ?? defaultHttpClient;
+    const client = ctx.inject<SearchHttpClient>('searchHttpClient');
     const search = new XSearchService(settings, client);
     ctx.provide('neo.search', search);
+    ctx.effect(() => () => search.dispose());
     ctx.contribute('tools', {
       id: 'x-search.search',
       name: 'Search X posts',

@@ -15,11 +15,16 @@ import { XSearchService } from '../src/index.js';
 const root = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const home = await mkdtemp(join(tmpdir(), 'neo-x-search-'));
 const apiKey = 'FAKE_XAI_KEY_FOR_TEST_9876';
-const { assertSafeProviderUrl } = await import('@neometaharness/kernel');
+const { assertSafeProviderUrl, createSafeProviderClient } = await import('@neometaharness/kernel');
 await assertSafeProviderUrl(new URL('https://provider.example'), { resolveHost: async () => ['8.8.8.8'] });
 for (const blockedIp of ['127.0.0.1', '169.254.169.254', '10.0.0.8', '::1', 'fe80::1', '::ffff:127.0.0.1']) {
   await assert.rejects(assertSafeProviderUrl(new URL('https://provider.example'), { resolveHost: async () => [blockedIp] }), /Private provider endpoint is disabled/);
 }
+const poisonedOfficial = createSafeProviderClient({ resolveHost: async () => ['169.254.169.254'] });
+try {
+  await assert.rejects(poisonedOfficial.request('https://api.x.ai/v1/responses', { method: 'POST' }),
+    /fetch failed|Private provider endpoint is disabled/);
+} finally { await poisonedOfficial.close(); }
 let requestCount = 0;
 let recordedBody: any;
 let statusCode = 200;
