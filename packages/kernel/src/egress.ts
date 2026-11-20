@@ -55,8 +55,13 @@ export function createEgressFetch(allowPrivateNetwork: () => boolean, injected?:
         const chunks: Buffer[] = []; let bytes = 0;
         response.on('error', reject);
         response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 1_000_000) { outgoing.destroy(new Error('Egress response too large')); return; } chunks.push(chunk); });
-        response.on('end', () => { const headers = new Headers(); for (const [name, value] of Object.entries(response.headers)) if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value);
-          resolve(new Response(Buffer.concat(chunks), { status: response.statusCode, headers })); });
+        response.on('end', () => {
+          try {
+            const headers = new Headers(); for (const [name, value] of Object.entries(response.headers)) if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value);
+            const status = response.statusCode ?? 502;
+            resolve(new Response([204, 205, 304].includes(status) ? null : Buffer.concat(chunks), { status, headers }));
+          } catch (error) { reject(error); } // Malformed upstream responses must not escape an event callback.
+        });
       });
       outgoing.on('error', reject);
       outgoing.end(init?.body);
