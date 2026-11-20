@@ -17,6 +17,7 @@ for (const version of [1, 2, 3]) {
     ctx.effect(()=>()=>{fixture.events.push('${version}:stop');});
     ctx.health(async()=>{if(${version}===2) { fixture.started(); await fixture.healthGate; } return {ok:${version}!==3};});
     ctx.route('hello',async({body})=>{if(body?.slow) await fixture.requestGate; return {version:${version},settings:{...settings},storage:ctx.inject('extensionDataDir'),vault:ctx.inject('vault')===fixture.vault};});
+    ctx.route('fail',async({body})=>{fixture.failures.push(${version}); if(body?.slow) await fixture.requestGate; throw fixture.routeError;});
   } };`);
 }
 const db = new SqliteDatabaseProvider(join(root, 'gateway.db'));
@@ -24,7 +25,7 @@ let healthy!: () => void; let finish!: () => void; let started!: () => void;
 const candidateStarted = new Promise<void>((done) => { started = done; });
 const secrets = new Map<string, string>();
 const vault = { get: async (_scope: unknown, name: string) => secrets.get(name), put: async (_scope: unknown, name: string, value: string) => { secrets.set(name, value); } };
-const fixture = { events: [] as string[], settings: new Map<number, Record<string, unknown>>(), vault, healthGate: new Promise<void>((done) => { healthy = done; }), requestGate: new Promise<void>((done) => { finish = done; }), started };
+const fixture = { events: [] as string[], failures: [] as number[], routeError: new Error('GitHub polling paused after HTTP 429'), settings: new Map<number, Record<string, unknown>>(), vault, healthGate: new Promise<void>((done) => { healthy = done; }), requestGate: new Promise<void>((done) => { finish = done; }), started };
 const services = { fixture, vault: fixture.vault, extensionDataDir: join(root, 'data') };
 const kernel = new NeoKernel(db, services);
 try {
@@ -35,6 +36,7 @@ try {
   assert.deepEqual((await kernel.getSettings('sample-ts')).sanitized.apiKey, { set: true });
   assert.equal((await db.getExtensionSettings('sample-ts'))?.apiKey, undefined, 'Secrets remain in the vault');
   const old = kernel.invokeRoute('/x/sample-ts/hello', 'RPC', { slow: true });
+  const failedOld = assert.rejects(kernel.invokeRoute('/x/sample-ts/fail', 'RPC', { slow: true }), error => error === fixture.routeError);
   const upgrade = kernel.upgrade('sample-ts', versions.get(2)!);
   await candidateStarted;
   assert.deepEqual(fixture.settings.get(2), { label: 'default-v2', custom: 'persisted', apiKey: 'fake-key-before-upgrade' });
@@ -51,7 +53,10 @@ try {
   assert.deepEqual(newResponse.settings, { label: 'default-v2', custom: 'persisted', apiKey: 'fake-key-before-upgrade' });
   assert.equal((await kernel.getSettings('sample-ts')).values.label, 'default-v2');
   assert.equal(newResponse.version, 2); assert.equal(newResponse.storage, services.extensionDataDir); assert.equal(newResponse.vault, true);
+  await assert.rejects(kernel.invokeRoute('/x/sample-ts/fail', 'RPC'), error => error === fixture.routeError);
   finish(); const oldResponse = await old as any;
+  await failedOld;
+  assert.deepEqual(fixture.failures, [1, 2], 'A route failure is not replayed across the generation switch');
   assert.equal(oldResponse.version, 1);
   assert.deepEqual(oldResponse.settings, { label: 'default-v1', custom: 'persisted', apiKey: 'fake-key-before-upgrade' }, 'In-flight old code retains its generation settings');
   assert.equal((await upgrade).upgraded, true); assert.ok(fixture.events.includes('1:stop'));
