@@ -476,6 +476,9 @@ importers:
       '@neometaharness/computers':
         specifier: workspace:*
         version: link:../../packages/computers
+      '@neometaharness/egress':
+        specifier: workspace:*
+        version: link:../../packages/egress
       '@neometaharness/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel

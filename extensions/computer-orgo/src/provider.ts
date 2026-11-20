@@ -1,7 +1,6 @@
 import type { Capture, Computer, ComputerAttachContext, ComputerInput, ComputerProvider, LeaseHolder } from '@neometaharness/computers';
 import type { VaultService } from '@neometaharness/vault';
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { createEgressFetch } from '@neometaharness/egress';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const managedId = /^neo-[a-f0-9]{24}$/;
@@ -13,42 +12,21 @@ export interface OrgoClient {
   request<T>(key: string, method: 'GET' | 'POST' | 'DELETE', path: string, body?: object, signal?: AbortSignal): Promise<T>;
 }
 
-function privateAddress(address: string): boolean {
-  const normalized = address.toLowerCase();
-  if (normalized.startsWith('::ffff:')) return privateAddress(normalized.slice(7));
-  if (isIP(normalized) === 6) {
-    return normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd')
-      || /^fe[89ab]/.test(normalized) || normalized.startsWith('ff');
-  }
-  if (isIP(normalized) !== 4) return true;
-  const [a, b] = normalized.split('.').map(Number);
-  return a === 0 || a === 10 || a === 127 || a! >= 224 || (a === 100 && b! >= 64 && b! <= 127)
-    || (a === 169 && b === 254) || (a === 172 && b! >= 16 && b! <= 31)
-    || (a === 192 && (b === 168 || b === 0)) || (a === 198 && (b === 18 || b === 19));
-}
-
 /** Custom endpoints require explicit operator configuration and are validated for every request. */
 export class HttpOrgoClient implements OrgoClient {
-  private readonly hostname: string;
-  constructor(private readonly origin = 'https://www.orgo.ai/api', private readonly transport: typeof fetch = fetch,
-    private readonly allowPrivateNetwork = false) {
+  private readonly transport: typeof fetch;
+  constructor(private readonly origin = 'https://www.orgo.ai/api', injectedClient?: typeof fetch,
+    allowPrivateNetwork = false) {
     const url = new URL(origin);
     if (url.protocol !== 'https:' || url.pathname !== '/api' || url.search || url.hash || url.username || url.password) {
       throw new Error('Invalid Orgo API origin');
     }
-    this.hostname = url.hostname.replace(/^\[|\]$/g, '');
+    this.transport = createEgressFetch(() => allowPrivateNetwork, injectedClient);
   }
 
   async request<T>(key: string, method: 'GET' | 'POST' | 'DELETE', path: string, body?: object, signal?: AbortSignal): Promise<T> {
     if (!/^\/computers(?:\/[0-9a-f-]{36})?(?:\/[a-z-]+)?(?:\?[a-z0-9=&_]+)?$/.test(path)) throw new Error('Invalid Orgo path');
     try {
-      if (this.hostname !== 'www.orgo.ai') {
-        const addresses = isIP(this.hostname) ? [this.hostname]
-          : (await lookup(this.hostname, { all: true })).map((entry) => entry.address);
-        if (!addresses.length || (!this.allowPrivateNetwork && addresses.some(privateAddress))) {
-          throw new Error('Orgo API origin blocked');
-        }
-      }
       const response = await this.transport(this.origin + path, {
         method, headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
