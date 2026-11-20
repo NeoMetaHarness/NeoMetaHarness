@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
+import { Agent, fetch as undiciFetch } from 'undici';
 
 const blocked = new BlockList();
 for (const [subnet, prefix] of [
@@ -54,4 +55,47 @@ export async function assertSafeProviderUrl(url: URL, options: EgressOptions = {
   if (url.protocol !== 'https:' && !(options.allowPrivateNetwork && allPrivate)) {
     throw new Error('Provider endpoint requires HTTPS');
   }
+}
+
+/**
+ * The request's socket lookup validates every DNS answer and returns the
+ * validated address to the connector. This closes the DNS rebinding window
+ * between URL validation and the actual connection.
+ */
+export function createSafeProviderClient(options: EgressOptions = {}): {
+  request(url: string, init: RequestInit): Promise<Response>;
+  close(): Promise<void>;
+} {
+  const dispatcher = new Agent({
+    connect: {
+      lookup(hostname, lookupOptions, callback) {
+        const resolve = options.resolveHost ?? (async (host: string) =>
+          (await lookup(host, { all: true })).map((entry) => entry.address));
+        void resolve(hostname).then(async (addresses) => {
+          await assertSafeProviderUrl(new URL(`https://${hostname}`), {
+            ...options, resolveHost: async () => addresses,
+          });
+          const family = typeof lookupOptions === 'object' ? lookupOptions.family : lookupOptions;
+          const candidates = addresses.filter((address) => !family || isIP(address) === family);
+          if (candidates.length === 0) throw new Error('Provider endpoint address family unavailable');
+          const selected = candidates[0]!;
+          if (typeof lookupOptions === 'object' && lookupOptions.all) {
+            callback(null, [{ address: selected, family: isIP(selected) }]);
+          } else {
+            callback(null, selected, isIP(selected));
+          }
+        }).catch((error: unknown) => {
+          callback(error instanceof Error ? error : new Error('Provider endpoint DNS resolution failed'), '', 4);
+        });
+      },
+    },
+  });
+
+  return {
+    async request(url, init) {
+      await assertSafeProviderUrl(new URL(url), options);
+      return undiciFetch(url, { ...init, redirect: 'error', dispatcher } as Parameters<typeof undiciFetch>[1]) as Promise<Response>;
+    },
+    close: () => dispatcher.close(),
+  };
 }
