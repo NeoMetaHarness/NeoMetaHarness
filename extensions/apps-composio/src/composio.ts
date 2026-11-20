@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AppsProvider, AppAction, AppsActor, AppEngineGrant } from '@neometaharness/kernel';
 import { AccountStore } from './accounts.js';
-import { createEgressFetch, validateEgressUrl } from '@neometaharness/kernel';
+import { createEgressFetch, validateEgressUrl } from '@neometaharness/egress';
 export type ComposioSettings = { endpoint?: string; apiKey?: string; allowPrivateNetwork?: boolean };
 // Local policy, never expanded by remote tags. Unknown action identifiers require approval.
 const READ_ONLY = new Set(['GITHUB_GET_A_REPOSITORY', 'GITHUB_LIST_REPOSITORIES_FOR_THE_AUTHENTICATED_USER', 'GMAIL_FETCH_EMAILS', 'GMAIL_GET_EMAIL']);

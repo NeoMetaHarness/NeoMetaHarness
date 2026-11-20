@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AppsRegistry, validateEgressUrl, assertPublicEgressAddress, type AppApproval } from '@neometaharness/kernel';
+import { AppsRegistry, type AppApproval } from '@neometaharness/kernel';
+import { validateEgressUrl, assertPublicEgressAddress, guardedEgressLookup } from '@neometaharness/egress';
 import { ComposioProvider } from '../src/composio.js';
 import { fakeComposio } from './fake.js';
 import { lookup } from 'node:dns';
-import { guardedEgressLookup } from '../../../packages/kernel/src/egress.js';
+
 const temp = await mkdtemp(join(tmpdir(), 'neo-apps-unit-')); const fake = await fakeComposio();
 let settings = { endpoint: fake.endpoint, apiKey: 'fake-composio-only', allowPrivateNetwork: true };
 const actor = { kind: 'user' as const, workspaceId: 'workspace-a', userId: 'member-a' };

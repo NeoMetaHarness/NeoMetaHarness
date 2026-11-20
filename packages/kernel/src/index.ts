@@ -829,4 +829,3 @@ async function deadline<T>(operation: Promise<T>, ms: number, message: string): 
   finally { if (timer) clearTimeout(timer); }
 }
 export * from './apps.js';
-export { createEgressFetch, validateEgressUrl, assertPublicEgressAddress } from './egress.js';

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@neometaharness/contracts": "workspace:*",
+    "@neometaharness/egress": "workspace:*",
     "@neometaharness/kernel": "workspace:*",
     "@neometaharness/vault": "workspace:*",
     "@modelcontextprotocol/server": "2.2.0",
