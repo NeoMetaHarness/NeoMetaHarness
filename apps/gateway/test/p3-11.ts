@@ -17,6 +17,8 @@ const root = await mkdtemp(join(tmpdir(), 'neo-p311-'));
 const calls: Recorded[] = [];
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jCj8AAAAASUVORK5CYII=', 'base64');
 let sequence = 0;
+let nextCommandResponse: { success: boolean; exitCode: number; stdout: string; stderr: string } | undefined;
+let stallNextCommand: (() => void) | undefined;
 let gateway: Awaited<ReturnType<typeof startGateway>> | undefined;
 const server = createServer(async (req, res) => {
   const chunks: Buffer[] = [];
@@ -38,7 +40,9 @@ const server = createServer(async (req, res) => {
   } else if (req.method === 'POST' && path.endsWith('/commands')) {
     assert.match(body.command, /^python3 -c "/);
     const isCapture = Buffer.from(/b64decode\('([^']+)'\)/.exec(body.command)![1], 'base64').toString().includes("'import','-window'");
-    res.end(JSON.stringify({ success: true, exitCode: 0, stdout: isCapture ? png.toString('base64') : '', stderr: '' }));
+    const response = isCapture ? undefined : nextCommandResponse;
+    if (response) nextCommandResponse = undefined;
+    res.end(JSON.stringify(response ?? { success: true, exitCode: 0, stdout: isCapture ? png.toString('base64') : '', stderr: '' }));
   } else if (req.method === 'GET' && path.endsWith('/snapshots/latest')) {
     res.end(JSON.stringify({ id: 'snap-one' }));
   } else if (req.method === 'POST' && path.endsWith('/saved-snapshots')) {
@@ -56,6 +60,14 @@ try {
     assert.equal(new URL(String(url)).host, 'fake-boat.example');
     assert.equal(init?.redirect, 'error', 'shared egress client must refuse HTTP redirects');
     assert.ok(init?.signal, 'shared egress client must provide a timeout signal');
+    if (new URL(String(url)).pathname.endsWith('/commands') && stallNextCommand) {
+      const started = stallNextCommand;
+      stallNextCommand = undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new DOMException('Boat command aborted', 'AbortError')), { once: true });
+        started();
+      });
+    }
     return fetch(`http://127.0.0.1:${address.port}${new URL(String(url)).pathname}`, init);
   };
   gateway = await startGateway({ databaseFile: join(root, 'neo.sqlite'), dataDir: root,
@@ -80,6 +92,7 @@ try {
   assert.match(first.id, /^neo-[0-9a-f]{24}$/);
   assert.equal(calls[0].idempotency, first.id, 'provision is retry-idempotent');
   assert.equal(calls[0].body.type, 'small');
+  assert.equal(calls[0].body.labels['neo-workspace'], workspaceId, 'Boat sandbox carries its authenticated workspace');
   assert.equal((await rpc.computers.capture({ id: first.id })).width, 1);
   await rpc.computers.assign({ engine: 'dsh', targetId: 'boat-test', computerId: first.id });
   const binding = gateway.computers.binding('dsh', 'boat-test');
@@ -124,7 +137,33 @@ try {
     () => ({ baseUrl: 'https://fake-boat.example/api/v1', apiKey: 'fake-boat-api-key' }),
     fakeBoatHttp,
   );
-  await separateProvider.provision({ id: 'neo-0123456789abcdef01234567' }, { workspaceId: 'workspace-A' });
+  const isolatedComputer = await separateProvider.provision({ id: 'neo-0123456789abcdef01234567' }, { workspaceId: 'workspace-A' });
+  const scopedScreen = isolatedComputer.screen as (access?: { workspaceId: string; holder: 'agent' | 'human' }) => Promise<{ protocol: string; url?: string }>;
+  const scopedSnapshot = isolatedComputer.snapshot as (access?: { workspaceId: string }) => Promise<unknown>;
+  await assert.rejects(scopedScreen(), /current workspace lease holder/, 'screen URL requires an authenticated lease context');
+  await assert.rejects(scopedScreen({ workspaceId: 'workspace-B', holder: 'agent' }), /current workspace lease holder/);
+  await assert.rejects(scopedScreen({ workspaceId: 'workspace-A', holder: 'human' }), /current workspace lease holder/);
+  assert.equal((await scopedScreen({ workspaceId: 'workspace-A', holder: 'agent' })).protocol, 'webrtc');
+  await isolatedComputer.lease('human');
+  await assert.rejects(scopedScreen({ workspaceId: 'workspace-A', holder: 'agent' }), /current workspace lease holder/);
+  assert.equal((await scopedScreen({ workspaceId: 'workspace-A', holder: 'human' })).protocol, 'webrtc');
+  await isolatedComputer.lease('agent');
+  assert.throws(() => scopedSnapshot(), /Unknown Boat computer in workspace/);
+  assert.throws(() => scopedSnapshot({ workspaceId: 'workspace-B' }), /Unknown Boat computer in workspace/);
+  assert.deepEqual(await scopedSnapshot({ workspaceId: 'workspace-A' }), { id: 'snap-one' });
+  nextCommandResponse = { success: true, exitCode: 7, stdout: '', stderr: 'failed command' };
+  await assert.rejects(Promise.resolve(isolatedComputer.input({ action: 'key', keys: 'Enter' })), /command failed/, 'nonzero exit code must fail');
+  nextCommandResponse = { success: false, exitCode: 127, stdout: '', stderr: 'xdotool: command not found' };
+  await assert.rejects(Promise.resolve(isolatedComputer.input({ action: 'click', x: 1, y: 2 })), /command failed/, 'xdotool failure must fail');
+  let signalCommandStarted!: () => void;
+  const commandStarted = new Promise<void>(resolve => { signalCommandStarted = resolve; });
+  stallNextCommand = signalCommandStarted;
+  const abortedCommand = Promise.resolve(isolatedComputer.input({ action: 'click', x: 3, y: 4 }));
+  await commandStarted;
+  isolatedComputer.interrupt?.();
+  await assert.rejects(abortedCommand, /abort/i, 'a preempted Boat command must reject');
+  isolatedComputer.resumeInput?.();
+  assert.equal((await isolatedComputer.capture()).width, 1, 'command failures leave captures usable');
   await assert.rejects(separateProvider.saveSnapshot('neo-0123456789abcdef01234567', 'workspace-B'),
     /Unknown Boat computer in workspace/, 'other workspace cannot save the source snapshot');
   await assert.rejects(separateProvider.provision({ id: 'neo-0123456789abcdef01234568', forkOf: 'neo-0123456789abcdef01234567' }, { workspaceId: 'workspace-B' }),
@@ -162,6 +201,7 @@ try {
   };
   await signup('boat-owner@neo.local');
   const viewer = await signup('boat-viewer@neo.local');
+  const admin = await signup('boat-admin@neo.local');
   const login = async (email: string) => {
     const response = await fetch(`${authBase}/auth/sign-in/email`, { method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -179,14 +219,23 @@ try {
   await authGateway.auth.api.addMember({ body: {
     organizationId: workspace.id, userId: viewer.user.id, role: 'viewer',
   }, headers: new Headers({ authorization: `Bearer ${ownerToken}` }) });
+  await authGateway.auth.api.addMember({ body: {
+    organizationId: workspace.id, userId: admin.user.id, role: 'admin',
+  }, headers: new Headers({ authorization: `Bearer ${ownerToken}` }) });
   const ownerRpc = createORPCClient<Client>(new RPCLink({ url: authBase, headers: { authorization: `Bearer ${ownerToken}` } }));
   const snapshot = () => fetch(`${authBase}/x/computer-boat/snapshot`, { method: 'POST', headers: {
     authorization: `Bearer ${viewerToken}`, 'content-type': 'application/json',
   }, body: JSON.stringify({ id: 'neo-0123456789abcdef01234567' }) });
+  const adminToken = await login('boat-admin@neo.local');
+  const adminSnapshot = () => fetch(`${authBase}/x/computer-boat/snapshot`, { method: 'POST', headers: {
+    authorization: `Bearer ${adminToken}`, 'content-type': 'application/json',
+  }, body: JSON.stringify({ id: 'neo-0123456789abcdef01234567' }) });
   assert.equal((await snapshot()).status, 403, 'viewer receives 403 with Boat disabled');
+  assert.equal((await adminSnapshot()).status, 404, 'admin passes authorization before disabled extension check');
   await ownerRpc.extensions.enable({ id: 'computer-boat' });
   assert.equal((await snapshot()).status, 403, 'viewer receives 403 with Boat enabled');
-  console.log('P3-11 AUTH PASS viewer=403 enabled+disabled');
+  assert.equal((await adminSnapshot()).status, 400, 'admin is authorized, then unknown snapshot fails validation');
+  console.log('P3-11 AUTH PASS viewer=403 enabled+disabled admin=authorized');
 } finally {
   await authGateway.close();
   await rm(authRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

@@ -272,7 +272,7 @@ export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
   '/x/computers-mcp/action': 'internal',
   '/internal/computers/action': 'internal',
   '/x/computer-local/consent': 'owner',
-  '/x/computer-boat/snapshot': 'owner',
+  '/x/computer-boat/snapshot': 'admin',
   '/auth/ws-ticket': 'viewer',
   '/auth/organization/create': 'deployment-owner',
   '/x/backup/backup': 'deployment-owner',

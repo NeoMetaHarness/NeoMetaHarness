@@ -4,7 +4,7 @@ import { createEgressFetch, validateEgressUrl } from '@neometaharness/egress';
 
 export interface BoatSettings { baseUrl?: string; apiKey?: string; allowPrivateNetwork?: boolean }
 export type BoatHttp = typeof fetch;
-type Instance = { sandboxId: string; workspaceId: string; url: string; key: string; blocked: boolean; current?: AbortController };
+type Instance = { sandboxId: string; workspaceId: string; url: string; key: string; blocked: boolean; holder: LeaseHolder; current?: AbortController };
 const managedId = /^neo-[0-9a-f]{24}$/;
 const sandboxId = /^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
 const sizes = new Set(['small', 'default', 'large', 'xlarge']);
@@ -70,8 +70,8 @@ export class BoatComputerProvider implements ComputerProvider {
     if (!config.apiKey || typeof config.apiKey !== 'string') throw new Error('Boat API key must be configured in extension settings');
     const endpoint = validateEgressUrl(config.baseUrl ?? 'https://boat.dev/api/v1', config.allowPrivateNetwork === true);
     const instance: Instance = { sandboxId: '', workspaceId: context.workspaceId, url: endpoint.href.replace(/\/$/, ''),
-      key: config.apiKey, blocked: false };
-    const options: Record<string, unknown> = { labels: { 'neo-computer': spec.id } };
+      key: config.apiKey, blocked: false, holder: 'agent' };
+    const options: Record<string, unknown> = { labels: { 'neo-computer': spec.id, 'neo-workspace': context.workspaceId } };
     if (spec.type !== undefined) {
       if (typeof spec.type !== 'string' || !sizes.has(spec.type)) throw new Error('Invalid Boat sandbox size');
       options.type = spec.type;
@@ -104,13 +104,17 @@ export class BoatComputerProvider implements ComputerProvider {
       return result.stdout;
     };
     return {
-      screen: async () => {
+      screen: async (access?: { workspaceId: string; holder: LeaseHolder }) => {
+        // The caller must supply a trusted, authenticated lease context. No public route exposes this URL.
+        if (this.disposed || !access || access.workspaceId !== instance.workspaceId || access.holder !== instance.holder) {
+          throw new Error('Boat screen requires the current workspace lease holder');
+        }
         const result = await this.request<{ desktopUrl?: string; provisioning?: boolean }>(instance, 'POST', `${path}/desktop`);
         if (result.provisioning || !result.desktopUrl) throw new Error('Boat desktop is still provisioning');
-        // This is a bearer-capability WebRTC URL. Only the internal viewer consumes screen(); never publish it on a route.
+        // Bearer WebRTC URL: never log, cache, or serialize through a Gateway route.
         return { protocol: 'webrtc', url: result.desktopUrl };
       },
-      lease: (holder: LeaseHolder) => { instance.blocked = holder === 'human'; if (instance.blocked) instance.current?.abort(); },
+      lease: (holder: LeaseHolder) => { instance.holder = holder; instance.blocked = holder === 'human'; if (instance.blocked) instance.current?.abort(); },
       interrupt: () => { instance.blocked = true; instance.current?.abort(); },
       resumeInput: () => { instance.blocked = false; },
       input: async (action: ComputerInput) => {
@@ -129,7 +133,12 @@ export class BoatComputerProvider implements ComputerProvider {
         if (!width || !height || width > 8192 || height > 8192) throw new Error('Boat returned invalid screen dimensions');
         return { png: png.toString('base64'), width, height };
       },
-      snapshot: () => this.request(instance, 'GET', `${path}/snapshots/latest`),
+      snapshot: (access?: ComputerAttachContext) => {
+        if (this.disposed || !access?.workspaceId || access.workspaceId !== instance.workspaceId) {
+          throw new Error('Unknown Boat computer in workspace');
+        }
+        return this.request(instance, 'GET', `${path}/snapshots/latest`);
+      },
     };
   }
 
