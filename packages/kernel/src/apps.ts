@@ -11,10 +11,10 @@ export interface AppsProvider {
   connect(input: { toolkit: string; authConfigId: string; userId: string; workspaceId: string; callbackUrl: string }): Promise<AppAccount & { redirectUrl: string }>;
   authorize(input: AppAction, actor: AppsActor): Promise<void>;
   grant?(accountId: string, grant: AppEngineGrant, enabled: boolean, actor: AppsActor): Promise<void>;
-  describe(input: AppAction, actor: AppsActor): Promise<{ destructive: boolean; summary: string }>;
+  describe(input: AppAction, actor: AppsActor): Promise<{ destructive: boolean; summary: string; ownerUserId?: string }>;
   execute(input: AppAction, signal: AbortSignal, actor: AppsActor): Promise<unknown>;
 }
-export type AppApproval = { request: AppAction; actor: AppsActor; destructive: boolean; summary: string; execute(): Promise<unknown> };
+export type AppApproval = { request: AppAction; actor: AppsActor; destructive: boolean; summary: string; ownerUserId?: string; execute(): Promise<unknown> };
 export interface AppsApprovalGate { submit(input: AppApproval): Promise<unknown> }
 export class AppsRegistry {
   private readonly providers = new Map<string, AppsProvider>();

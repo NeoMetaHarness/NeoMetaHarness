@@ -77,7 +77,7 @@ export class ComposioProvider implements AppsProvider {
     if (typeof tool.version !== 'string' || !tool.version) throw new Error('Action version is missing');
     if (fingerprint !== this.fingerprint()) throw new Error('Composio settings changed during review');
     this.approvals.set(input, { fingerprint, version: tool.version });
-    return { destructive, summary: `${input.action} on ${account.toolkit} account ${account.id}` };
+    return { destructive, summary: `${input.action} on ${account.toolkit} account ${account.id}`, ownerUserId: account.ownerUserId };
   }
   async execute(input: AppAction, signal: AbortSignal) {
     // Settings changes invalidate queued approvals before any remote action.

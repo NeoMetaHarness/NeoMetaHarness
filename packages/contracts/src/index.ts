@@ -774,7 +774,7 @@ export const inboxItemSchema = z.object({
     changelog: z.string().url().nullable() }).optional(),
   /** A memory dream report whose proposals this item accepts or approves. */
   dream: z.object({ id: z.string(), workspace: z.string(), proposals: z.number().int() }).optional(),
-  appAction: z.object({ provider: z.string(), accountId: z.string(), action: z.string(), workspaceId: z.string().optional(), arguments: z.record(z.string(), z.unknown()).optional() }).optional(),
+  appAction: z.object({ provider: z.string(), accountId: z.string(), action: z.string(), workspaceId: z.string().optional(), ownerUserId: z.string().optional(), arguments: z.record(z.string(), z.unknown()).optional() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).optional(),
   mode: z.enum(['observe', 'act']),
   status: z.enum(['suggestion', 'running', 'ready', 'question', 'approval', 'blocked', 'failed', 'dismissed']),
