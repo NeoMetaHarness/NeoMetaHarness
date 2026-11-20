@@ -49,13 +49,26 @@ async function openWebview(port) {
   socket.onmessage = ({ data }) => {
     const message = JSON.parse(data);
     if (message.id && pending.has(message.id)) {
-      pending.get(message.id)(message);
+      const request = pending.get(message.id);
+      clearTimeout(request.timer);
+      message.error ? request.reject(new Error(`${request.method}: ${message.error.message}`)) : request.resolve(message.result);
       pending.delete(message.id);
     }
   };
+  const disconnected = () => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error(`WebView2 disconnected during ${request.method}`));
+    }
+    pending.clear();
+  };
+  socket.onclose = disconnected;
+  socket.onerror = disconnected;
   const send = (method, params = {}) => new Promise((done, reject) => {
+    if (socket.readyState !== WebSocket.OPEN) return reject(new Error(`WebView2 unavailable during ${method}`));
     const id = ++requestId;
-    pending.set(id, (message) => message.error ? reject(new Error(`${method}: ${message.error.message}`)) : done(message.result));
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`WebView2 timed out during ${method}`)); }, 30000);
+    pending.set(id, { resolve: done, reject, timer, method });
     socket.send(JSON.stringify({ id, method, params }));
   });
   await send('Runtime.enable');
