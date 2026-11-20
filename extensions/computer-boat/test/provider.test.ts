@@ -66,6 +66,12 @@ try {
   assert.deepEqual(await snapshot({ workspaceId: 'workspace-A' }), { id: 'snap-1' });
   await assert.rejects(provider.saveSnapshot(id, 'workspace-B'), /workspace/);
   await assert.rejects(provider.provision({ id: 'neo-222222222222222222222222', forkOf: id }, { workspaceId: 'workspace-B' }), /same workspace/);
+  const otherComputer = await provider.provision({ id: 'neo-333333333333333333333333' }, { workspaceId: 'workspace-B' });
+  const otherProvision = calls.filter(call => call.path === '/api/v1/sandboxes').at(-1)!;
+  assert.equal((otherProvision.body.labels as Record<string, string>)['neo-workspace'], 'workspace-B');
+  const otherScreen = otherComputer.screen as (access?: { workspaceId: string; holder: 'agent' | 'human' }) => Promise<{ protocol: string }>;
+  await assert.rejects(otherScreen({ workspaceId: 'workspace-A', holder: 'agent' }), /lease holder/);
+  assert.equal((await otherScreen({ workspaceId: 'workspace-B', holder: 'agent' })).protocol, 'webrtc');
   failure = 'exit';
   await assert.rejects(Promise.resolve(computer.input({ action: 'key', keys: 'Enter' })), /command failed/);
   failure = 'xdotool';
