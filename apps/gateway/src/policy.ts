@@ -173,6 +173,9 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.voice-xai.status': 'viewer',
   'x.voice-xai.transcribe': 'member',
   'x.voice-xai.synthesize': 'member',
+  // x.search (external, metered requests require a member)
+  'x.x-search.status': 'viewer',
+  'x.x-search.search': 'member',
 
   // extensions
   'extensions.list': 'viewer',

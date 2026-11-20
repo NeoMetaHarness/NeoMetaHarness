@@ -498,6 +498,31 @@ const pandaSettingsContract = {
   get: oc.output(pandaSettingsSchema.nullable()),
   set: oc.input(pandaSettingsSchema).output(pandaSettingsSchema),
 };
+
+// Search is a bot-facing tool supplied by an optional provider extension.
+export const xSearchInput = z.object({
+  query: z.string().trim().min(1).max(2000),
+  allowedHandles: z.array(z.string().regex(/^[a-zA-Z0-9_]{1,15}$/)).max(20).optional(),
+  excludedHandles: z.array(z.string().regex(/^[a-zA-Z0-9_]{1,15}$/)).max(20).optional(),
+  fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+}).refine((value) => !(value.allowedHandles && value.excludedHandles), {
+  message: 'Allowed and excluded handles cannot be combined',
+});
+export const xSearchOutput = z.object({
+  text: z.string(),
+  citations: z.array(z.string().url()),
+  usage: z.object({ postsFetched: z.number().int().nonnegative(), usersFetched: z.number().int().nonnegative() }),
+});
+export type XSearchInput = z.infer<typeof xSearchInput>;
+export type XSearchOutput = z.infer<typeof xSearchOutput>;
+export interface NeoSearchService {
+  search(input: XSearchInput): Promise<XSearchOutput>;
+}
+export const xSearchContract = {
+  status: oc.output(z.object({ providerId: z.literal('xai'), configured: z.boolean() })),
+  search: oc.input(xSearchInput).output(xSearchOutput),
+};
 export const pandaContract = {
   settings: pandaSettingsContract,
   /** The deployment's router settings (P1-13); deployment owner only (P1-14). */
@@ -552,7 +577,7 @@ const baseNeoContract = {
     backup: oc.input(z.object({ out: z.string().min(1), passphrase: z.string().min(12) }))
       .output(z.object({ out: z.string(), files: z.number().int(), format: z.number().int() })),
   },
-  x: { 'coding-workflow': codingWorkflowContract, 'models-router-panda': pandaContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract, metrics: metricsContract, 'voice-xai': voiceXaiContract },
+  x: { 'coding-workflow': codingWorkflowContract, 'models-router-panda': pandaContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract, metrics: metricsContract, 'voice-xai': voiceXaiContract, 'x-search': xSearchContract },
   onboarding: {
     get: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), workspaceName: z.string(), mode: z.enum(['desktop', 'server']) })),
     complete: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), workspaceName: z.string(), mode: z.enum(['desktop', 'server']) })),
