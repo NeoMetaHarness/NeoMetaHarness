@@ -1,4 +1,6 @@
-import { assertSafeProviderUrl, defineExtension } from '@neometaharness/kernel';
+import { assertSafeProviderUrl, createSafeProviderClient, defineExtension } from '@neometaharness/kernel';
+import { File } from 'node:buffer';
+import { FormData } from 'undici';
 import {
   voiceSynthesizeInput, voiceSynthesizeOutput, voiceTranscribeInput, voiceTranscribeOutput,
   type NeoVoiceService, type VoiceSynthesizeInput, type VoiceSynthesizeOutput,
@@ -22,11 +24,8 @@ interface VoiceSettings {
 // Inject `voiceHttpClient` for offline tests or alternative HTTP transports.
 export interface VoiceHttpClient {
   request(url: string, init: RequestInit): Promise<Response>;
+  close?(): Promise<void>;
 }
-
-const defaultHttpClient: VoiceHttpClient = {
-  request: (url, init) => fetch(url, init),
-};
 
 async function readLimited(response: Response, maxBytes: number): Promise<Buffer> {
   const declared = Number(response.headers.get('content-length'));
@@ -75,11 +74,19 @@ export class XaiVoiceService implements NeoVoiceService {
 
   constructor(
     private readonly settings: VoiceSettings,
-    private readonly http: VoiceHttpClient = defaultHttpClient,
-  ) {}
+    http?: VoiceHttpClient,
+  ) {
+    this.http = http ?? createSafeProviderClient({ allowPrivateNetwork: settings.allowPrivateNetwork });
+  }
+
+  private readonly http: VoiceHttpClient;
 
   get configured(): boolean { return this.active && Boolean(this.settings.apiKey?.trim()); }
-  dispose(): void { this.active = false; this.rateBuckets.clear(); }
+  dispose(): void {
+    this.active = false;
+    this.rateBuckets.clear();
+    void this.http.close?.().catch(() => undefined);
+  }
 
   private enforceRateLimit(requesterId: string): void {
     const now = Date.now();
@@ -140,8 +147,8 @@ export class XaiVoiceService implements NeoVoiceService {
     form.set('model', 'grok-voice-transcribe-2.0');
     if (input.language) form.set('language', input.language);
     const extension = input.mimeType === 'audio/mpeg' ? 'mp3' : input.mimeType === 'audio/wav' ? 'wav' : 'audio';
-    form.set('file', new Blob([new Uint8Array(audio)], { type: input.mimeType }), `audio.${extension}`);
-    const response = await this.send('/v1/stt', form, audio.length, requesterId);
+    form.set('file', new File([new Uint8Array(audio)], `audio.${extension}`, { type: input.mimeType }));
+    const response = await this.send('/v1/stt', form as unknown as BodyInit, audio.length, requesterId);
     if (mediaType(response) !== 'application/json') throw new Error('xAI Voice returned invalid transcript type');
     return voiceTranscribeOutput.parse(parseProviderJson(await readLimited(response, MAX_TRANSCRIPT_BYTES)));
   }
@@ -173,7 +180,7 @@ export default defineExtension({
   activate(ctx) {
     // Kernel resolves secret settings from the workspace vault before activation.
     const settings = ctx.inject<VoiceSettings>('settings') ?? {};
-    const http = ctx.inject<VoiceHttpClient>('voiceHttpClient') ?? defaultHttpClient;
+    const http = ctx.inject<VoiceHttpClient>('voiceHttpClient');
     const voice = new XaiVoiceService(settings, http);
     ctx.provide('neo.voice', voice);
     ctx.effect(() => () => voice.dispose());

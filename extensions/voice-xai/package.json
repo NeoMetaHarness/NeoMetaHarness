@@ -3,10 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "typecheck": "tsc --noEmit", "test": "tsx test/voice.test.ts" },
-  "dependencies": {
-    "@neometaharness/kernel": "workspace:*",
-    "@neometaharness/contracts": "workspace:*"
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/voice.test.ts"
   },
-  "devDependencies": { "@orpc/client": "1.16.2", "@orpc/contract": "1.16.2", "@types/node": "22.18.13", "tsx": "4.20.6", "typescript": "5.9.3" }
+  "dependencies": {
+    "@neometaharness/contracts": "workspace:*",
+    "@neometaharness/kernel": "workspace:*",
+    "undici": "8.11.2"
+  },
+  "devDependencies": {
+    "@orpc/client": "1.16.2",
+    "@orpc/contract": "1.16.2",
+    "@types/node": "22.18.13",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
 }

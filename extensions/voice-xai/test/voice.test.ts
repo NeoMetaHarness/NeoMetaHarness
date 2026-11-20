@@ -11,7 +11,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import { neoContract } from '@neometaharness/contracts';
 import type { ContractRouterClient } from '@orpc/contract';
 import { XaiVoiceService, type VoiceHttpClient } from '../src/index.js';
-import { assertSafeProviderUrl } from '@neometaharness/kernel';
+import { assertSafeProviderUrl, createSafeProviderClient } from '@neometaharness/kernel';
 
 const repo = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 type Client = ContractRouterClient<typeof neoContract>;
@@ -114,6 +114,26 @@ async function main() {
       }), /Private provider endpoint is disabled/);
     }
     await assert.rejects(assertSafeProviderUrl(new URL('http://1.1.1.1')), /requires HTTPS/);
+
+    // A custom domain must use the validated IP at socket connection time.
+    const pinned = createSafeProviderClient({
+      allowPrivateNetwork: true,
+      resolveHost: async () => ['127.0.0.1'],
+    });
+    try {
+      const response = await pinned.request(`http://fake.xai.test:${fake.port}/unknown`, { method: 'POST' });
+      assert.equal(response.status, 401);
+      await response.text();
+    } finally { await pinned.close(); }
+
+    let resolutions = 0;
+    const rebound = createSafeProviderClient({
+      resolveHost: async () => ++resolutions === 1 ? ['1.1.1.1'] : ['127.0.0.1'],
+    });
+    try {
+      await assert.rejects(rebound.request('https://rebound.example.test:443/unknown', { method: 'POST' }));
+      assert.ok(resolutions >= 2, 'The connection must resolve and validate the destination again');
+    } finally { await rebound.close(); }
     await assert.rejects(new XaiVoiceService({ apiKey: key, baseUrl: `http://127.0.0.1:${fake.port}` }, injected)
       .transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' }), /Private provider endpoint is disabled/);
 
