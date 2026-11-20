@@ -8,10 +8,10 @@ The `computer-local` extension (`extensions/computer-local/README.md`, `extensio
 
 ### Opt-in consent model
 
-Local desktop access is disabled by default to protect user workstations. Enabling the extension does not automatically grant agents access to host input or displays. An administrator or owner must explicitly record consent via the Gateway endpoint:
+Local desktop access is disabled by default to protect user workstations. Enabling the extension does not automatically grant agents access to host input or displays. The workspace owner must explicitly record consent via the Gateway endpoint; admins cannot:
 
 - **Endpoint:** `computers.local.set({ enabled: true })` (`apps/gateway/src/server.ts:1138-1150`, `packages/contracts/src/index.ts:492-495`).
-- **Authorization:** Enforced by `apps/gateway/src/policy.ts:161`, requiring an `admin` or `owner` role.
+- **Authorization:** Enforced by `apps/gateway/src/policy.ts:167` (`'computers.local.set': 'owner'`). Admins are rejected with FORBIDDEN (asserted in `apps/neo-app/test/p3-8.mjs`).
 
 Once consent is granted, the single target `local-desktop` becomes available for attachment through `computers.attach({ providerId: 'computer-local', target: 'local-desktop' })`. Revoking consent via `computers.local.set({ enabled: false })` immediately terminates the running driver process, releases the target, and invalidates all active capability tokens.
 
