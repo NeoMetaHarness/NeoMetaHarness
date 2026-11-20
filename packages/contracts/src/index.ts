@@ -37,6 +37,8 @@ const computerInfoSchema = z.object({
 export const gatewayEventSchema = z.discriminatedUnion('type', [
   z.object({ seq: z.number().int(), extensionId: z.string(),
     status: z.enum(['running', 'disabled', 'degraded']), type: z.literal('extension.state') }),
+  z.object({ seq: z.number().int(), extensionId: z.string(), type: z.literal('extension.upgrade'),
+    previousVersion: z.string(), version: z.string() }),
   z.object({ seq: z.number().int(), type: z.literal('computer.acting'),
     computerId: z.string(), engine: z.string(), active: z.boolean(),
     action: z.enum(['click', 'move', 'type', 'capture', 'key', 'scroll', 'navigate', 'status']) }),
@@ -460,7 +462,7 @@ const baseNeoContract = {
     list: oc.output(z.array(extensionStatusSchema)),
     enable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
     disable: oc.input(z.object({ id: z.string() })).output(extensionStatusSchema),
-    upgrade: oc.input(z.object({ id: z.string().min(1), directory: z.string().min(1),
+    upgrade: oc.input(z.object({ id: z.string().min(1), directory: z.string().min(1), integrity: z.string().regex(/^[a-f0-9]{64}$/i),
       healthTimeoutMs: z.number().int().min(10).max(30000).optional(), drainTimeoutMs: z.number().int().min(10).max(30000).optional(),
     })).output(z.object({ extension: extensionStatusSchema, previousVersion: z.string(), upgraded: z.boolean(), reason: z.string().optional() })),
   },

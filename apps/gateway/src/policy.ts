@@ -137,7 +137,7 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
 
   // extensions
   'extensions.list': 'viewer',
-  'extensions.upgrade': 'admin',
+  'extensions.upgrade': 'owner',
   'extensions.enable': 'admin',
   'extensions.disable': 'admin',
 

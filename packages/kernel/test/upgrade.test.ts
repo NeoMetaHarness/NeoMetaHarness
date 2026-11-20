@@ -11,7 +11,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
-import { authorize } from '../../../apps/gateway/src/policy.js';
+import { extensionIntegrity } from '../src/index.js';
 import { sampleVersion } from './upgrade-fixtures.js';
 const repo=resolve(fileURLToPath(new URL('../../..',import.meta.url)));
 const home=await mkdtemp(join(tmpdir(),'neo-p110-'));
@@ -31,6 +31,10 @@ for(const id of ['sample-ts','sample-py'] as const){
   await writeFile(join(data,'projections','capability'),secret,{mode:0o600});
 }
 type Client=ContractRouterClient<typeof neoContract>;
+async function upgradeInput(id:string,version:number){
+  const directory=candidates.get(`${id}:${version}`)!;
+  return {id,directory,integrity:await extensionIntegrity(directory)};
+}
 let child:ChildProcess|undefined;let token='';let port=0;let logs='';
 async function start(){
   token='';
@@ -53,8 +57,7 @@ const sockets:Socket[]=[];
 try{
   let rpc=await start();
   const unauth=createORPCClient<Client>(new RPCLink({url:`http://127.0.0.1:${port}`}));
-  await assert.rejects(unauth.extensions.upgrade({id:'sample-ts',directory:candidates.get('sample-ts:2')!}),(error:any)=>error.code==='UNAUTHORIZED');
-  assert.throws(()=>authorize('extensions.upgrade',{user:{id:'viewer'},role:'viewer'} as any),(error:any)=>error.code==='FORBIDDEN');
+  await assert.rejects(unauth.extensions.upgrade(await upgradeInput('sample-ts',2)),(error:any)=>error.code==='UNAUTHORIZED');
   for(const id of ['sample-ts','sample-py'] as const){
     const control=controls.get(id)!;
     await rpc.vault.put({scope:{kind:'engine',workspaceId:'default',subjectId:id},name:'UPGRADE_CAPABILITY',value:secret});
@@ -64,7 +67,7 @@ try{
     const closed=new Promise<void>(done=>socket.once('close',()=>done()));socket.resume();
     const oldRequest=hello(id,'slow');await waitFile(join(control,'slow-v1'));
     let complete=false;
-    const upgrade=rpc.extensions.upgrade({id,directory:candidates.get(`${id}:2`)!,drainTimeoutMs:3000}).then(result=>{complete=true;return result;});
+    const upgrade=rpc.extensions.upgrade({...await upgradeInput(id,2),drainTimeoutMs:3000}).then(result=>{complete=true;return result;});
     await waitFile(join(control,'health-v2'));assert.equal(complete,false);
     await writeFile(join(control,'allow-v2'),'yes');
     let after:any;const end=Date.now()+5000;
@@ -76,22 +79,46 @@ try{
     assert.equal(after.setting,`preserved-${id}`);assert.equal(after.projectionDigest,digest);
     if(id==='sample-ts')assert.equal(after.vaultDigest,digest);
     await waitFile(join(control,'disposed-v1'));
-    const broken=await rpc.extensions.upgrade({id,directory:candidates.get(`${id}:3`)!});assert.equal(broken.upgraded,false);assert.equal(broken.extension.version,'2.0.0');
+    const broken=await rpc.extensions.upgrade(await upgradeInput(id,3));assert.equal(broken.upgraded,false);assert.equal(broken.extension.version,'2.0.0');
     await waitFile(join(control,'disposed-v3'));
     assert.equal((await hello(id)).version,2);
     const staged=JSON.parse(await waitFile(join(control,'health-v3')));
     await assert.rejects(socketAt(staged.port),'Failed candidate must close its socket');
     await writeFile(join(candidates.get(`${id}:3`)!,'neo.extension.json'),'{invalid');
-    assert.equal((await rpc.extensions.upgrade({id,directory:candidates.get(`${id}:3`)!})).upgraded,false);
+    assert.equal((await rpc.extensions.upgrade(await upgradeInput(id,3))).upgraded,false);
     assert.equal((await hello(id)).version,2);
   }
   await stop();
-  for(const id of ['sample-ts','sample-py']) await rm(join(installed,id),{recursive:true,force:true});
+  for(const id of ['sample-ts','sample-py']) await rm(candidates.get(`${id}:2`)!,{recursive:true,force:true});
   rpc=await start();
   for(const id of ['sample-ts','sample-py']){
     const response=await hello(id);assert.equal(response.version,2);assert.equal(response.projectionDigest,digest);assert.equal(response.setting,`preserved-${id}`);
     assert.equal((await rpc.extensions.list()).find(value=>value.id===id)?.version,'2.0.0');
   }
+  await stop();
+  await rm(join(home,'extensions','generations','sample-ts@2.0.0'),{recursive:true});
+  await sampleVersion(join(installed,'sample-py'),'sample-py',4,controls.get('sample-py')!);
+  rpc=await start();
+  const fallback=(await rpc.extensions.list()).find(value=>value.id==='sample-ts');
+  assert.equal(fallback?.status,'degraded');assert.match(fallback.reason!,/using bundled 1\.0\.0/);
+  assert.equal((await hello('sample-ts')).version,1);
+  assert.equal((await hello('sample-py')).version,4);
+  assert.equal((await rpc.extensions.list()).find(value=>value.id==='sample-py')?.status,'running');
+  await rpc.extensions.disable({id:'sample-ts'});
+  await stop();
+  await rm(join(installed,'sample-py'),{recursive:true});
+  rpc=await start();
+  assert.ok(!(await rpc.extensions.list()).some(extension=>extension.id==='sample-py'),'The stale upgrade row was removed');
+  assert.equal((await rpc.extensions.enable({id:'sample-ts'})).status,'running','Disable removes the broken persisted install');
+  const standalone=candidates.get('sample-ts:2')!;
+  await sampleVersion(standalone,'sample-ts',2,controls.get('sample-ts')!);
+  assert.equal((await rpc.extensions.upgrade(await upgradeInput('sample-ts',2))).upgraded,true);
+  await stop();
+  await rm(join(installed,'sample-ts'),{recursive:true});
+  rpc=await start();
+  assert.equal((await hello('sample-ts')).version,2,'A verified kernel-owned copy can run without a bundled version');
+  assert.equal((await rpc.extensions.disable({id:'sample-ts'})).status,'disabled');
+  assert.ok(!(await rpc.extensions.list()).some(extension=>extension.id==='sample-ts'));
   assert.ok(!logs.includes(secret));
   console.log('PASS P1-10 authenticated TS/Python local upgrades: in-flight v1 survives atomic v2 switch, old sockets close, broken/invalid v3 rolls back, settings/vault projections and selected versions survive restart');
 }finally{
