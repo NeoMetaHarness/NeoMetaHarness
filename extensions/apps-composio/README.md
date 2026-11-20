@@ -81,6 +81,13 @@ No upstream engine files or user engine homes are changed. Enable the extension
 before starting a DSH session/worker; existing DSH sessions discover newly enabled
 projections on their next session. Hermes refreshes its projection at run startup.
 
+## Merge dependency
+
+On base `830587e`, live Hermes MCP discovery needs the startup/cleanup fix from
+P6-9 (`7222e6e`, queued separately in `work/sol61-p69`). Land that fix before
+using connected-app tools in live Hermes runs. The P2-12 transport drill uses
+three fake engine consumers, as required by this task.
+
 ## Verification
 
 `pnpm test:p2-12` builds the App, then runs adapter tests and an authenticated,
