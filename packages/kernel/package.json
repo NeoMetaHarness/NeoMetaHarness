@@ -6,8 +6,8 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@neometaharness/computers": "workspace:*",
     "@neometaharness/contracts": "workspace:*",
+    "@neometaharness/computers": "workspace:*",
     "@neometaharness/db": "workspace:*",
     "ajv": "8.17.1",
     "semver": "7.7.3"

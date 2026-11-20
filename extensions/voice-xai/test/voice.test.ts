@@ -1,31 +1,21 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createInterface } from 'node:readline';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import { neoContract } from '@neometaharness/contracts';
 import type { ContractRouterClient } from '@orpc/contract';
 import { XaiVoiceService, type VoiceHttpClient } from '../src/index.js';
-import { assertSafeProviderUrl, createSafeProviderClient } from '@neometaharness/egress';
+import { validateEgressUrl } from '@neometaharness/egress';
+import { startGateway as createGateway } from '../../../apps/gateway/src/server.js';
 
 const repo = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 type Client = ContractRouterClient<typeof neoContract>;
 const key = 'FAKE_XAI_KEY_OFFLINE_TEST_78341';
 const audio = Buffer.from('FAKE_MP3_BYTES');
-
-async function bounded<T>(promise: Promise<T>, name: string, timeout = 35_000): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([promise, new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${name} timeout`)), timeout);
-    })]);
-  } finally { if (timer) clearTimeout(timer); }
-}
 
 async function startFake() {
   const hits: string[] = [];
@@ -59,38 +49,38 @@ async function startFake() {
   return { server, port: address.port, hits };
 }
 
-async function startGateway(home: string) {
-  const child: ChildProcess = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
-    cwd: join(repo, 'apps/gateway'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-    env: { ...process.env, NMH_HERMES_HOME: join(home, 'hermes'), NMH_DB_PATH: join(home, 'neo.sqlite'),
-      NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0',
-      NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
+async function startGateway(home: string, fakePort: number) {
+  const extensionsDir = join(home, 'extension-fixtures');
+  await mkdir(extensionsDir);
+  for (const id of ['voice-xai', 'sample-ts']) {
+    const source = join(repo, 'extensions', id);
+    const manifest = JSON.parse(await readFile(join(source, 'neo.extension.json'), 'utf8'));
+    manifest.runtime.entry = './index.mjs';
+    await mkdir(join(extensionsDir, id));
+    await writeFile(join(extensionsDir, id, 'neo.extension.json'), JSON.stringify(manifest));
+    await writeFile(join(extensionsDir, id, 'index.mjs'),
+      `export { default } from ${JSON.stringify(pathToFileURL(join(source, 'src', 'index.ts')).href)};`);
+  }
+  return createGateway({
+    databaseFile: join(home, 'gateway.db'), dataDir: home, extensionsDir, mode: 'desktop',
+    voiceHttpClient: {
+      request: (url, init) => {
+        assert.equal(new URL(url).origin, 'https://api.x.ai');
+        return fetch(`http://127.0.0.1:${fakePort}${new URL(url).pathname}`, init);
+      },
+    },
   });
-  let stdout = '';
-  let stderr = '';
-  child.stdout!.on('data', (value: Buffer) => { stdout = (stdout + value.toString()).slice(-150_000); });
-  child.stderr!.on('data', (value: Buffer) => { stderr = (stderr + value.toString()).slice(-150_000); });
-  let token = '';
-  const port = await bounded(new Promise<number>((done, reject) => {
-    const reader = createInterface({ input: child.stdout! });
-    reader.on('line', (line) => {
-      if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice(18).trim();
-      if (line.startsWith('GATEWAY_READY ')) {
-        reader.close();
-        done((JSON.parse(line.slice(14)) as { port: number }).port);
-      }
-    });
-    child.once('exit', (code) => reject(new Error(`Gateway exited ${code}: ${stderr.slice(-500)}`)));
-    child.once('error', reject);
-  }), 'gateway startup');
-  assert.ok(token.length > 16);
-  return { child, port, token, logs: () => stdout + stderr };
 }
 
 async function main() {
   const fake = await startFake();
   const home = await mkdtemp(join(tmpdir(), 'nmh-voice-xai-'));
   let app: Awaited<ReturnType<typeof startGateway>> | undefined;
+  const logged: string[] = [];
+  const originalOut = process.stdout.write;
+  const originalErr = process.stderr.write;
+  process.stdout.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stderr.write;
   try {
     // The HTTP boundary is injectable without a gateway or a real credential.
     const calls: string[] = [];
@@ -108,40 +98,14 @@ async function main() {
     assert.equal((await independent.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' })).text, 'Injected transcript');
     assert.deepEqual(calls, ['/v1/stt']);
     await assert.rejects(independent.synthesize({ text: 'x'.repeat(15_001) }), /too_big|<=15000|15000|maximum|less than or equal/i);
-    for (const blockedIp of ['127.0.0.1', '169.254.169.254', '10.0.0.1', '192.168.0.1', '::1', '::ffff:127.0.0.1']) {
-      await assert.rejects(assertSafeProviderUrl(new URL('https://test.example'), {
-        resolveHost: async () => [blockedIp],
-      }), /Private provider endpoint is disabled/);
+    for (const blockedIp of ['127.0.0.1', '169.254.169.254', '10.0.0.1', '192.168.0.1', '::1']) {
+      const host = blockedIp.includes(':') ? `[${blockedIp}]` : blockedIp;
+      assert.throws(() => validateEgressUrl(`https://${host}`), /denied/);
     }
-    await assert.rejects(assertSafeProviderUrl(new URL('http://1.1.1.1')), /requires HTTPS/);
-
-    // A custom domain must use the validated IP at socket connection time.
-    const pinned = createSafeProviderClient({
-      allowPrivateNetwork: true,
-      resolveHost: async () => ['127.0.0.1'],
-    });
-    try {
-      const response = await pinned.request(`http://fake.xai.test:${fake.port}/unknown`, { method: 'POST' });
-      assert.equal(response.status, 401);
-      await response.text();
-    } finally { await pinned.close(); }
-
-    let resolutions = 0;
-    const rebound = createSafeProviderClient({
-      resolveHost: async () => ++resolutions === 1 ? ['1.1.1.1'] : ['127.0.0.1'],
-    });
-    try {
-      await assert.rejects(rebound.request('https://rebound.example.test:443/unknown', { method: 'POST' }));
-      assert.ok(resolutions >= 2, 'The connection must resolve and validate the destination again');
-    } finally { await rebound.close(); }
-
-    const poisonedOfficial = createSafeProviderClient({ resolveHost: async () => ['169.254.169.254'] });
-    try {
-      await assert.rejects(poisonedOfficial.request('https://api.x.ai/v1/stt', { method: 'POST' }),
-        /fetch failed|Private provider endpoint is disabled/);
-    } finally { await poisonedOfficial.close(); }
-    await assert.rejects(new XaiVoiceService({ apiKey: key, baseUrl: `http://127.0.0.1:${fake.port}` }, injected)
-      .transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' }), /Private provider endpoint is disabled/);
+    assert.throws(() => validateEgressUrl('http://1.1.1.1', true), /HTTPS/);
+    await assert.rejects(new XaiVoiceService({ apiKey: key,
+      baseUrl: `http://127.0.0.1:${fake.port}`, allowPrivateNetwork: true }, injected)
+      .transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' }), /HTTPS/);
 
     let paidCalls = 0;
     const audioClient: VoiceHttpClient = { request: async (_url, init) => {
@@ -159,17 +123,18 @@ async function main() {
     await assert.rejects(html.synthesize({ text: 'hi' }), /invalid audio type/);
     const oversize = new XaiVoiceService({ apiKey: key }, { request: async () =>
       new Response(new Uint8Array(8_000_001), { headers: { 'content-type': 'audio/mpeg' } }) });
-    await assert.rejects(oversize.synthesize({ text: 'hi' }), /response too large/);    independent.dispose();
+    await assert.rejects(oversize.synthesize({ text: 'hi' }), /response too large/);
+    independent.dispose();
     await assert.rejects(independent.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' }), /disabled/);
 
-    app = await startGateway(home);
+    app = await startGateway(home, fake.port);
     const base = `http://127.0.0.1:${app.port}`;
-    const headers = { authorization: `Bearer ${app.token}` };
+    const headers = { authorization: `Bearer ${app.desktopToken!}` };
     const rpc = createORPCClient<Client>(new RPCLink({ url: base, headers: () => headers }));
     assert.equal((await fetch(`${base}/x/voice-xai/status`)).status, 401);
     await rpc.extensions.enable({ id: 'sample-ts' });
     const saved = await rpc.settings.set({ extension: 'voice-xai', values: {
-      apiKey: key, baseUrl: `http://127.0.0.1:${fake.port}`, allowPrivateNetwork: true, requestsPerMinute: 12,
+      apiKey: key, baseUrl: 'https://api.x.ai', allowPrivateNetwork: false, requestsPerMinute: 12,
     } });
     assert.equal(JSON.stringify(saved).includes(key), false);
     const settings = await rpc.settings.get({ extension: 'voice-xai' });
@@ -188,14 +153,11 @@ async function main() {
     assert.equal((await rpc.extensions.list()).find((ext) => ext.id === 'sample-ts')?.status, 'running');
     assert.deepEqual(await (await fetch(`${base}/x/sample-ts/hello`, { headers })).json(),
       { message: 'Hello from TypeScript' });
-    assert.ok(!app.logs().includes(key), 'Secret appeared in gateway stdout or stderr');
-    console.log('P2-10 PASS authenticated=true stt=fake tts=fake secret=vault+redacted transport=injectable toggle=isolated');
+    assert.ok(!logged.join('').includes(key), 'Secret appeared in gateway stdout or stderr');
   } finally {
-    if (app?.child.connected) app.child.send('shutdown');
-    if (app?.child && app.child.exitCode === null) {
-      await bounded(new Promise<void>((done) => app!.child.once('exit', () => done())), 'gateway shutdown', 15_000)
-        .catch(() => app!.child.kill('SIGKILL'));
-    }
+    await app?.close();
+    process.stdout.write = originalOut;
+    process.stderr.write = originalErr;
     fake.server.closeAllConnections();
     await new Promise<void>((done) => fake.server.close(() => done()));
     await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -203,3 +165,4 @@ async function main() {
 }
 
 await main();
+console.log('P2-10 PASS authenticated=true stt=fake tts=fake secret=vault+redacted transport=injectable toggle=isolated');

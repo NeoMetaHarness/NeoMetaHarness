@@ -1,7 +1,5 @@
 import { defineExtension } from '@neometaharness/kernel';
-import { assertSafeProviderUrl, createSafeProviderClient } from '@neometaharness/egress';
-import { File } from 'node:buffer';
-import { FormData } from 'undici';
+import { createEgressFetch, validateEgressUrl } from '@neometaharness/egress';
 import {
   voiceSynthesizeInput, voiceSynthesizeOutput, voiceTranscribeInput, voiceTranscribeOutput,
   type NeoVoiceService, type VoiceSynthesizeInput, type VoiceSynthesizeOutput,
@@ -11,7 +9,8 @@ import {
 const MAX_AUDIO_BYTES = 8_000_000;
 const MAX_TEXT_REQUEST_BYTES = 64_000;
 const MAX_TRANSCRIPT_BYTES = 128_000;
-const MAX_JSON_AUDIO_BYTES = 11_000_000;
+const MAX_JSON_AUDIO_BYTES = 1_000_000;
+const MAX_RESPONSE_AUDIO_BYTES = 1_000_000;
 const RATE_WINDOW_MS = 60_000;
 const DEFAULT_REQUESTS_PER_MINUTE = 12;
 
@@ -75,18 +74,22 @@ export class XaiVoiceService implements NeoVoiceService {
 
   constructor(
     private readonly settings: VoiceSettings,
-    http?: VoiceHttpClient,
+    private readonly http?: VoiceHttpClient,
   ) {
-    this.http = http ?? createSafeProviderClient({ allowPrivateNetwork: settings.allowPrivateNetwork });
+    const injected = http
+      ? (async (url: string | URL | Request, init?: RequestInit) =>
+        http.request(String(url), init ?? {})) as typeof fetch
+      : undefined;
+    this.guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected);
   }
 
-  private readonly http: VoiceHttpClient;
+  private readonly guardedFetch: typeof fetch;
 
   get configured(): boolean { return this.active && Boolean(this.settings.apiKey?.trim()); }
   dispose(): void {
     this.active = false;
     this.rateBuckets.clear();
-    void this.http.close?.().catch(() => undefined);
+    void this.http?.close?.().catch(() => undefined);
   }
 
   private enforceRateLimit(requesterId: string): void {
@@ -116,14 +119,13 @@ export class XaiVoiceService implements NeoVoiceService {
     if (requestBytes > (path === '/v1/stt' ? MAX_AUDIO_BYTES : MAX_TEXT_REQUEST_BYTES)) {
       throw new Error('xAI Voice request too large');
     }
-    const origin = new URL(this.settings.baseUrl || 'https://api.x.ai');
-    await assertSafeProviderUrl(origin, { allowPrivateNetwork: this.settings.allowPrivateNetwork });
+    const origin = validateEgressUrl(this.settings.baseUrl || 'https://api.x.ai', this.settings.allowPrivateNetwork === true);
     this.enforceRateLimit(requesterId);
     const headers: Record<string, string> = { Authorization: `Bearer ${key}` };
     if (contentType) headers['Content-Type'] = contentType;
     let response: Response;
     try {
-      response = await this.http.request(new URL(path, origin.origin).toString(), {
+      response = await this.guardedFetch(new URL(path, origin.origin), {
         method: 'POST', headers, body, signal: AbortSignal.timeout(30_000), redirect: 'error',
       });
     } catch {
@@ -148,7 +150,7 @@ export class XaiVoiceService implements NeoVoiceService {
     form.set('model', 'grok-voice-transcribe-2.0');
     if (input.language) form.set('language', input.language);
     const extension = input.mimeType === 'audio/mpeg' ? 'mp3' : input.mimeType === 'audio/wav' ? 'wav' : 'audio';
-    form.set('file', new File([new Uint8Array(audio)], `audio.${extension}`, { type: input.mimeType }));
+    form.set('file', new Blob([Uint8Array.from(audio)], { type: input.mimeType }), `audio.${extension}`);
     const response = await this.send('/v1/stt', form as unknown as BodyInit, audio.length, requesterId);
     if (mediaType(response) !== 'application/json') throw new Error('xAI Voice returned invalid transcript type');
     return voiceTranscribeOutput.parse(parseProviderJson(await readLimited(response, MAX_TRANSCRIPT_BYTES)));
@@ -165,14 +167,14 @@ export class XaiVoiceService implements NeoVoiceService {
           || !('content_type' in json) || typeof json.content_type !== 'string'
           || !isAudioType(json.content_type)
           || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(json.audio)
-          || Buffer.byteLength(json.audio, 'base64') > MAX_AUDIO_BYTES) {
+          || Buffer.byteLength(json.audio, 'base64') > MAX_RESPONSE_AUDIO_BYTES) {
         throw new Error('xAI Voice returned invalid audio');
       }
       return voiceSynthesizeOutput.parse({ audioBase64: json.audio, mimeType: json.content_type });
     }
     if (!isAudioType(mimeType)) throw new Error('xAI Voice returned invalid audio type');
     return voiceSynthesizeOutput.parse({
-      audioBase64: (await readLimited(response, MAX_AUDIO_BYTES)).toString('base64'), mimeType,
+      audioBase64: (await readLimited(response, MAX_RESPONSE_AUDIO_BYTES)).toString('base64'), mimeType,
     });
   }
 }
