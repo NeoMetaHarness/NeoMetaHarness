@@ -176,7 +176,8 @@ export class Dreamer {
     if (!l1 || !current || !proposal.expect || current.text !== proposal.expect.text || current.trust !== proposal.expect.trust) return false;
     if (proposal.kind === 'dedupe' || proposal.kind === 'retract') return l1.delete(current.id);
     if (proposal.kind === 'promote') {
-      await l1.update(current.id, { trust: 'confirmed', provenance: `${current.provenance}; promoted by dream ${report.id}` });
+      const promoted = await l1.update(current.id, { trust: 'confirmed', provenance: `${current.provenance}; promoted by dream ${report.id}` });
+      if (promoted) local.set(promoted.id, promoted);
       return true;
     }
     // sync-l2: copy a confirmed L1 fact into Honcho, keeping its provenance and a pointer back to L1.
@@ -213,6 +214,9 @@ export function plan(local: MemoryEntry[], remote: MemoryEntry[], l2Ready: boole
     groups.set(key, [...groups.get(key) ?? [], entry]);
   }
   const remoteTexts = new Set(remote.map((entry) => norm(entry.text)));
+  // A copy never vouches for itself: an L2 entry synced from L1 (`l1=`) does not corroborate L1, and an
+  // L1 entry synced from L2 (`honcho:`) is not corroborated by Honcho.
+  const independent = new Set(remote.filter((entry) => !/(^|; )l1=/.test(entry.provenance)).map((entry) => norm(entry.text)));
   const localTexts = new Set(local.map((entry) => norm(entry.text)));
   for (const group of groups.values()) {
     // Keep the most trusted, then the oldest, copy; the rest are duplicates.
@@ -226,14 +230,18 @@ export function plan(local: MemoryEntry[], remote: MemoryEntry[], l2Ready: boole
         reason: 'Untrusted candidate never corroborated in 30 days' });
       continue;
     }
-    const corroborated = group.length > 1 || remoteTexts.has(norm(keep!.text));
-    if (keep!.trust === 'observed' && corroborated) {
+    const corroborated = group.length > 1
+      || (independent.has(norm(keep!.text)) && !group.some((entry) => entry.provenance.startsWith('honcho:')));
+    const promote = keep!.trust === 'observed' && corroborated;
+    if (promote) {
       proposals.push({ kind: 'promote', target: keep!.id, text: clip(keep!.text), destructive: false, expect: expect(keep!),
         reason: group.length > 1 ? `Observed ${group.length} times in L1` : 'Corroborated by Honcho (L2)' });
     }
-    if (l2Ready && keep!.trust === 'confirmed' && !remoteTexts.has(norm(keep!.text))) {
-      proposals.push({ kind: 'sync-l2', target: keep!.id, text: clip(keep!.text), destructive: false, expect: expect(keep!),
-        reason: 'Confirmed L1 fact missing from Honcho' });
+    // A fact promoted in this pass syncs in the same pass (apply runs the promotion first).
+    if (l2Ready && (keep!.trust === 'confirmed' || promote) && !remoteTexts.has(norm(keep!.text))) {
+      proposals.push({ kind: 'sync-l2', target: keep!.id, text: clip(keep!.text), destructive: false,
+        expect: { text: keep!.text, trust: 'confirmed' },
+        reason: promote ? 'Promoted fact missing from Honcho' : 'Confirmed L1 fact missing from Honcho' });
     }
   }
   if (l2Ready) {

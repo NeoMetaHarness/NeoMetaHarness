@@ -36,11 +36,19 @@ const dreamsFile = (directory: string) => {
   assert.deepEqual(by('retract').map((item) => item.target), [stale.id], 'only stale uncorroborated candidates are retracted');
   assert.deepEqual(by('promote').map((item) => item.target), [corroborated.id], 'promotion needs corroboration');
   assert.deepEqual(by('sync-l2').map((item) => item.target), [keep.id], 'only confirmed L1 facts missing from L2 are copied');
+  const promotedOnly = entry('Two sightings'); const again = entry('two sightings');
+  const same = plan([promotedOnly, again], [], true, NOW);
+  assert.deepEqual(same.map((item) => item.kind), ['dedupe', 'promote', 'sync-l2'], 'a promoted fact syncs in the same pass');
   const toL1 = by('sync-l1');
   assert.deepEqual(toL1.map((item) => item.text), ['Project codename is Papaya'], 'turns and known facts stay out of L1');
   assert.ok(proposals.every((item) => item.destructive === (item.kind === 'dedupe' || item.kind === 'retract')));
   assert.equal((toL1[0] as { copy?: { trust: string } }).copy?.trust, 'observed', 'crossing layers never raises trust');
   assert.equal(plan([keep], remote, false, NOW).some((item) => item.kind.startsWith('sync')), false, 'no sync without L2');
+  const fromL2 = entry('Codename Papaya', { provenance: 'honcho:abc; seeded' });
+  const toL2 = entry('Ships on Monday');
+  const echoes = [entry('codename papaya'), entry('ships on monday', { provenance: `test; l1=${toL2.id}` })];
+  assert.equal(plan([fromL2, toL2], echoes, true, NOW).some((item) => item.kind === 'promote'), false,
+    'a synced copy never corroborates its own origin');
   console.log('DREAM_UNIT plan rules: dedupe, retract, promote, sync both ways');
 }
 
@@ -96,6 +104,7 @@ try {
   assert.equal([...l1.entries.values()][0]!.trust, 'confirmed');
   await assert.rejects(dreamer.apply(report.id), /Dream is applied/);
   assert.equal(dreamer.last('w')?.status, 'applied');
+  assert.equal((await dreamer.run('w')).status, 'empty', 'one pass consolidates fully');
   console.log('DREAM_UNIT observe proposes, apply writes once');
 
   // A target that changed after the dream is skipped, not overwritten.
