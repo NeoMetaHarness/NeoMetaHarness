@@ -8,7 +8,9 @@
     "type": "object",
     "properties": {
       "apiKey": { "type": "string", "title": "xAI API key", "secret": true },
-      "baseUrl": { "type": "string", "title": "xAI API origin", "default": "https://api.x.ai" }
+      "baseUrl": { "type": "string", "title": "xAI API origin", "default": "https://api.x.ai" },
+      "allowPrivateNetwork": { "type": "boolean", "title": "Allow private-network xAI origin", "default": false },
+      "requestsPerMinute": { "type": "integer", "title": "Voice requests per user per minute", "default": 12, "minimum": 1, "maximum": 120 }
     }
   }
 }

@@ -11,6 +11,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import { neoContract } from '@neometaharness/contracts';
 import type { ContractRouterClient } from '@orpc/contract';
 import { XaiVoiceService, type VoiceHttpClient } from '../src/index.js';
+import { assertSafeProviderUrl } from '@neometaharness/kernel';
 
 const repo = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 type Client = ContractRouterClient<typeof neoContract>;
@@ -96,6 +97,7 @@ async function main() {
     const injected: VoiceHttpClient = {
       request: async (url, init) => {
         calls.push(new URL(url).pathname);
+        assert.equal(init.redirect, 'error');
         assert.equal(new Headers(init.headers).get('authorization'), `Bearer ${key}`);
         return new Response(JSON.stringify({ text: 'Injected transcript' }), {
           headers: { 'content-type': 'application/json' }, status: 200,
@@ -106,7 +108,32 @@ async function main() {
     assert.equal((await independent.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' })).text, 'Injected transcript');
     assert.deepEqual(calls, ['/v1/stt']);
     await assert.rejects(independent.synthesize({ text: 'x'.repeat(15_001) }), /too_big|<=15000|15000|maximum|less than or equal/i);
-    independent.dispose();
+    for (const blockedIp of ['127.0.0.1', '169.254.169.254', '10.0.0.1', '192.168.0.1', '::1', '::ffff:127.0.0.1']) {
+      await assert.rejects(assertSafeProviderUrl(new URL('https://test.example'), {
+        resolveHost: async () => [blockedIp],
+      }), /Private provider endpoint is disabled/);
+    }
+    await assert.rejects(assertSafeProviderUrl(new URL('http://1.1.1.1')), /requires HTTPS/);
+    await assert.rejects(new XaiVoiceService({ apiKey: key, baseUrl: `http://127.0.0.1:${fake.port}` }, injected)
+      .transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' }), /Private provider endpoint is disabled/);
+
+    let paidCalls = 0;
+    const audioClient: VoiceHttpClient = { request: async (_url, init) => {
+      assert.equal(init.redirect, 'error');
+      paidCalls++;
+      return new Response(audio, { headers: { 'content-type': 'audio/mpeg' } });
+    } };
+    const limited = new XaiVoiceService({ apiKey: key, requestsPerMinute: 1 }, audioClient);
+    await limited.synthesize({ text: 'one' }, 'member-one');
+    await limited.synthesize({ text: 'two' }, 'member-two');
+    await assert.rejects(limited.synthesize({ text: 'three' }, 'member-one'), /rate limit exceeded/);
+    assert.equal(paidCalls, 2);
+    const html = new XaiVoiceService({ apiKey: key }, { request: async () =>
+      new Response('<html>private body</html>', { headers: { 'content-type': 'text/html' } }) });
+    await assert.rejects(html.synthesize({ text: 'hi' }), /invalid audio type/);
+    const oversize = new XaiVoiceService({ apiKey: key }, { request: async () =>
+      new Response(new Uint8Array(8_000_001), { headers: { 'content-type': 'audio/mpeg' } }) });
+    await assert.rejects(oversize.synthesize({ text: 'hi' }), /response too large/);    independent.dispose();
     await assert.rejects(independent.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' }), /disabled/);
 
     app = await startGateway(home);
@@ -116,7 +143,7 @@ async function main() {
     assert.equal((await fetch(`${base}/x/voice-xai/status`)).status, 401);
     await rpc.extensions.enable({ id: 'sample-ts' });
     const saved = await rpc.settings.set({ extension: 'voice-xai', values: {
-      apiKey: key, baseUrl: `http://127.0.0.1:${fake.port}`,
+      apiKey: key, baseUrl: `http://127.0.0.1:${fake.port}`, allowPrivateNetwork: true, requestsPerMinute: 12,
     } });
     assert.equal(JSON.stringify(saved).includes(key), false);
     const settings = await rpc.settings.get({ extension: 'voice-xai' });
