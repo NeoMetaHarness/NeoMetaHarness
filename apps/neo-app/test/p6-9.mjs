@@ -1,11 +1,11 @@
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { startCodingFixture } from './p6-9-coding.mjs';
+import { gatewayReady } from './gateway-ready.mjs';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { createInterface } from 'node:readline';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile, mkdir, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -57,10 +57,12 @@ let AUTH = '';
 const authHeaders = () => ({ authorization: `Bearer ${AUTH}` });
 
 async function startGateway(dbFile, hermesHome, modelUrl, dshUrl, extra = {}) {
+  const startedAt = Date.now();
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: gatewayDir,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
+    detached: process.platform !== 'win32',
     env: {
       ...process.env, NODE_ENV: 'test',
       NMH_UPSTREAM_CACHE: upstreamCache(),
@@ -70,18 +72,8 @@ async function startGateway(dbFile, hermesHome, modelUrl, dshUrl, extra = {}) {
   });
   let errors = '';
   child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
-  const port = await new Promise((done, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Gateway startup timed out: ${errors}`)), 20000);
-    const lines = createInterface({ input: child.stdout });
-    const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
-    const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
-    lines.on('line', (line) => {
-      if (line.startsWith('NEO_DESKTOP_TOKEN ')) AUTH = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
-      if (line.startsWith('GATEWAY_READY ')) success(JSON.parse(line.slice('GATEWAY_READY '.length)).port);
-    });
-    child.once('error', fail);
-    child.once('exit', (code) => fail(new Error(`Gateway exited ${code}: ${errors}`)));
-  });
+  const port = await gatewayReady(child, { onToken: token => { AUTH = token; }, errors: () => errors });
+  console.log(`P6-9_GATEWAY_READY startup_ms=${Date.now() - startedAt}`);
   return { port, child, errors: () => errors, async close() {
     if (child.exitCode !== null) return;
     const exit = new Promise((done) => child.once('exit', done));
