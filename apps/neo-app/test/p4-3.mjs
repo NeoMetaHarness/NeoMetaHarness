@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { createInterface } from 'node:readline';
+import { gatewayReady } from './gateway-ready.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -44,26 +44,18 @@ let AUTH = '';
 const authHeaders = () => ({ authorization: `Bearer ${AUTH}` });
 
 async function startGateway(dbFile, hermesHome, modelUrl) {
+  const startedAt = Date.now();
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: gatewayDir,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
+    detached: process.platform !== 'win32',
     env: { ...process.env, NMH_DB_PATH: dbFile, NMH_HERMES_HOME: hermesHome, NMH_HERMES_MODEL_URL: modelUrl, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let errors = '';
   child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
-  const port = await new Promise((done, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Gateway startup timed out: ${errors}`)), 20000);
-    const lines = createInterface({ input: child.stdout });
-    const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
-    const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
-    lines.on('line', (line) => {
-      if (line.startsWith('NEO_DESKTOP_TOKEN ')) AUTH = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
-      if (line.startsWith('GATEWAY_READY ')) success(JSON.parse(line.slice('GATEWAY_READY '.length)).port);
-    });
-    child.once('error', fail);
-    child.once('exit', (code) => fail(new Error(`Gateway exited ${code}: ${errors}`)));
-  });
+  const port = await gatewayReady(child, { onToken: token => { AUTH = token; }, errors: () => errors });
+  console.log(`P4-3_GATEWAY_READY startup_ms=${Date.now() - startedAt}`);
   return { port, child, errors: () => errors, async close() {
     if (child.exitCode !== null) return;
     const exit = new Promise((done) => child.once('exit', done));
@@ -130,6 +122,28 @@ async function pageSession(chrome, url) {
   return {
     evaluate,
     eventually,
+    async holdResponse(urlPattern) {
+      let paused;
+      let arrived;
+      const ready = new Promise((resolve, reject) => {
+        arrived = resolve;
+        setTimeout(() => { if (!paused) reject(new Error(`No intercepted response for ${urlPattern}`)); }, 20000).unref();
+      });
+      const listener = ({ data }) => {
+        const event = JSON.parse(data);
+        if (event.sessionId === sessionId && event.method === 'Fetch.requestPaused') {
+          paused = event.params.requestId;
+          arrived();
+        }
+      };
+      chrome.socket.addEventListener('message', listener);
+      await chrome.send('Fetch.enable', { patterns: [{ urlPattern, requestStage: 'Response' }] }, sessionId);
+      return { ready, async release() {
+        await chrome.send('Fetch.continueRequest', { requestId: paused }, sessionId);
+        await chrome.send('Fetch.disable', {}, sessionId);
+        chrome.socket.removeEventListener('message', listener);
+      } };
+    },
     async typeText(text) {
       await chrome.send('Input.insertText', { text }, sessionId);
     },
@@ -349,17 +363,24 @@ async function trial(previewPort) {
       assert.ok(botBInput.includes('neo-learned-workflow'), `Bot B model request lacks skill. ${botBInput.slice(0, 2500)}`);
       console.log('P4-3_STAGE bot B model saw projected skill');
 
+      // Hold the target's old value until after the user edits it. A slow read
+      // must not overwrite the selection that Save is about to persist.
+      const ceilingRead = await page.holdResponse('*ceiling*');
       await page.evaluate(`(() => {
         const select = document.querySelector('[data-testid=registry-engine]');
         select.value = 'superagent';
         select.dispatchEvent(new Event('change', { bubbles: true }));
       })()`);
       await page.eventually('document.querySelector("[data-testid=registry-target]")?.value === "default"', 'superagent target default');
+      await ceilingRead.ready;
       await page.evaluate(`(() => {
         const select = document.querySelector('[data-testid=registry-ceiling]');
         select.value = 'auto-low';
         select.dispatchEvent(new Event('change', { bubbles: true }));
       })()`);
+      await ceilingRead.release();
+      await page.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+      await page.eventually('document.querySelector("[data-testid=registry-ceiling]")?.value === "auto-low"', 'user ceiling survives delayed read');
       await page.evaluate('document.querySelector("[data-testid=registry-ceiling-save]").click()');
       await page.eventually('document.body?.innerText?.includes("Autonomy ceiling set to auto-low")', 'superagent ceiling saved');
       await page.eventually('!(document.querySelector("[data-testid=registry-assign]")?.disabled || document.querySelector("[data-testid=registry-assign]")?.getAttribute("aria-disabled") === "true")', 'assign enabled for superagent');
