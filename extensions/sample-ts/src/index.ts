@@ -15,11 +15,11 @@ export default defineExtension({
       },
     });
     ctx.route('hello', () => ({ message: settings?.greeting ?? 'Hello from TypeScript' }));
+    // Secrets never leave the extension.
     ctx.route('config', () => ({
       greeting: settings?.greeting ?? 'Hello from TypeScript',
       maxRetries: settings?.maxRetries ?? 3,
       hasSecret: Boolean(settings?.apiSecret),
-      apiSecret: settings?.apiSecret,
     }));
     ctx.contribute('tools', { id: 'sample-ts.echo', name: 'Sample TypeScript echo' });
     ctx.health(() => ({ ok: true }));

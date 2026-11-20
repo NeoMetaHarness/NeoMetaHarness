@@ -314,7 +314,8 @@ async function trial(number, previewPort) {
       assert.equal(updatedConfig.greeting, newGreeting);
       assert.equal(updatedConfig.maxRetries, newRetries);
       assert.equal(updatedConfig.hasSecret, true);
-      assert.equal(updatedConfig.apiSecret, secretValue, 'sample-ts must receive decrypted secret from vault');
+      assert.ok(!Object.hasOwn(updatedConfig, 'apiSecret'), 'sample-ts config must never expose apiSecret');
+      assert.ok(!JSON.stringify(updatedConfig).includes(secretValue), 'sample-ts config must not reveal the vault secret');
 
       // 6. Secret is NEVER returned via settings.get
       const settingsGetResult = await rpc.settings.get({ extension: 'sample-ts' });
