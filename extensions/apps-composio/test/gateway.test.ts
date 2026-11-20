@@ -62,10 +62,15 @@ try {
   assert.equal(fake.calls.find(c => c.path.endsWith('/connected_accounts/link'))!.body.callback_url, base + '/');
   const request = { provider: 'composio', accountId: account.id, action: 'GITHUB_LIST_REPOSITORIES_FOR_THE_AUTHENTICATED_USER', arguments: { repo: 'test/repo' } };
   await assert.rejects(viewer.apps.run(request), (e: any) => e.code === 'FORBIDDEN');
+  const accountB = await roles.get('other-workspace')!.apps.connect(connect);
+  assert.notEqual(account.id, accountB.id);
   const beforeForeign = fake.calls.length;
-  await assert.rejects(roles.get('member-b')!.apps.run(request));
-  await assert.rejects(roles.get('other-workspace')!.apps.run(request));
-  await assert.rejects(roles.get('member-b')!.apps.grant({ provider: 'composio', accountId: account.id, engine: 'hermes', profile: 'test-hermes', enabled: true }));
+  await assert.rejects(roles.get('member-b')!.apps.run(request), (e: any) => e.code === 'NOT_FOUND');
+  await assert.rejects(roles.get('other-workspace')!.apps.run(request), (e: any) => e.code === 'NOT_FOUND');
+  const requestB = { ...request, accountId: accountB.id };
+  await assert.rejects(member.apps.run(requestB), (e: any) => e.code === 'NOT_FOUND');
+  await assert.rejects(member.apps.grant({ provider: 'composio', accountId: accountB.id, engine: 'hermes', profile: 'test-hermes', enabled: true }), (e: any) => e.code === 'NOT_FOUND');
+  await assert.rejects(roles.get('member-b')!.apps.grant({ provider: 'composio', accountId: account.id, engine: 'hermes', profile: 'test-hermes', enabled: true }), (e: any) => e.code === 'NOT_FOUND');
   assert.equal(fake.calls.length, beforeForeign, 'Cross-user/workspace requests never reach Composio');
   const executes = () => fake.calls.filter(c => c.path.includes('/execute/')).length;
   await owner.inbox.acceptMode.set({ mode: 'act' });
@@ -91,6 +96,7 @@ try {
   for (const engine of ['hermes','dsh','superagent']) {
     await member.apps.grant({ provider: 'composio', accountId: account.id, engine: engine as any, profile: `test-${engine}`, enabled: true });
     assert.equal((await owner.extensions.enable({ id: `fake-${engine}` })).status, 'running');
+    await assert.rejects(member.apps.grant({ provider: 'composio', accountId: account.id, engine: engine as any, profile: `foreign-${engine}`, enabled: true }), (e: any) => e.code === 'NOT_FOUND');
     const config = JSON.parse(await readFile(join(home, 'extensions', `fake-${engine}`, 'config.json'), 'utf8'));
     const binding = JSON.parse(await readFile(config.env.NEO_APPS_MCP_BINDING, 'utf8')); tokens.push(binding.token);
     assert.equal(binding.workspace, workspace.id);

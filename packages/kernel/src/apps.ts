@@ -1,3 +1,4 @@
+export class AppsAccountNotFoundError extends Error {}
 /** Provider-neutral connected apps. User identity and roles come from the Gateway. */
 export type AppToolkit = { id: string; name: string };
 export type AppAccount = { id: string; toolkit: string };

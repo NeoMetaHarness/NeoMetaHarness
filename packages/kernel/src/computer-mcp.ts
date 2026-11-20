@@ -1,3 +1,4 @@
+export class McpProfileNotFoundError extends Error {}
 /** Optional computer MCP projection. Engines remain usable when its extension is disabled. */
 export type ComputerEngine = 'hermes' | 'dsh' | 'superagent';
 export interface ComputerMcpConfig { transport: 'stdio'; serverName: string; command: string; args: string[]; env: Record<string, string> }
@@ -14,7 +15,7 @@ export class McpProjectionBridge {
     if (!workspace || workspace === 'default' || !profile) throw new Error('Explicit MCP workspace required');
     const key = JSON.stringify([engine, profile]);
     const previous = this.workspaces.get(key) ?? this.consumers.get(key)?.workspace;
-    if (previous && previous !== workspace) throw new Error('MCP profile belongs to another workspace');
+    if (previous && previous !== workspace) throw new McpProfileNotFoundError('MCP profile belongs to another workspace');
     this.workspaces.set(key, workspace);
     const waiting = this.unscoped.get(key);
     if (waiting) { this.unscoped.delete(key); await this.ready(engine, profile, waiting.home, workspace); }

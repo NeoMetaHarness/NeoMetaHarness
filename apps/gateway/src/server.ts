@@ -1,4 +1,4 @@
-import { AppsRegistry, McpProjectionBridge } from '@neometaharness/kernel';
+import { AppsRegistry, AppsAccountNotFoundError, McpProjectionBridge, McpProfileNotFoundError } from '@neometaharness/kernel';
 import { codingWorkflowRouter } from './coding-workflow.js';
 import { ComputerMcpBridge } from '@neometaharness/kernel';
 import { createServer } from 'node:http';
@@ -703,7 +703,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       run: os.apps.run.handler(async ({ input, context }) => {
         authorize('apps.run', context);
         if (!context.workspaceId) throw new ORPCError('FORBIDDEN');
-        return appsRegistry.run(input, { kind: 'user', userId: context.user!.id, workspaceId: context.workspaceId });
+        try { return await appsRegistry.run(input, { kind: 'user', userId: context.user!.id, workspaceId: context.workspaceId }); }
+        catch (error) { if (error instanceof AppsAccountNotFoundError) throw new ORPCError('NOT_FOUND'); throw error; }
       }),
       grant: os.apps.grant.handler(async ({ input, context }) => {
         authorize('apps.grant', context);
@@ -711,7 +712,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         const actor = { kind: 'user' as const, userId: context.user!.id, workspaceId: context.workspaceId };
         // Check ownership before assigning any scope to an engine profile.
         await appsRegistry.grant(input.provider, input.accountId, input, input.enabled, actor,
-          () => appsMcpBridge.bindWorkspace(input.engine, input.profile, actor.workspaceId));
+          () => appsMcpBridge.bindWorkspace(input.engine, input.profile, actor.workspaceId)).catch(error => {
+            if (error instanceof AppsAccountNotFoundError || error instanceof McpProfileNotFoundError) throw new ORPCError('NOT_FOUND');
+            throw error;
+          });
         return { ok: true };
       }),
     },

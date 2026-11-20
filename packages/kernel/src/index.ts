@@ -13,7 +13,7 @@ import { ExtensionProcess } from './process.js';
 import { ExtensionInstalls } from './install.js';
 import { managedCordisEntry, managedProcessCommand, pinCordisResolution } from './managed-runtime.js';
 export { extensionIntegrity } from './install.js';
-export { McpProjectionBridge, ComputerMcpBridge, type McpEngine, type McpConfig, type McpProjection, type ComputerMcpConfig, type ComputerMcpProjection } from './computer-mcp.js';
+export { McpProfileNotFoundError, McpProjectionBridge, ComputerMcpBridge, type McpEngine, type McpConfig, type McpProjection, type ComputerMcpConfig, type ComputerMcpProjection } from './computer-mcp.js';
 export { SkillsBridge, type SkillProjection } from './skills.js';
 
 export { coerceSettingValues, dependencyProblem, loadManifest, resolveOrder, SettingsValidationError, validateSettings } from './manifest.js';

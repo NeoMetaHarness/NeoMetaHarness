@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import type { AppsActor, AppEngineGrant } from '@neometaharness/kernel';
+import { AppsAccountNotFoundError, type AppsActor, type AppEngineGrant } from '@neometaharness/kernel';
 import { restrictPrivatePath } from '@neometaharness/vault';
 type Account = { id: string; toolkit: string; ownerUserId: string; grants: AppEngineGrant[] };
 type Workspace = { version: 2; workspaceId: string; accounts: Account[] };
@@ -26,7 +26,7 @@ export class AccountStore {
   authorize(accountId: string, actor: AppsActor): Account {
     const account = this.workspaces.get(actor?.workspaceId)?.accounts.find(a => a.id === accountId);
     if (!account || (actor.kind === 'user' ? account.ownerUserId !== actor.userId
-      : !account.grants.some(g => g.engine === actor.engine && g.profile === actor.profile))) throw new Error('Connected account access denied');
+      : !account.grants.some(g => g.engine === actor.engine && g.profile === actor.profile))) throw new AppsAccountNotFoundError('Connected account access denied');
     return account;
   }
   find(accountId: string, workspaceId: string) { return this.workspaces.get(workspaceId)?.accounts.find(a => a.id === accountId); }
@@ -53,7 +53,7 @@ export class AccountStore {
     if (actor.kind !== 'user') throw new Error('Only the account owner can grant engine access');
     return this.mutate(actor.workspaceId, workspace => {
       const account = workspace.accounts.find(a => a.id === accountId);
-      if (!account || account.ownerUserId !== actor.userId) throw new Error('Connected account access denied');
+      if (!account || account.ownerUserId !== actor.userId) throw new AppsAccountNotFoundError('Connected account access denied');
       account.grants = account.grants.filter(g => g.engine !== grant.engine || g.profile !== grant.profile);
       if (enabled) account.grants.push({ ...grant });
     });
