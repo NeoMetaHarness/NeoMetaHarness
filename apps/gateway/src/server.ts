@@ -301,7 +301,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     skillsBridge,
     extensionDataDir,
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
-  });
+  }, dataDir, process.env.NMH_EXTENSION_PYTHON);
 
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
     authorize(`vault.${operation}`, context);
@@ -344,8 +344,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
   const agentApi = await createAgentGateway(db, kernel);
   for (const extension of kernel.list()) {
-    const manifest = JSON.parse(readFileSync(join(resolve(options.extensionsDir ?? defaultExtensions), extension.id, 'neo.extension.json'), 'utf8'));
-    backupStorage.versions[extension.id] = manifest.version;
+    if (extension.version) backupStorage.versions[extension.id] = extension.version;
   }
   const os = implement(neoContract).$context<GatewayAuthContext>().use(policyMiddleware as any);
 
@@ -413,9 +412,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     return kernel.invokeRoute(path, 'RPC', body);
   };
   type SkillRecord = RegistrySkill;
-  const withHealth = async (id: string) => {
-    const health = await kernel.health(id).catch(() => ({ ok: false }));
-    return { ...kernel.status(id), ...(health ? { health } : {}) };
+  const withHealth = async (extension: ReturnType<typeof kernel.status>) => {
+    const health = await kernel.health(extension.id).catch(() => ({ ok: false }));
+    return { ...extension, ...(health ? { health } : {}) };
+  };
+  const syncBackupVersion = (id: string) => {
+    const version = kernel.list().find(extension => extension.id === id)?.version;
+    if (version) backupStorage.versions[id] = version;
+    else delete backupStorage.versions[id];
   };
 
   const router = {
@@ -1018,19 +1022,31 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     extensions: {
       list: os.extensions.list.handler(async ({ context }) => {
         authorize('extensions.list', context);
-        return Promise.all(kernel.list().map((extension) => withHealth(extension.id)));
+        return Promise.all(kernel.list().map(withHealth));
+      }),
+      upgrade: os.extensions.upgrade.handler(async ({ input, context }) => {
+        authorize('extensions.upgrade', context);
+        const result = await kernel.upgrade(input.id, input.directory, input);
+        if (result.upgraded) syncBackupVersion(input.id);
+        return result;
       }),
       enable: os.extensions.enable.handler(async ({ input, context }) => {
         authorize('extensions.enable', context);
-        await kernel.enable(input.id);
+        const extension = await kernel.enable(input.id);
         if (input.id === 'engine-hermes') await agentApi.sync();
-        return withHealth(input.id);
+        return withHealth(extension);
       }),
       disable: os.extensions.disable.handler(async ({ input, context }) => {
         authorize('extensions.disable', context);
         if (input.id === 'engine-hermes') await agentApi.stop();
-        await kernel.disable(input.id);
-        return withHealth(input.id);
+        return withHealth(await kernel.disable(input.id));
+      }),
+      uninstall: os.extensions.uninstall.handler(async ({ input, context }) => {
+        authorize('extensions.uninstall', context);
+        const extension = await kernel.uninstall(input.id);
+        if (input.id === 'engine-hermes') await agentApi.stop();
+        syncBackupVersion(input.id);
+        return withHealth(extension);
       }),
     },
     settings: {

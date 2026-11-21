@@ -209,9 +209,9 @@
     },
     "P1-10": {
       "title": "Blue/green extension upgrade in the kernel",
-      "status": "in_progress",
+      "status": "review",
       "owner": "sol61",
-      "note": "Returned 2026-11-20: makes test:p6-4 flaky (GitHub 429 poll resolves instead of rejecting; 3/4 fail vs main 3/3 pass)."
+      "evidence": "Round 3 at fa2c020: test:p1-10, standalone kernel tests, Gateway tests, test:toggle and test:p6-9 each passed twice on Windows. Coverage includes interpreter and path restrictions, Cordis import confinement, mode-independent integrity, read-only generations, multi-file Python restart, process route deadlines, retained disabled upgrades, owner-only uninstall and standalone managed restore. The focused GitHub poll expiry regression passed. P6-9 replacement startup was 15.3 and 11.9 seconds with clean SQLite cleanup. Earlier at a0ef5da: P6-9, P4-3 and P1-5 each passed 3 consecutive runs, and a forced P6-9 deadline exited 1."
     },
     "P1-11": {
       "title": "Desktop auto-updater (Tauri updater): real signing key and update flow",

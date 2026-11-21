@@ -137,6 +137,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
 
   // extensions
   'extensions.list': 'viewer',
+  'extensions.upgrade': 'owner',
+  'extensions.uninstall': 'owner',
   'extensions.enable': 'admin',
   'extensions.disable': 'admin',
 
@@ -259,6 +261,7 @@ export function getPolicy(path: string): PolicyLevel | undefined {
 }
 
 export function authorize(path: string, context?: GatewayAuthContext): void {
+  if (path === 'extensions.upgrade' || path === 'extensions.uninstall') return authorizeExtensionInstallChange(context);
   const level = getPolicy(path);
   if (!level) {
     throw new ORPCError('INTERNAL_SERVER_ERROR', {
@@ -290,6 +293,10 @@ export function authorize(path: string, context?: GatewayAuthContext): void {
       });
     }
   }
+}
+
+function authorizeExtensionInstallChange(context?: GatewayAuthContext): void {
+  requireOwner(context);
 }
 
 export function getContractProcedurePaths(contract: any, prefix = ''): string[] {

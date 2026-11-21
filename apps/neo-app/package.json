@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:p6-9": "node test/p6-9.mjs",
+    "test:p6-9": "node --test test/gateway-ready.test.mjs && node test/p6-9.mjs",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",

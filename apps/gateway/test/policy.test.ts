@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { neoContract } from '@neometaharness/contracts';
@@ -218,8 +218,20 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
   const extensionsDir = join(root, 'extensions');
   await mkdir(extensionsDir);
 
+  for (const [id, route, result] of [
+    ['test-custom', 'status', { ok: true, version: '1.0' }],
+    ['memory-local', 'list', {}],
+  ] as const) {
+    const directory = join(extensionsDir, id);
+    await mkdir(directory);
+    await writeFile(join(directory, 'neo.extension.json'), JSON.stringify({
+      id, version: '1.0.0', displayName: id, runtime: { type: 'cordis', entry: './index.mjs' },
+    }));
+    await writeFile(join(directory, 'index.mjs'), `export default { activate(ctx) { ctx.route(${JSON.stringify(route)}, () => (${JSON.stringify(result)})); } };`);
+  }
   const gateway = await startGateway({
     databaseFile,
+    extensionsDir,
     mode: 'server',
     signup: 'open', // these suites predate SEC-08 and register users freely
   });
@@ -281,6 +293,22 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
     const unauthClient = makeClient(gateway.port);
     const outsiderClient = makeClient(gateway.port, { authorization: `Bearer ${outsiderToken}` });
     const viewerClient = makeClient(gateway.port, { authorization: `Bearer ${viewerToken}` });
+    const upgrade = { id: 'test-custom', directory: join(root, 'candidate'), integrity: '0'.repeat(64) };
+    await assert.rejects(viewerClient.extensions.upgrade(upgrade), (error: any) => error.code === 'FORBIDDEN');
+    const adminSignup = await (await fetch(`${base}/auth/sign-up/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'upgrade-admin@neo.local', password: 'AdminPassword!123', name: 'Admin' }),
+    })).json();
+    await gateway.auth.api.addMember({
+      body: { organizationId: workspace.id, userId: adminSignup.user.id, role: 'admin' },
+      headers: new Headers({ authorization: `Bearer ${ownerToken}` }),
+    });
+    const adminClient = makeClient(gateway.port, { authorization: `Bearer ${adminSignup.token}` });
+    assert.equal((await adminClient.extensions.enable({ id: 'test-custom' })).status, 'running');
+    await assert.rejects(adminClient.extensions.upgrade(upgrade), (error: any) => error.code === 'FORBIDDEN');
+    assert.equal((await adminClient.extensions.disable({ id: 'test-custom' })).status, 'disabled');
+    await assert.rejects(adminClient.extensions.uninstall({ id: 'test-custom' }), (error: any) => error.code === 'FORBIDDEN');
 
     // 2. Disabled extension check:
     // Extensions (engine-t3, engine-hermes, engine-superagent, skills-registry) are NOT running in this test environment.
@@ -348,7 +376,7 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
     );
 
     // 3. Plain HTTP extension routes (kernel.hasRoute GET path)
-    (gateway.kernel as any).routes.set('/x/test-custom/status', () => ({ ok: true, version: '1.0' }));
+    await gateway.kernel.enable('test-custom');
 
     // Unauthenticated GET -> 401
     const unauthGet = await fetch(`${base}/x/test-custom/status`);
@@ -382,7 +410,7 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
     assert.equal(unmappedGet.status, 404, 'Unregistered /x/ route must return 404');
 
     // 4. Internal HTTP routes
-    (gateway.kernel as any).routes.set('/x/memory-local/list', () => ({}));
+    await gateway.kernel.enable('memory-local');
     const internalMemGet = await fetch(`${base}/internal/memory/context?profile=default`);
     assert.equal(internalMemGet.status, 401, 'Internal memory context without bearer token must return 401');
 

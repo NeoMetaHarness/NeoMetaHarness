@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -35,6 +35,7 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
   const [notice, setNotice] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
   const [ceiling, setCeiling] = useState<'suggest' | 'auto-low' | 'auto'>('suggest');
+  const ceilingRevision = useRef(0);
 
   async function refresh() {
     const [items, targets] = await Promise.all([api.list(), api.assignments()]);
@@ -62,8 +63,12 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
   const evalAllowed = evalStatus === 'passed' || evalStatus === 'overridden';
   useEffect(() => {
     if (!targetId.trim()) return;
-    void api.ceiling.get({ engine: targetEngine, targetId }).then((result) => setCeiling(result.ceiling))
-      .catch((reason) => setError(String(reason)));
+    let active = true;
+    const revision = ++ceilingRevision.current;
+    void api.ceiling.get({ engine: targetEngine, targetId }).then((result) => {
+      if (active && revision === ceilingRevision.current) setCeiling(result.ceiling);
+    }).catch((reason) => { if (active && revision === ceilingRevision.current) setError(String(reason)); });
+    return () => { active = false; };
   }, [targetEngine, targetId]);
 
   return <section className="skills-panel skills-registry" data-testid="registry-panel">
@@ -132,6 +137,7 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
         <h3>Assign skill</h3>
         <label>Engine <select data-testid="registry-engine" value={targetEngine}
           onChange={(event) => {
+            ++ceilingRevision.current;
             const engine = event.target.value as 'hermes' | 'dsh' | 'superagent';
             setTargetEngine(engine);
             setTargetId(engine === 'hermes' ? profile : engine === 'superagent' ? 'default' : '');
@@ -139,10 +145,10 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
           <option value="hermes">Hermes bot</option><option value="dsh">DSH session</option><option value="superagent">Superagent</option>
         </select></label>
         <label>Bot or session ID <input data-testid="registry-target" value={targetId} list="registry-profiles"
-          onChange={(event) => setTargetId(event.target.value)} /></label>
+          onChange={(event) => { ++ceilingRevision.current; setTargetId(event.target.value); }} /></label>
         <datalist id="registry-profiles">{profiles.map((name) => <option key={name} value={name} />)}</datalist>
         <label>Target autonomy ceiling <select data-testid="registry-ceiling" value={ceiling}
-          onChange={(event) => setCeiling(event.target.value as typeof ceiling)}>
+          onChange={(event) => { ++ceilingRevision.current; setCeiling(event.target.value as typeof ceiling); }}>
           <option value="suggest">Suggest</option><option value="auto-low">Auto low</option><option value="auto">Auto</option>
         </select></label>
         <Button label="Save autonomy ceiling" data-testid="registry-ceiling-save" isDisabled={busy || !targetId.trim()}

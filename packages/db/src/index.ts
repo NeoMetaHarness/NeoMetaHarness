@@ -116,10 +116,18 @@ function toVaultRow(record: VaultStoredSecret): VaultSecretTable {
     updated_at: record.updatedAt,
   };
 }
+export interface ExtensionInstall {
+  id: string;
+  directory: string;
+  version: string;
+  integrity: string | null;
+}
+
 export interface NeoTables extends AgentTables {
   memory_entry: MemoryEntry;
   extension_state: ExtensionStateTable;
   extension_settings: ExtensionSettingsTable;
+  extension_install: ExtensionInstall;
   vault_secret: VaultSecretTable;
 }
 
@@ -130,6 +138,10 @@ export interface DatabaseProvider {
   setEnabled(id: string, enabled: boolean): Promise<void>;
   getExtensionSettings?(id: string): Promise<Record<string, unknown> | undefined>;
   setExtensionSettings?(id: string, values: Record<string, unknown>): Promise<void>;
+  listExtensionInstalls?(): Promise<ExtensionInstall[]>;
+  getExtensionInstall?(id: string): Promise<Omit<ExtensionInstall, 'id'> | undefined>;
+  setExtensionInstall?(id: string, value: Omit<ExtensionInstall, 'id'>): Promise<void>;
+  deleteExtensionInstall?(id: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -164,6 +176,15 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
       .addColumn('id', 'text', (column) => column.primaryKey())
       .addColumn('data', 'text', (column) => column.notNull())
       .execute();
+    await this.db.schema.createTable('extension_install').ifNotExists()
+      .addColumn('id', 'text', (column) => column.primaryKey())
+      .addColumn('directory', 'text', (column) => column.notNull())
+      .addColumn('version', 'text', (column) => column.notNull())
+      .addColumn('integrity', 'text').execute();
+    const installs = (await this.db.introspection.getTables()).find(table => table.name === 'extension_install');
+    if (!installs?.columns.some(column => column.name === 'integrity')) {
+      await this.db.schema.alterTable('extension_install').addColumn('integrity', 'text').execute();
+    }
     await this.db.schema.createTable('vault_secret').ifNotExists()
       .addColumn('id', 'text', (column) => column.primaryKey())
       .addColumn('scope_kind', 'text', (column) => column.notNull())
@@ -208,6 +229,20 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
     const data = JSON.stringify(values);
     await this.db.insertInto('extension_settings').values({ id, data })
       .onConflict((conflict) => conflict.column('id').doUpdateSet({ data })).execute();
+  }
+
+  async listExtensionInstalls() {
+    return this.db.selectFrom('extension_install').selectAll().execute();
+  }
+  async getExtensionInstall(id: string) {
+    return this.db.selectFrom('extension_install').select(['directory', 'version', 'integrity']).where('id', '=', id).executeTakeFirst();
+  }
+  async setExtensionInstall(id: string, value: Omit<ExtensionInstall, 'id'>) {
+    await this.db.insertInto('extension_install').values({ id, ...value })
+      .onConflict((conflict) => conflict.column('id').doUpdateSet(value)).execute();
+  }
+  async deleteExtensionInstall(id: string) {
+    await this.db.deleteFrom('extension_install').where('id', '=', id).execute();
   }
 
   async getVaultSecret(id: string): Promise<VaultStoredSecret | undefined> {

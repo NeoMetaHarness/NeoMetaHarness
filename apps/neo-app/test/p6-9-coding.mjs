@@ -67,6 +67,7 @@ async function capture(child) {
 function spawnT3(args, state) {
   return spawn(t3Exe, [t3Entry, ...args], {
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
     env: { ...cleanEnv, ELECTRON_RUN_AS_NODE: '1', T3CODE_DESKTOP_CLI_LAUNCHER: '1', T3CODE_HOME: state },
   });
 }
@@ -81,7 +82,7 @@ async function waitT3(url, child) {
     } catch { return false; }
   }, 'isolated T3 readiness', 25000);
 }
-async function pinnedSetup(temp, url, session, providerId, projectId) {
+async function pinnedSetup(temp, url, session, providerId, projectId, track) {
   const entry = join(repo, 'extensions/coding-workflow/test/wire.entry.ts');
   const output = join(temp, 'pinned-wire.bundle.mjs');
   await bundle({
@@ -100,7 +101,8 @@ async function pinnedSetup(temp, url, session, providerId, projectId) {
       },
     }],
   });
-  const script = spawn(process.execPath, [output], {
+  const script = track(spawn(process.execPath, [output], {
+    detached: process.platform !== 'win32',
     windowsHide: true, cwd: join(repo, 'extensions/engine-t3'),
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
@@ -109,33 +111,33 @@ async function pinnedSetup(temp, url, session, providerId, projectId) {
       T3_TEST_WORKSPACE: join(temp, 'workspace'),
       T3_TEST_FAKE_ACP: join(repo, 'extensions/coding-workflow/test/second-acp.mjs'),
     },
-  });
+  }));
   const result = await capture(script);
   assert.match(result, /T3_ISOLATED_SETUP PASS/);
   assert.match(result, /P5-5_WIRE PASS/);
   console.log('P5-5_PINNED_WIRE PASS config=true switch=true worktree=true terminal=true');
 }
-export async function startCodingFixture(temp) {
+export async function startCodingFixture(temp, track = child => child) {
   const state = join(temp, 't3-state');
   const port = await freePort(); const url = 'http://127.0.0.1:' + port;
-  const server = spawnT3(['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(port), '--base-dir', state, '--no-browser'], state);
+  const server = track(spawnT3(['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(port), '--base-dir', state, '--no-browser'], state));
   const close = async () => {
-    if (server.exitCode !== null) return;
+    if (server.exitCode !== null || server.signalCode !== null) return;
     const exited = new Promise(done => server.once('exit', done));
-    if (process.platform === 'win32') spawnSync(join(process.env.SystemRoot, 'System32/taskkill.exe'), ['/PID', String(server.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-    else server.kill('SIGKILL');
+    if (process.platform === 'win32') spawnSync(join(process.env.SystemRoot, 'System32/taskkill.exe'), ['/PID', String(server.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 5000 });
+    else process.kill(-server.pid, 'SIGKILL');
     await exited;
   };
   try {
     await waitT3(url, server);
-    const session = await capture(spawnT3(['auth', 'session', 'issue', '--base-dir', state,
+    const session = await capture(track(spawnT3(['auth', 'session', 'issue', '--base-dir', state,
       '--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'providers:manage',
       '--scope', 'terminal:read', '--scope', 'terminal:operate', '--scope', 'filesystem:read', '--scope', 'source-control:write',
-      '--ttl', '15m', '--label', 'nmh-p69-isolated', '--token-only'], state));
+      '--ttl', '15m', '--label', 'nmh-p69-isolated', '--token-only'], state)));
     const projectId = randomUUID();
-    await pinnedSetup(temp, url, session, 'p69-scripted-second', projectId);
+    await pinnedSetup(temp, url, session, 'p69-scripted-second', projectId, track);
     const root = join(temp, 'workspace');
-    const git = args => { const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
+    const git = args => { const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true, timeout: 5000, killSignal: 'SIGKILL' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
     git(['init', '-b', 'main']); git(['config', 'user.name', 'Neo test']); git(['config', 'user.email', 'test@localhost']);
     await writeFile(join(root, 'README.md'), 'Isolated P6-9 repository\n'); git(['add', 'README.md']); git(['commit', '-m', 'initial']);
     return { root, projectId, env: { NMH_T3_URL: url, NMH_T3_SCOPED_SESSION: session }, close };

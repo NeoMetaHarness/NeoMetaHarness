@@ -13,6 +13,15 @@
     "semver": "7.7.3"
   },
   "devDependencies": {
-    "@types/semver": "7.7.1"
+    "@types/semver": "7.7.1",
+    "@orpc/client": "1.16.2",
+    "@orpc/contract": "1.16.2",
+    "@types/node": "22.18.13",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/generation.test.ts && tsx test/upgrade-core.test.ts && tsx test/upgrade.test.ts"
   }
 }

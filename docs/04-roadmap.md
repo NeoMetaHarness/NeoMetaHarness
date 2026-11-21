@@ -32,6 +32,7 @@ gantt
 
 ## P1: Kernel and App shell (weeks 3–5)
 - Kernel: manifest, resolver, permissions, Cordis mount, process extensions (JSON-RPC/MCP), projections, health, toggle, blue/green upgrade.
+- P1-10: a verified kernel-owned generation remains eligible to run when its bundled extension is absent.
 - Neo API contracts and event bus; workspaces, members, roles; vault.
 - `@neometaharness/ui` on Astryx + Neo theme (in NeoMetaHarness-design-system); slot runtime.
 - App shell: navigation, Inbox placeholder, **Extensions** page, schema-driven Settings, onboarding skeleton; Tauri 2 desktop (tray, global launcher, updater, deep links) + PWA; perf budgets wired into `neo check`.

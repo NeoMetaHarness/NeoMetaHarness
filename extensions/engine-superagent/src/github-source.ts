@@ -48,6 +48,8 @@ export class PollingGitHubSource implements GitHubSource {
   private stopped = false;
   private timer?: ReturnType<typeof setTimeout>;
   private active?: Promise<{ checked: number; created: number; pausedUntil: number | null }>;
+  private activeObserved = false;
+  private unobservedFailure?: { error: unknown };
   private readonly abort = new AbortController();
 
   constructor(private readonly file: string, private readonly vault: VaultService,
@@ -82,6 +84,7 @@ export class PollingGitHubSource implements GitHubSource {
     if (token) await this.vault.put(scope, credential, token);
     this.config = { repositories: [...config.repositories], ...(botId ? { botId } : {}) };
     this.pausedUntil = null;
+    this.unobservedFailure = undefined;
     await this.save();
     this.schedule(0);
   }
@@ -102,7 +105,7 @@ export class PollingGitHubSource implements GitHubSource {
     if (this.timer) clearTimeout(this.timer);
     if (this.stopped || !this.config.repositories.length || this.pausedUntil === Number.MAX_SAFE_INTEGER) return;
     this.timer = setTimeout(() => {
-      void this.poll().catch(() => {}).finally(() => {
+      void this.pollOnce(false).catch(() => {}).finally(() => {
         if (!this.stopped) this.schedule(Math.max(this.intervalMs, (this.pausedUntil ?? 0) - Date.now()));
       });
     }, delay);
@@ -132,11 +135,31 @@ export class PollingGitHubSource implements GitHubSource {
   }
 
   poll() {
-    if (this.active) return this.active;
+    return this.pollOnce(true);
+  }
+
+  private pollOnce(observed: boolean) {
+    if (this.active) {
+      if (observed) this.activeObserved = true;
+      return this.active;
+    }
+    if (this.pausedUntil !== null && Date.now() >= this.pausedUntil) this.unobservedFailure = undefined;
+    // A scheduled poll may reach the rate limit just before an explicit request.
+    // Surface that original error once instead of presenting its cooldown as success.
+    if (observed && this.unobservedFailure) {
+      const { error } = this.unobservedFailure;
+      this.unobservedFailure = undefined;
+      return Promise.reject(error);
+    }
     if (this.stopped || (this.pausedUntil !== null && Date.now() < this.pausedUntil)) {
       return Promise.resolve({ checked: 0, created: 0, pausedUntil: this.pausedUntil });
     }
-    this.active = this.runPoll().finally(() => { this.active = undefined; });
+    this.unobservedFailure = undefined;
+    this.activeObserved = observed;
+    this.active = this.runPoll().catch(error => {
+      if (!this.activeObserved && !this.stopped && this.pausedUntil !== null && Date.now() < this.pausedUntil) this.unobservedFailure = { error };
+      throw error;
+    }).finally(() => { this.active = undefined; });
     return this.active;
   }
 
@@ -204,6 +227,7 @@ export class PollingGitHubSource implements GitHubSource {
   }
 
   stop(): void {
+    this.unobservedFailure = undefined;
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.abort.abort();
