@@ -460,17 +460,20 @@ export class NeoKernel {
 
   contributionIds(): string[] { return [...this.snapshot.contributions.keys()]; }
   async invokeRoute(path: string, method: string, body?: unknown): Promise<unknown | undefined> {
-    const route = this.snapshot.routes.get(path);
+    let route = this.snapshot.routes.get(path);
     if (!route) return undefined;
     // runInWorkspace preloads the generations active when the request began. A generation that became active
-    // since (blue/green switch) loads the request's workspace here, before its handler reads settings.
+    // since (blue/green switch) loads the request's workspace here, before its handler reads settings. The load
+    // is async, so the route may switch generation again meanwhile: re-resolve it and load for the new one.
     const workspaceId = this.workspaceScope.getStore();
-    const generation = route.generation;
-    if (workspaceId && workspaceId !== this.fallbackWorkspace && generation.settingsSchema
-      && !generation.workspaceSettings.has(workspaceId)) {
-      await this.generationSettings(generation.id, generation, workspaceId);
+    for (let attempts = 0; workspaceId && workspaceId !== this.fallbackWorkspace && attempts < 8
+      && route.generation.settingsSchema && !route.generation.workspaceSettings.has(workspaceId); attempts++) {
+      await this.generationSettings(route.generation.id, route.generation, workspaceId);
+      const current = this.snapshot.routes.get(path);
+      if (!current) return undefined;
+      route = current;
     }
-    return generation.invoke(route.handler, method, body);
+    return route.generation.invoke(route.handler, method, body);
   }
   hasRoute(path: string): boolean { return this.snapshot.routes.has(path); }
   routesFor(id: string): string[] { return [...this.snapshot.routes.keys()].filter((route) => route.startsWith(`/x/${id}/`)); }

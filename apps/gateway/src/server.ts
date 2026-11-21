@@ -163,6 +163,9 @@ function resolveOrGenerateSecret(dataDir: string, explicitSecret?: string): stri
   return readFileSync(secretPath, 'utf8').trim();
 }
 
+/** Vault name of engine memory callback tokens; only the Gateway writes these. */
+const MEMORY_TOKEN = 'NEO_MEMORY_TOKEN';
+
 export async function startGateway(options: GatewayOptions): Promise<GatewayInstance> {
   const mode = options.mode ?? 'server';
   const db = new SqliteDatabaseProvider(options.databaseFile);
@@ -278,10 +281,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   const issueMemoryBinding = async (consumer: MemoryConsumer) => {
     if (!gatewayPort || !kernel.hasRoute('/x/memory-local/list')) return undefined;
     const scope = memoryScope(consumer);
-    let token = await vault.get(scope, 'NEO_MEMORY_TOKEN');
+    let token = await vault.get(scope, MEMORY_TOKEN);
     if (!token) {
       token = randomBytes(32).toString('hex');
-      await vault.put(scope, 'NEO_MEMORY_TOKEN', token);
+      await vault.put(scope, MEMORY_TOKEN, token);
     }
     memoryConsumers.set(memoryKey(consumer.engine, consumer.profile), consumer);
     return { endpoint: `http://127.0.0.1:${gatewayPort}/internal/memory`, token, profile: consumer.profile };
@@ -340,9 +343,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     legacyWorkspace: bootstrapWorkspace,
   });
 
-  const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
+  const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext, name?: string) => {
     const procedure = `vault.${operation}`;
     authorize(procedure, context);
+    // Engine memory callback tokens (Hermes profiles, DSH sessions) are issued and checked by the Gateway alone
+    // (issueMemoryBinding, /internal/memory). No user role, the deployment owner included, may set, rotate or remove one.
+    if (operation !== 'list' && name === MEMORY_TOKEN) {
+      throw new ORPCError('FORBIDDEN', { message: 'Engine memory tokens are managed by the Gateway' });
+    }
     // An extension's secret settings live at its engine scope (P1-13). Writing them is changing that extension's
     // settings, so it needs settings.set (admin) in the scope's workspace, whatever vault.put allows elsewhere.
     const settingsSecret = operation !== 'list' && scope?.kind === 'engine' && !!scope.subjectId
@@ -417,8 +425,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   const invokeDsh = async (route: string, body: unknown) => {
     const path = `/x/engine-dsh/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'DSH extension is disabled' });
-    return kernel.invokeRoute(path, 'RPC', body);
+    try { return await kernel.invokeRoute(path, 'RPC', body); }
+    catch (error) {
+      if (error instanceof Error && error.message.startsWith('Unknown DSH session')) throw new ORPCError('NOT_FOUND', { message: 'Unknown DSH session' });
+      throw error;
+    }
   };
+  /** Server mode: a DSH session is reachable only from the workspace that created it (P1-13). */
+  const dshScoped = <T extends object>(input: T, context: GatewayAuthContext): T =>
+    mode === 'desktop' ? input : { ...input, workspaceId: inboxWorkspace(context) };
   const invokeInbox = async (route: string, body: unknown) => {
     const path = `/x/engine-superagent/${route}`;
     if (!kernel.hasRoute(path)) {
@@ -1043,28 +1058,28 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           authorize('x.engine-dsh.create', context);
           // Server mode: the session belongs to the caller's workspace (its vault scope and model keys), never
           // to one the caller names.
-          return invokeDsh('create', mode === 'desktop' ? input : { ...input, workspaceId: inboxWorkspace(context) }) as Promise<{ sessionId: string; pid: number }>;
+          return invokeDsh('create', dshScoped(input, context)) as Promise<{ sessionId: string; pid: number }>;
         }),
         prompt: os.x['engine-dsh'].prompt.handler(async ({ input, context }) => {
           authorize('x.engine-dsh.prompt', context);
-          return invokeDsh('prompt', input) as Promise<{ messageId: string }>;
+          return invokeDsh('prompt', dshScoped(input, context)) as Promise<{ messageId: string }>;
         }),
         events: os.x['engine-dsh'].events.handler(async function* ({ input, signal, context }) {
           authorize('x.engine-dsh.events', context);
-          const stream = await invokeDsh('events', { ...input, signal }) as AsyncIterable<DshEvent>;
+          const stream = await invokeDsh('events', dshScoped({ ...input, signal }, context)) as AsyncIterable<DshEvent>;
           yield* coalesceText(stream);
         }),
         wait: os.x['engine-dsh'].wait.handler(async ({ input, context }) => {
           authorize('x.engine-dsh.wait', context);
-          return invokeDsh('wait', input) as Promise<{ status: 'settled' }>;
+          return invokeDsh('wait', dshScoped(input, context)) as Promise<{ status: 'settled' }>;
         }),
         cancel: os.x['engine-dsh'].cancel.handler(async ({ input, context }) => {
           authorize('x.engine-dsh.cancel', context);
-          return invokeDsh('cancel', input) as Promise<{ cancelled: boolean }>;
+          return invokeDsh('cancel', dshScoped(input, context)) as Promise<{ cancelled: boolean }>;
         }),
         shutdown: os.x['engine-dsh'].shutdown.handler(async ({ input, context }) => {
           authorize('x.engine-dsh.shutdown', context);
-          return invokeDsh('shutdown', input) as Promise<{ stopped: boolean }>;
+          return invokeDsh('shutdown', dshScoped(input, context)) as Promise<{ stopped: boolean }>;
         }),
       },
       'coding-workflow': codingWorkflowRouter(kernel),
@@ -1323,15 +1338,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return vault.list(input.scope);
       }),
       put: os.vault.put.handler(async ({ input, context }) => {
-        await authorizeVault('put', input?.scope, context);
+        await authorizeVault('put', input?.scope, context, input?.name);
         return vault.put(input.scope, input.name, input.value);
       }),
       rotate: os.vault.rotate.handler(async ({ input, context }) => {
-        await authorizeVault('rotate', input?.scope, context);
+        await authorizeVault('rotate', input?.scope, context, input?.name);
         return vault.rotate(input.scope, input.name, input.value);
       }),
       delete: os.vault.delete.handler(async ({ input, context }) => {
-        await authorizeVault('delete', input?.scope, context);
+        await authorizeVault('delete', input?.scope, context, input?.name);
         return { deleted: await vault.delete(input.scope, input.name) };
       }),
     },
@@ -1494,7 +1509,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         const consumer = memoryConsumers.get(memoryKey(engine as 'hermes' | 'dsh', name));
         if (!consumer) { res.writeHead(401).end(); return; }
         const provided = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.authorization ?? '')?.[1];
-        const expected = await vault.get(memoryScope(consumer), 'NEO_MEMORY_TOKEN');
+        const expected = await vault.get(memoryScope(consumer), MEMORY_TOKEN);
         if (!provided || !expected || !timingSafeEqual(Buffer.from(provided, 'hex'), Buffer.from(expected, 'hex'))) {
           res.writeHead(401).end(); return;
         }

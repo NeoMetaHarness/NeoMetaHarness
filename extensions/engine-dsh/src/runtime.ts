@@ -214,6 +214,8 @@ class Session {
 /** Each SDK session owns an isolated DSH process, home and provider registration. */
 export class DshAgentRuntime {
   private readonly sessions = new Map<string, Session>();
+  /** The workspace each session was created in; callers that name a workspace may only reach their own. */
+  private readonly owners = new Map<string, string>();
   private readonly reportSettings = new Map<string, { workspaceId: string; profile: string;
     deliveredTurn?: string }>();
   private closing = false;
@@ -322,6 +324,7 @@ export class DshAgentRuntime {
       await session.initialize();
       if (this.closing) throw new Error('DSH runtime is stopped');
       this.sessions.set(session.id, session);
+      this.owners.set(session.id, input.workspaceId);
       if (input.plugins?.report !== false) this.reportSettings.set(session.id, {
         workspaceId: input.workspaceId, profile: input.profile ?? 'neo-coding',
       });
@@ -337,18 +340,26 @@ export class DshAgentRuntime {
     }
   }
 
-  private session(id: string): Session {
+  /**
+   * workspaceId (server mode, stamped by the Gateway): another workspace's session answers exactly like an
+   * unknown one, so its id cannot be used to prompt it with that workspace's model keys, or to probe it.
+   */
+  private session(id: string, workspaceId?: string): Session {
     const session = this.sessions.get(id);
-    if (!session) throw new Error(`Unknown DSH session ${id}`);
+    if (!session || (workspaceId !== undefined && this.owners.get(id) !== workspaceId)) {
+      throw new Error(`Unknown DSH session ${id}`);
+    }
     return session;
   }
 
-  prompt(input: { sessionId: string; text: string }) { return this.session(input.sessionId).prompt(input.text); }
-  events(input: { sessionId: string; signal?: AbortSignal; afterSequence?: number }) {
-    return this.session(input.sessionId).subscribe(input.signal, input.afterSequence);
+  prompt(input: { sessionId: string; text: string; workspaceId?: string }) {
+    return this.session(input.sessionId, input.workspaceId).prompt(input.text);
   }
-  async wait(input: { sessionId: string }): Promise<{ status: 'settled' }> {
-    const session = this.session(input.sessionId);
+  events(input: { sessionId: string; signal?: AbortSignal; afterSequence?: number; workspaceId?: string }) {
+    return this.session(input.sessionId, input.workspaceId).subscribe(input.signal, input.afterSequence);
+  }
+  async wait(input: { sessionId: string; workspaceId?: string }): Promise<{ status: 'settled' }> {
+    const session = this.session(input.sessionId, input.workspaceId);
     const result = await session.wait();
     const settings = this.reportSettings.get(input.sessionId);
     const sink = this.inbox?.();
@@ -373,10 +384,11 @@ export class DshAgentRuntime {
     return result;
   }
 
-  async cancel(input: { sessionId: string }): Promise<{ cancelled: boolean }> {
-    const session = this.session(input.sessionId);
+  async cancel(input: { sessionId: string; workspaceId?: string }): Promise<{ cancelled: boolean }> {
+    const session = this.session(input.sessionId, input.workspaceId);
     await session.stop(true);
     this.sessions.delete(input.sessionId);
+    this.owners.delete(input.sessionId);
     this.reportSettings.delete(input.sessionId);
     this.computers?.unassign('dsh', input.sessionId);
     await this.computerMcp?.forget('dsh', input.sessionId);
@@ -385,10 +397,11 @@ export class DshAgentRuntime {
     return { cancelled: true };
   }
 
-  async shutdown(input: { sessionId: string }): Promise<{ stopped: boolean }> {
-    const session = this.session(input.sessionId);
+  async shutdown(input: { sessionId: string; workspaceId?: string }): Promise<{ stopped: boolean }> {
+    const session = this.session(input.sessionId, input.workspaceId);
     await session.stop();
     this.sessions.delete(input.sessionId);
+    this.owners.delete(input.sessionId);
     this.reportSettings.delete(input.sessionId);
     this.computers?.unassign('dsh', input.sessionId);
     await this.computerMcp?.forget('dsh', input.sessionId);

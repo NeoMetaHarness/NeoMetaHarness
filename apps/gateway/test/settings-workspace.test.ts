@@ -163,6 +163,23 @@ test('P1-13 server: two workspaces keep their own settings and secrets; wrong ty
     assert.equal((await rpc(financeOwner, 'vault/put', { scope: secretScope(corp.id), name: SECRET_NAME, value: 'x' })).status, 403,
       'a Finance admin cannot write Corp extension secrets');
     console.log('P1-13_SECRET_SCOPE PASS extension secret scopes are admin-only writes in their own workspace');
+
+    // Engine memory callback tokens are the Gateway's alone: no member, admin or owner may set, rotate or delete one.
+    const memorySubjects = [`engine-dsh/${'a'.repeat(32)}`, 'engine-hermes/default'];
+    for (const [who, token, workspace] of [['member', member, corp.id], ['owner', corpOwner, corp.id], ['admin', financeOwner, finance.id]] as const) {
+      for (const subjectId of memorySubjects) {
+        const scope = { kind: 'engine', workspaceId: workspace, subjectId };
+        for (const [path, input] of [
+          ['vault/put', { scope, name: 'NEO_MEMORY_TOKEN', value: 'f'.repeat(64) }],
+          ['vault/rotate', { scope, name: 'NEO_MEMORY_TOKEN', value: 'f'.repeat(64) }],
+          ['vault/delete', { scope, name: 'NEO_MEMORY_TOKEN' }],
+        ] as const) {
+          assert.equal((await rpc(token, path, input)).status, 403, `${who} ${path} ${subjectId}`);
+        }
+        assert.equal(await gateway.vault.get(scope as any, 'NEO_MEMORY_TOKEN'), undefined, `${who} wrote no memory token`);
+      }
+    }
+    console.log('P1-13_MEMORY_TOKEN PASS members, admins and owners cannot write engine memory tokens');
   } finally {
     await gateway.close();
     await rm(root, { recursive: true, force: true, maxRetries: 5 });
