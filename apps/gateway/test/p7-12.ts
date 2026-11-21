@@ -28,6 +28,20 @@ test('P7-12 metrics route is authenticated, workspace-isolated and toggle-safe',
     runtime: { type: 'cordis', entry: './src/index.mjs' },
   });
   await write('extensions/metrics/src/index.mjs', `export { default } from '${metricsSource}';`);
+  await write('extensions/fake-superagent/neo.extension.json', {
+    id: 'fake-superagent', version: '0.1.0', displayName: 'Fake superagent metrics', kind: ['tool'],
+    runtime: { type: 'cordis', entry: './src/index.mjs' },
+  });
+  await write('extensions/fake-superagent/src/index.mjs', `
+    import { readFileSync } from 'node:fs';
+    export default { activate(ctx) {
+      ctx.provide('superagentMetrics', {
+        inbox: () => JSON.parse(readFileSync(${JSON.stringify(join(data, 'engine-superagent', 'inbox.json'))}, 'utf8')),
+        decisions: async () => [],
+      });
+      ctx.health(() => ({ ok: true }));
+    } };
+  `);
   await write('extensions/healthy/neo.extension.json', {
     id: 'healthy', version: '0.1.0', displayName: 'Healthy', kind: ['tool'],
     runtime: { type: 'cordis', entry: './src/index.mjs' },
@@ -99,6 +113,7 @@ test('P7-12 metrics route is authenticated, workspace-isolated and toggle-safe',
       { ticketId: 'b1', workspace: orgB, chosenAction: 'ticket.complete', trace_id: 'trace-b1' },
     ].map((line) => JSON.stringify(line)).join('\n'));
 
+    assert.equal((await post('extensions/enable', { id: 'fake-superagent' }, ownerA)).status, 200);
     assert.equal((await post('extensions/enable', { id: 'metrics' }, ownerA)).status, 200);
     assert.equal((await post('extensions/enable', { id: 'healthy' }, ownerA)).status, 200);
     const summary = async (token: string, query = '') => {

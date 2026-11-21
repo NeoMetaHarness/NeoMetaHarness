@@ -409,11 +409,13 @@ export default function Settings({ onOpen }: { onOpen: (path: '/settings/channel
         Manage models
       </Button>
 
-      <h2>Success metrics</h2>
-      <p>Review attention, learning and time-to-first-value measures from recorded activity.</p>
-      <Button label="View success metrics" data-testid="settings-metrics-open" onClick={() => onOpen('/settings/metrics')}>
-        View metrics
-      </Button>
+      {extensions.some((ext) => ext.id === 'metrics' && ext.status === 'running') && <>
+        <h2>Success metrics</h2>
+        <p>Review attention, learning and time-to-first-value measures from recorded activity.</p>
+        <Button label="View success metrics" data-testid="settings-metrics-open" onClick={() => onOpen('/settings/metrics')}>
+          View metrics
+        </Button>
+      </>}
 
       {native && (
         <section aria-label="Desktop updates">

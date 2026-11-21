@@ -42,7 +42,7 @@ export default function Metrics() {
           <h2>Attention</h2>
           <p>Tickets finished with at most one approval — <strong>{percent(summary.attention.share)}</strong></p>
           <p>{summary.finishedTickets} finished Tickets, {summary.attention.withRecordedApproval} with a recorded final approval.</p>
-          <p>Observed without a final approval — {percent(summary.attention.observedWithoutFinalApprovalShare)}.</p>
+          <p>Proxy: finished with no recorded approval — {percent(summary.attention.observedWithoutFinalApprovalShare)}.</p>
           <p>{summary.attention.reason}</p>
         </section>
         <section aria-label="Learning">
@@ -55,7 +55,7 @@ export default function Metrics() {
         <section aria-label="Time to first value">
           <h2>Time to first value</h2>
           <p>Install to first channel answer — <strong>{summary.firstValue.minutes === null ? 'Unavailable' : `${summary.firstValue.minutes.toFixed(1)} minutes`}</strong></p>
-          <p>Onboarding to first recorded channel delivery — {summary.firstValue.onboardingToFirstReplyMinutes === null
+          <p>Proxy: onboarding to first channel delivery — {summary.firstValue.onboardingToFirstReplyMinutes === null
             ? 'Unavailable' : `${summary.firstValue.onboardingToFirstReplyMinutes.toFixed(1)} minutes`}.</p>
           <p>{summary.firstValue.reason}</p>
         </section>
