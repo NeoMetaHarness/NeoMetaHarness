@@ -517,7 +517,8 @@ export const xSearchOutput = z.object({
 export type XSearchInput = z.infer<typeof xSearchInput>;
 export type XSearchOutput = z.infer<typeof xSearchOutput>;
 export interface NeoSearchService {
-  search(input: XSearchInput): Promise<XSearchOutput>;
+  /** Metered calls must carry the authenticated caller's identity; the gateway supplies this for RPCs. */
+  search(input: XSearchInput, requester: { userId: string; workspaceId: string }): Promise<XSearchOutput>;
 }
 export const xSearchContract = {
   status: oc.output(z.object({ providerId: z.literal('xai'), configured: z.boolean() })),

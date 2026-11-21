@@ -15,6 +15,7 @@ import { XSearchService } from '../src/index.js';
 const root = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const home = await mkdtemp(join(tmpdir(), 'neo-x-search-'));
 const apiKey = 'FAKE_XAI_KEY_FOR_TEST_9876';
+const localRequester = { userId: 'test-user', workspaceId: 'test-workspace' };
 const { validateEgressUrl } = await import('@neometaharness/egress');
 assert.equal(validateEgressUrl('https://api.x.ai').host, 'api.x.ai');
 assert.throws(() => validateEgressUrl('https://169.254.169.254'), /denied/);
@@ -95,8 +96,8 @@ try {
 
   assert.equal((await rpc.extensions.enable({ id: 'sample-ts' })).status, 'running');
   assert.equal((await rpc.extensions.enable({ id: 'x-search' })).status, 'running');
-  await assert.rejects(new XSearchService({ apiKey, baseUrl: 'https://127.0.0.1' }).search({ query: 'blocked' }), /denied/);
-  await assert.rejects(new XSearchService({ apiKey, baseUrl: 'http://1.1.1.1', allowPrivateNetwork: true }, { request: async () => { throw new Error('unexpected fetch'); } }).search({ query: 'blocked' }), /Invalid X Search endpoint configuration/);
+  await assert.rejects(new XSearchService({ apiKey, baseUrl: 'https://127.0.0.1' }).search({ query: 'blocked' }, localRequester), /denied/);
+  await assert.rejects(new XSearchService({ apiKey, baseUrl: 'http://1.1.1.1', allowPrivateNetwork: true }, { request: async () => { throw new Error('unexpected fetch'); } }).search({ query: 'blocked' }, localRequester), /Invalid X Search endpoint configuration/);
   assert.deepEqual(await rpc.x['x-search'].status(), { providerId: 'xai', configured: true });
   assert.ok(gateway.kernel.contributionIds().includes('tools:x-search.search'));
   const result = await rpc.x['x-search'].search({
@@ -121,6 +122,11 @@ try {
   await assert.rejects(rpc.x['x-search'].search({ query: 'over user quota' }), (e: any) =>
     e.code === 'TOO_MANY_REQUESTS' && !e.message.includes(apiKey));
   assert.equal(requestCount, 2);
+  assert.equal((await rpc.extensions.disable({ id: 'x-search' })).status, 'disabled');
+  assert.equal((await rpc.extensions.enable({ id: 'x-search' })).status, 'running');
+  await assert.rejects(rpc.x['x-search'].search({ query: 'quota persists after reactivation' }),
+    (e: any) => e.code === 'TOO_MANY_REQUESTS');
+  assert.equal(requestCount, 2);
 
   const injected = new XSearchService({ apiKey }, {
     request: async (url, request) => {
@@ -130,7 +136,7 @@ try {
       throw new Error(`network failure ${apiKey}`);
     },
   });
-  await assert.rejects(injected.search({ query: 'broken connection' }), (e: Error) =>
+  await assert.rejects(injected.search({ query: 'broken connection' }, localRequester), (e: Error) =>
     e.message === 'X Search request failed');
 
   const bounded = new XSearchService({ apiKey }, {
@@ -142,7 +148,7 @@ try {
       ],
     }), { headers: { 'content-type': 'application/json' } }),
   });
-  const boundedResult = await bounded.search({ query: 'bounded response' });
+  const boundedResult = await bounded.search({ query: 'bounded response' }, localRequester);
   assert.equal(boundedResult.text.length, 32_000);
   assert.equal(boundedResult.citations.length, 32);
   assert.ok(boundedResult.citations.every((url) => url.startsWith('https://')));
@@ -151,7 +157,8 @@ try {
     request: async () => new Response('x'.repeat(1_000_001), {
       headers: { 'content-type': 'application/json' },
     }),
-  }).search({ query: 'oversized response' }), /invalid response/);
+  }).search({ query: 'oversized response' }, localRequester), /invalid response|request failed/);
+  await assert.rejects(bounded.search({ query: 'missing identity' }, { userId: '', workspaceId: 'test' }), /identity/);
   let now = Date.UTC(2026, 10, 21, 10);
   let meteredRequests = 0;
   const metered = new XSearchService({
@@ -184,13 +191,34 @@ try {
   now += 86_400_000;
   await metered.search({ query: 'new day' }, alice);
   assert.equal(meteredRequests, 6);
+  const quotaFile = join(home, 'persisted-search-quotas.json');
+  const persistentSettings = {
+    apiKey, requestsPerMinutePerUser: 2, requestsPerMinutePerWorkspace: 3,
+    requestsPerDayPerUser: 3, requestsPerDayPerWorkspace: 5,
+  };
+  const persistentClient = {
+    request: async () => new Response(JSON.stringify({ output_text: 'ok' }), {
+      headers: { 'content-type': 'application/json' },
+    }),
+  };
+  let persistent = new XSearchService(persistentSettings, persistentClient, () => now, quotaFile);
+  await persistent.search({ query: 'first' }, alice);
+  await persistent.search({ query: 'second' }, alice);
+  persistent = new XSearchService(persistentSettings, persistentClient, () => now, quotaFile);
+  await assert.rejects(persistent.search({ query: 'restart minute quota' }, alice), /user minute/);
+  now += 60_000;
+  await persistent.search({ query: 'third' }, alice);
+  persistent = new XSearchService(persistentSettings, persistentClient, () => now, quotaFile);
+  await assert.rejects(persistent.search({ query: 'restart daily quota' }, alice), /user day/);
+  now += 86_400_000;
+  await persistent.search({ query: 'next day' }, alice);
   const capped = new XSearchService({ apiKey, requestsPerMinutePerUser: 0, requestsPerDayPerUser: Infinity }, {
     request: async () => new Response(JSON.stringify({ output_text: 'ok' }), {
       headers: { 'content-type': 'application/json' },
     }),
   });
-  for (let i = 0; i < 5; i++) await capped.search({ query: `fallback ${i}` });
-  await assert.rejects(capped.search({ query: 'fallback exceeded' }), /user minute/);
+  for (let i = 0; i < 5; i++) await capped.search({ query: `fallback ${i}` }, localRequester);
+  await assert.rejects(capped.search({ query: 'fallback exceeded' }, localRequester), /user minute/);
   const viewer = { user: { id: 'viewer' }, role: 'viewer', workspaceId: 'default' };
   assert.doesNotThrow(() => authorize('x.x-search.status', viewer as any));
   assert.throws(() => authorize('x.x-search.search', viewer as any), (e: any) => e.code === 'FORBIDDEN');

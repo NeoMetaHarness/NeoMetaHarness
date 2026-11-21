@@ -1,4 +1,6 @@
 import { defineExtension } from '@neometaharness/kernel';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { createEgressFetch, validateEgressUrl } from '@neometaharness/egress';
 import { xSearchInput, type NeoSearchService, type XSearchInput, type XSearchOutput } from '@neometaharness/contracts';
 
@@ -19,8 +21,8 @@ export interface SearchSettings {
 }
 
 export interface SearchRequester {
-  userId?: string;
-  workspaceId?: string;
+  userId: string;
+  workspaceId: string;
 }
 
 interface QuotaCounter {
@@ -129,12 +131,36 @@ export class XSearchService implements NeoSearchService {
     private readonly settings: SearchSettings,
     private readonly httpClient?: SearchHttpClient,
     private readonly now: () => number = Date.now,
+    private readonly quotaFile?: string,
   ) {
     const injected = httpClient
       ? (async (url: string | URL | Request, init?: RequestInit) =>
         httpClient.request(String(url), init ?? {})) as typeof fetch
       : undefined;
     this.guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected);
+    if (quotaFile) {
+      try {
+        const state = JSON.parse(readFileSync(quotaFile, 'utf8')) as {
+          day: number;
+          users: [string, QuotaCounter][];
+          workspaces: [string, QuotaCounter][];
+        };
+        if (!Number.isSafeInteger(state.day) || !Array.isArray(state.users) || !Array.isArray(state.workspaces)
+          || ![...state.users, ...state.workspaces].every(([id, counter]) =>
+            typeof id === 'string' && counter && Number.isSafeInteger(counter.minute)
+            && Number.isSafeInteger(counter.minuteCount) && counter.minuteCount >= 0
+            && Number.isSafeInteger(counter.dayCount) && counter.dayCount >= 0)) {
+          throw new Error('Invalid X Search quota state');
+        }
+        this.counterDay = state.day;
+        for (const [id, counter] of state.users) this.userCounters.set(id, counter);
+        for (const [id, counter] of state.workspaces) this.workspaceCounters.set(id, counter);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw new Error('X Search quota state is unreadable', { cause: error });
+        }
+      }
+    }
   }
 
   dispose(): void { void this.httpClient?.close?.().catch(() => undefined); }
@@ -157,6 +183,9 @@ export class XSearchService implements NeoSearchService {
   }
 
   private charge(requester: SearchRequester): void {
+    if (!requester?.userId?.trim() || !requester.workspaceId?.trim()) {
+      throw new Error('X Search requires requester user and workspace identity');
+    }
     const time = this.now();
     const day = Math.floor(time / 86_400_000);
     const minute = Math.floor(time / 60_000);
@@ -165,8 +194,8 @@ export class XSearchService implements NeoSearchService {
       this.workspaceCounters.clear();
       this.counterDay = day;
     }
-    const user = this.counterFor(this.userCounters, requester.userId || 'anonymous', minute);
-    const workspace = this.counterFor(this.workspaceCounters, requester.workspaceId || 'default', minute);
+    const user = this.counterFor(this.userCounters, requester.userId, minute);
+    const workspace = this.counterFor(this.workspaceCounters, requester.workspaceId, minute);
     const checks = [
       [user.minuteCount, quota(this.settings.requestsPerMinutePerUser, 5, 60), 'user minute'],
       [workspace.minuteCount, quota(this.settings.requestsPerMinutePerWorkspace, 20, 600), 'workspace minute'],
@@ -180,9 +209,23 @@ export class XSearchService implements NeoSearchService {
     workspace.minuteCount++;
     user.dayCount++;
     workspace.dayCount++;
+    if (this.quotaFile) {
+      const temporaryFile = `${this.quotaFile}.pending`;
+      try {
+        writeFileSync(temporaryFile, JSON.stringify({
+          day: this.counterDay,
+          users: [...this.userCounters],
+          workspaces: [...this.workspaceCounters],
+        }), { mode: 0o600 });
+        renameSync(temporaryFile, this.quotaFile);
+      } catch (error) {
+        try { rmSync(temporaryFile, { force: true }); } catch { /* preserve original error */ }
+        throw new Error('X Search quota state could not be saved', { cause: error });
+      }
+    }
   }
 
-  async search(rawInput: XSearchInput, requester: SearchRequester = {}): Promise<XSearchOutput> {
+  async search(rawInput: XSearchInput, requester: SearchRequester): Promise<XSearchOutput> {
     const input = xSearchInput.parse(rawInput);
     if (input.fromDate && input.toDate && input.fromDate > input.toDate) {
       throw new Error('Invalid X Search date range');
@@ -221,7 +264,12 @@ export default defineExtension({
   activate(ctx) {
     const settings = ctx.inject<SearchSettings>('settings') ?? {};
     const client = ctx.inject<SearchHttpClient>('searchHttpClient');
-    const search = new XSearchService(settings, client);
+    const extensionDataRoot = ctx.inject<string>('extensionDataDir');
+    const dataDir = ctx.inject<string>('dataDir')
+      ?? (extensionDataRoot ? join(extensionDataRoot, 'x-search') : undefined);
+    if (!dataDir) throw new Error('X Search needs isolated extension storage for metered quotas');
+    mkdirSync(dataDir, { recursive: true });
+    const search = new XSearchService(settings, client, Date.now, join(dataDir, 'quotas.json'));
     ctx.provide('neo.search', search);
     ctx.effect(() => () => search.dispose());
     ctx.contribute('tools', {
@@ -236,7 +284,7 @@ export default defineExtension({
         const request = body as { input: XSearchInput; requester: SearchRequester };
         return search.search(request.input, request.requester);
       }
-      return search.search(body as XSearchInput);
+      throw new Error('X Search requires authenticated requester identity');
     });
     ctx.health(() => ({ ok: true }));
   },
