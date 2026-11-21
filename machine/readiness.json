@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "phase": "P1-kernel-and-app",
-  "updated": "2026-11-20",
+  "updated": "2026-11-21",
   "decisions": {
     "upstream_strategy": "engines unmodified via seams; bot-hq adopted first-party",
     "ui": "one Neo App on Astryx",
@@ -215,7 +215,9 @@
     },
     "P1-11": {
       "title": "Desktop auto-updater (Tauri updater): real signing key and update flow",
-      "status": "not_started"
+      "status": "in_progress",
+      "owner": "gemini",
+      "code_check_2026_11_21": "Code ahead of readiness: work/gemini-p111 is 2 commits ahead of main (review fixes on signing key override + IPC checks), unmerged. Updater plumbing already on main (src-tauri/src/lib.rs check_for_updates; tauri.conf.json pubkey still a placeholder)."
     },
     "P1-12": {
       "title": "Perf budgets wired into neo check",
@@ -225,8 +227,10 @@
     },
     "P1-13": {
       "title": "Per-workspace extension settings and secrets in the kernel (settings/vault currently scoped to workspace \"default\")",
-      "status": "not_started",
-      "note": "Found 2026-11-20 by x-search security review: any extension key/settings are shared across workspaces in server mode (packages/kernel/src/index.ts settings use workspaceId \"default\")."
+      "status": "in_progress",
+      "note": "Found 2026-11-20 by x-search security review: any extension key/settings are shared across workspaces in server mode (packages/kernel/src/index.ts settings use workspaceId \"default\").",
+      "owner": "opus",
+      "code_check_2026_11_21": "Code ahead of readiness: work/opus-p113 is 11 commits ahead of main (per-workspace settings table + schema validation), unmerged. Main still uses workspaceId \"default\" (packages/kernel/src/index.ts:287,316)."
     }
   },
   "p2_tasks": {
@@ -315,7 +319,8 @@
     "P2-12": {
       "title": "apps-composio and neo.apps interface",
       "status": "in_progress",
-      "owner": "sol61"
+      "owner": "sol-a",
+      "code_check_2026_11_21": "Owner was sol61, but the work is on work/sol-a-p212 (sol-a worktree, 12 commits ahead); sol61 is on P1-10."
     }
   },
   "known_risks": [
@@ -623,8 +628,10 @@
     },
     "P6-10": {
       "title": "Inbox and memory workspace isolation (inbox.list/events/actions and memory-local routes scoped to the caller workspace)",
-      "status": "not_started",
-      "note": "Found 2026-11-20 by P4-9 review: inbox.list is unfiltered across workspaces (server.ts inbox handlers); memory-local routes trust input.workspace. Pre-existing; systemic."
+      "status": "in_progress",
+      "note": "Found 2026-11-20 by P4-9 review: inbox.list is unfiltered across workspaces (server.ts inbox handlers); memory-local routes trust input.workspace. Pre-existing; systemic.",
+      "owner": "opus",
+      "code_check_2026_11_21": "Code ahead of readiness: work/opus-p49 carries P6-10 commits through \"review fixes 2\" on top of P4-9, unmerged."
     }
   }
 }
