@@ -267,6 +267,8 @@ export const memoryContract = {
     list: oc.input(z.object({ workspace: memoryWorkspace.default('default') })).output(z.array(memoryEntrySchema)),
     add: oc.input(z.object({ workspace: memoryWorkspace.default('default'), text: z.string().trim().min(1).max(2000) }))
       .output(memoryEntrySchema),
+    update: oc.input(z.object({ workspace: memoryWorkspace.default('default'), id: z.string().uuid(),
+      text: z.string().trim().min(1).max(2000) })).output(memoryEntrySchema.nullable()),
     retract: oc.input(z.object({ workspace: memoryWorkspace.default('default'), id: z.string().uuid() }))
       .output(z.object({ retracted: z.boolean() })),
   },

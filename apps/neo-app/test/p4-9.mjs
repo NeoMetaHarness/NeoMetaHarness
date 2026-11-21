@@ -169,24 +169,25 @@ async function trial() {
 
     stage = 'standing intents';
     await assert.rejects(viewer.x['memory-local'].intents.add({ text: 'Viewer intent' }), 'viewers cannot add intents');
-    const intent = await member.x['memory-local'].intents.add({ text: 'Always answer in British English.' });
+    await assert.rejects(member.x['memory-local'].intents.add({ text: 'Member intent' }), 'members cannot add intents');
+    const intent = await rpc.x['memory-local'].intents.add({ text: 'Always answer in British English.' });
     assert.equal(intent.source, 'neo.intent');
     assert.equal(intent.trust, 'confirmed');
     assert.match(intent.provenance, /^user:\S+ via Neo app$/, 'provenance is the authenticated user');
     assert.deepEqual((await viewer.x['memory-local'].intents.list({})).map((entry) => entry.id), [intent.id]);
     const plain = await member.x['memory-local'].add({ subject: 'user', text: 'Not an intent', trust: 'confirmed' });
-    assert.deepEqual(await member.x['memory-local'].intents.retract({ id: plain.id }), { retracted: false });
+    assert.deepEqual(await rpc.x['memory-local'].intents.retract({ id: plain.id }), { retracted: false });
     assert.equal((await local('Not an intent')).length, 1, 'only intents can be retracted as intents');
     let before = model.calls.length;
     await runHermes(gateway, 'What should I keep in mind?');
     assert.ok(seen('Standing intents:', before) && seen('Always answer in British English.', before),
       'the next Hermes model request carries the standing intent through the memory projection');
-    const ephemeral = await member.x['memory-local'].intents.add({ text: 'Remind me about the dentist.' });
-    assert.deepEqual(await member.x['memory-local'].intents.retract({ id: ephemeral.id }), { retracted: true });
+    const ephemeral = await rpc.x['memory-local'].intents.add({ text: 'Remind me about the dentist.' });
+    assert.deepEqual(await rpc.x['memory-local'].intents.retract({ id: ephemeral.id }), { retracted: true });
     before = model.calls.length;
     await runHermes(gateway, 'Anything else?');
     assert.ok(!seen('dentist', before), 'a retracted intent leaves the projection');
-    console.log('P4-9_STAGE standing intents: member-only, user provenance, projected into Hermes, retractable');
+    console.log('P4-9_STAGE standing intents: admin-only, user provenance, projected into Hermes, retractable');
 
     stage = 'observe dream';
     await rpc.inbox.acceptMode.set({ mode: 'observe' });
@@ -304,9 +305,9 @@ async function trial() {
     assert.equal((await item(otherWorkspace.inboxId)).status, 'suggestion');
     assert.equal((await item(otherWorkspace.inboxId)).workspace, 'workspace-two', 'P6-10: a dream item carries its workspace');
     // M3: a retracted intent leaves L1, its Honcho copy, the projection, and never comes back by dreaming.
-    const metric = await member.x['memory-local'].intents.add({ text: 'Use metric units everywhere.' });
+    const metric = await rpc.x['memory-local'].intents.add({ text: 'Use metric units everywhere.' });
     await seedHoncho(honcho, 'Use metric units everywhere.', { source: 'neo.intent', trust: 'confirmed' });
-    assert.deepEqual(await member.x['memory-local'].intents.retract({ id: metric.id }), { retracted: true });
+    assert.deepEqual(await rpc.x['memory-local'].intents.retract({ id: metric.id }), { retracted: true });
     assert.equal(honcho.writes.find((write) => write.content === 'Use metric units everywhere.').metadata.deleted, true,
       'the Honcho copy of a retracted intent is deleted');
     // M5: Honcho metadata claiming confirmed (or an intent) never mints trust or an intent in L1.

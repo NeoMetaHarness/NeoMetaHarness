@@ -29,6 +29,7 @@
     "test:p1-5": "pnpm --dir apps/neo-app test:p1-5",
     "test:p4-7": "pnpm --dir apps/neo-app test:p4-7",
     "test:p4-9": "pnpm --dir apps/neo-app test:p4-9",
+    "test:p4-10": "pnpm --dir apps/gateway exec tsx test/p4-10.test.ts",
     "test:p1-8": "pnpm --dir apps/neo-app test:p1-8",
     "test:p2-8": "pnpm --dir apps/neo-app build && pnpm --dir extensions/models-router-panda typecheck && pnpm --dir extensions/models exec tsx test/router.test.ts && pnpm --dir extensions/models-router-panda test && pnpm --dir extensions/models-router-panda exec tsx test/gateway.test.ts",
     "test:p3-7": "pnpm --dir apps/neo-app build && pnpm --dir extensions/computers-mcp typecheck && pnpm --dir extensions/engine-hermes typecheck && pnpm --dir extensions/engine-dsh typecheck && pnpm --dir extensions/engine-superagent typecheck && pnpm --dir packages/computers exec tsx test/safety.test.ts && pnpm --dir extensions/computers-mcp test && pnpm --dir extensions/computers-mcp exec tsx test/gateway.test.ts && pnpm --dir extensions/engine-superagent exec tsx test/computer-mcp.test.ts",

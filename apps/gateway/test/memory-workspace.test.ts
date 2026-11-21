@@ -29,15 +29,16 @@ test('memory routes are scoped to the caller workspace and intents cannot be for
     const corp = await (await fetch(`${base}/auth/organization/create`, json({ name: 'Corp', slug: 'corp' }, as(owner)))).json() as { id: string };
     const finance = await (await fetch(`${base}/auth/organization/create`,
       json({ name: 'Finance', slug: 'finance', keepCurrentActiveOrganization: true }, as(owner)))).json() as { id: string };
-    const join = async (orgId: string, email: string) => {
+    const join = async (orgId: string, email: string, role: 'member' | 'admin' = 'member') => {
       const token = await signUp(email);
       const invite = await (await fetch(`${base}/auth/organization/invite-member`,
-        json({ organizationId: orgId, email, role: 'member' }, as(owner)))).json() as { id: string };
+        json({ organizationId: orgId, email, role }, as(owner)))).json() as { id: string };
       assert.equal((await fetch(`${base}/auth/organization/accept-invitation`, json({ invitationId: invite.id }, as(token)))).status, 200);
       return token;
     };
     const alice = await join(corp.id, 'alice@corp.test');
     const bob = await join(finance.id, 'bob@finance.test');
+    const financeAdmin = await join(finance.id, 'admin@finance.test', 'admin');
     for (const id of ['memory-local', 'memory-honcho']) {
       const enabled = await fetch(`${base}/extensions/enable`, json({ json: { id } }, as(owner)));
       assert.equal(enabled.status, 200, id);
@@ -61,13 +62,13 @@ test('memory routes are scoped to the caller workspace and intents cannot be for
     ] as const) assert.equal((await call(bob, path, input)).status, 403, `Finance member reaches Corp through ${path}`);
 
     // 'default' (or nothing) means the caller's own workspace.
-    const corpIntent = await call(alice, 'x/memory-local/intents/add', { text: 'Corp ships on Fridays.' });
+    const corpIntent = await call(owner, 'x/memory-local/intents/add', { text: 'Corp ships on Fridays.' });
     assert.equal(corpIntent.body.workspace, corp.id);
-    const financeIntent = await call(bob, 'x/memory-local/intents/add', { workspace: 'default', text: 'Finance closes the books monthly.' });
+    const financeIntent = await call(financeAdmin, 'x/memory-local/intents/add', { workspace: 'default', text: 'Finance closes the books monthly.' });
     assert.equal(financeIntent.body.workspace, finance.id);
     assert.deepEqual((await call(alice, 'x/memory-local/intents/list', {})).body.map((entry: any) => entry.text), ['Corp ships on Fridays.']);
     assert.deepEqual((await call(bob, 'x/memory-local/intents/list', {})).body.map((entry: any) => entry.text), ['Finance closes the books monthly.']);
-    assert.equal((await call(bob, 'x/memory-local/intents/retract', { id: corpIntent.body.id })).body.retracted, false,
+    assert.equal((await call(financeAdmin, 'x/memory-local/intents/retract', { id: corpIntent.body.id })).body.retracted, false,
       'an intent in another workspace cannot be retracted');
 
     // Id-addressed writes cannot reach an entry in another workspace.

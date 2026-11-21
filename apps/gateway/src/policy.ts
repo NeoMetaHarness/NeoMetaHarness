@@ -86,8 +86,9 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.memory-local.delete': 'member',
   'x.memory-local.export': 'viewer',
   'x.memory-local.intents.list': 'viewer',
-  'x.memory-local.intents.add': 'member',
-  'x.memory-local.intents.retract': 'member',
+  'x.memory-local.intents.add': 'admin',
+  'x.memory-local.intents.update': 'admin',
+  'x.memory-local.intents.retract': 'admin',
 
   // x.memory-honcho
   'x.memory-honcho.status': 'viewer',

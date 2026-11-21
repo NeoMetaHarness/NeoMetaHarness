@@ -49,6 +49,15 @@ export default defineExtension({
       return memory.add({ workspace: value.workspace, subject: 'user', subjectId: 'global', text: value.text,
         source: INTENT_SOURCE, provenance: value.provenance, trust: 'confirmed' });
     });
+    ctx.route('intents/update', async ({ body }) => {
+      const value = body as { workspace: string; id: string; text: string; editedBy: string };
+      const current = await get(value.id);
+      if (foreign(current, value.workspace) || !reserved(current!.source)) return { entry: null };
+      const entry = await memory.update(value.id, {
+        text: value.text, provenance: `${current!.provenance}; edited via ${value.editedBy}`,
+      });
+      return { entry: entry ?? null, previousText: current!.text };
+    });
     // Only an intent in the caller's workspace can be retracted. The text is returned so the Gateway can
     // also forget any Honcho copy.
     ctx.route('intents/retract', async ({ body }) => {

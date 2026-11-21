@@ -940,6 +940,20 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             return invokeMemory('intents/add', { text: input.text, workspace: memoryWorkspace(input.workspace, context),
               provenance: `user:${context.user!.id} via Neo app` }) as ReturnType<typeof db.memories.add>;
           }),
+          update: os.x['memory-local'].intents.update.handler(async ({ input, context }) => {
+            authorize('x.memory-local.intents.update', context);
+            const workspace = memoryWorkspace(input.workspace, context);
+            const result = await invokeMemory('intents/update', { id: input.id, text: input.text, workspace,
+              editedBy: `user:${context.user!.id} via Neo app` }) as {
+                entry: Awaited<ReturnType<typeof db.memories.update>> | null; previousText?: string;
+              };
+            if (result.entry && result.previousText && result.previousText !== input.text &&
+              kernel.hasRoute('/x/memory-honcho/forget-intent')) {
+              try { await invokeHoncho('forget-intent', { workspace, text: result.previousText }); }
+              catch (error) { console.error('Honcho intent cleanup failed:', error instanceof Error ? error.message : error); }
+            }
+            return result.entry ?? null;
+          }),
           retract: os.x['memory-local'].intents.retract.handler(async ({ input, context }) => {
             authorize('x.memory-local.intents.retract', context);
             // A retracted intent also leaves Honcho, so no dream or L2 context can bring it back.
