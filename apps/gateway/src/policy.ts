@@ -19,6 +19,7 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'system.transferDeploymentOwner': 'deployment-owner',
   'system.backup': 'deployment-owner',
   'system.restore': 'deployment-owner',
+  'x.metrics.summary': 'admin',
   'x.coding-workflow.register': 'admin',
   'x.coding-workflow.switch': 'member',
   'x.coding-workflow.worktree': 'member',

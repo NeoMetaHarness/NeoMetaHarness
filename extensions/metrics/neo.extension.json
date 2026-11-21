@@ -1,0 +1,7 @@
+{
+  "id": "metrics",
+  "version": "0.1.0",
+  "displayName": "Success metrics",
+  "kind": ["tool"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}

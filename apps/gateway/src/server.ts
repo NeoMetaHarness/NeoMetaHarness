@@ -498,6 +498,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Skill registry extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const invokeMetrics = async (body: { workspace?: string; onboardingCompletedAt?: string | null }) => {
+    const path = '/x/metrics/summary';
+    if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Metrics extension is disabled' });
+    return kernel.invokeRoute(path, 'RPC', body);
+  };
   const invokeModels = async (route: string, body: unknown) => {
     const path = `/x/models/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Model Hub extension is disabled' });
@@ -721,6 +726,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       },
     },
     x: {
+      metrics: {
+        summary: os.x.metrics.summary.handler(async ({ context }) => {
+          authorize('x.metrics.summary', context);
+          return invokeMetrics({
+            workspace: inboxWorkspace(context),
+            onboardingCompletedAt: mode === 'desktop' ? readOnboardingCompletion() : null,
+          }) as Promise<import('@neometaharness/contracts').MetricsSummary>;
+        }),
+      },
       'models-router-panda': {
         settings: {
           get: os.x['models-router-panda'].settings.get.handler(async ({ context }) => {
@@ -1583,7 +1597,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/coding-workflow/') || path.startsWith('/x/models-router-panda/') || path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/')) {
+      if (path.startsWith('/x/coding-workflow/') || path.startsWith('/x/models-router-panda/') || path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/') || path.startsWith('/x/metrics/')) {
         // Order for every role: authorize the procedure, then report availability,
         // then let oRPC validate method and input. Authorization runs before
         // anything else, so no role learns more than its policy allows, and a

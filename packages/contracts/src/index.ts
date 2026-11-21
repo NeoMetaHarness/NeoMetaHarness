@@ -332,6 +332,30 @@ export const registrySkillSchema = z.object({
 });
 export type RegistrySkill = z.infer<typeof registrySkillSchema>;
 const skillTarget = z.object({ name: skillId, engine: z.enum(['hermes', 'dsh', 'superagent']), targetId: z.string().min(1) });
+export const metricsSummarySchema = z.object({
+  completedTickets: z.number().int().nonnegative(),
+  finishedTickets: z.number().int().nonnegative(),
+  attention: z.object({
+    share: z.number().min(0).max(1).nullable(),
+    observedWithoutFinalApprovalShare: z.number().min(0).max(1).nullable(),
+    withRecordedApproval: z.number().int().nonnegative(),
+    reason: z.string(),
+  }),
+  learning: z.object({
+    promotedPer20: z.number().nonnegative().nullable(),
+    rollbackRate: z.number().min(0).max(1).nullable(),
+    qualifiedSkills: z.number().int().nonnegative().nullable(),
+    reason: z.string(),
+  }),
+  firstValue: z.object({
+    minutes: z.number().nonnegative().nullable(),
+    onboardingToFirstReplyMinutes: z.number().nonnegative().nullable(),
+    reason: z.string(),
+  }),
+});
+export type MetricsSummary = z.infer<typeof metricsSummarySchema>;
+export const metricsContract = { summary: oc.output(metricsSummarySchema) };
+
 export const skillsRegistryContract = {
   list: oc.output(z.array(registrySkillSchema)),
   get: oc.input(z.object({ name: skillId })).output(z.object({ metadata: registrySkillSchema, content: z.string() })),
@@ -486,7 +510,7 @@ const baseNeoContract = {
     backup: oc.input(z.object({ out: z.string().min(1), passphrase: z.string().min(12) }))
       .output(z.object({ out: z.string(), files: z.number().int(), format: z.number().int() })),
   },
-  x: { 'coding-workflow': codingWorkflowContract, 'models-router-panda': pandaContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract },
+  x: { 'coding-workflow': codingWorkflowContract, 'models-router-panda': pandaContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract, metrics: metricsContract },
   onboarding: {
     get: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), workspaceName: z.string(), mode: z.enum(['desktop', 'server']) })),
     complete: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), workspaceName: z.string(), mode: z.enum(['desktop', 'server']) })),
