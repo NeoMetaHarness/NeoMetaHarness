@@ -29,7 +29,8 @@ export class DecisionLog {
   private readonly path: string;
   private pending: Promise<void> = Promise.resolve();
 
-  constructor(dir: string, private readonly maxBytes = 1_000_000, private readonly archives = 3) {
+  constructor(dir: string, private readonly maxBytes = 1_000_000, private readonly archives = 3,
+    private readonly readTraceFile: (path: string) => Promise<string> = (path) => readFile(path, 'utf8')) {
     this.path = join(dir, 'decisions.jsonl');
   }
 
@@ -67,11 +68,26 @@ export class DecisionLog {
     await this.pending;
     const paths = [this.path, ...Array.from({ length: this.archives }, (_, i) => `${this.path}.${i + 1}`)];
     const batches = await Promise.all(paths.map(async (path) => {
-      const raw = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      const raw = await this.readTraceFile(path).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return '';
         throw error;
       });
-      return raw.split('\n').filter(Boolean).map((line) => JSON.parse(line) as DecisionTrace);
+      const valid: DecisionTrace[] = [];
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const entry = JSON.parse(line) as Partial<DecisionTrace>;
+          if (entry && typeof entry.trace_id === 'string' && typeof entry.ticketId === 'string'
+            && typeof entry.chosenAction === 'string' && typeof entry.at === 'number'
+            && (entry.workspace === undefined || typeof entry.workspace === 'string')) {
+            valid.push(entry as DecisionTrace);
+          }
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) throw error;
+          // A concurrent writer may leave a partial final line; keep the other records.
+        }
+      }
+      return valid;
     }));
     return batches.flat().filter((entry) => (!input.ticketId || entry.ticketId === input.ticketId)
       && (input.workspace === undefined || entry.workspace === input.workspace))
