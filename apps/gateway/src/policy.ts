@@ -17,8 +17,8 @@ export function destructiveToolApproval(tool: string, detail: string): boolean {
 
 export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'system.transferDeploymentOwner': 'deployment-owner',
-  'system.backup': 'owner',
-  'system.restore': 'owner',
+  'system.backup': 'deployment-owner',
+  'system.restore': 'deployment-owner',
   'x.coding-workflow.register': 'admin',
   'x.coding-workflow.switch': 'member',
   'x.coding-workflow.worktree': 'member',
@@ -247,6 +247,8 @@ export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
   '/x/computer-local/consent': 'owner',
   '/auth/ws-ticket': 'viewer',
   '/auth/organization/create': 'deployment-owner',
+  '/x/backup/backup': 'deployment-owner',
+  '/x/backup/restore': 'deployment-owner',
   '/auth/*': 'internal',
   '/x/*': 'viewer',
 };
@@ -269,7 +271,7 @@ export function getPolicy(path: string): PolicyLevel | undefined {
   return undefined;
 }
 
-export function authorize(path: string, context?: GatewayAuthContext): void {
+export function authorize(path: string, context?: GatewayAuthContext, { workspaceOnly = false } = {}): void {
   if ((path === 'inbox.list' || path === 'inbox.events' || path === 'inbox.cron.list') && canSeeDeploymentItems(context)) return;
   const level = getPolicy(path);
   if (!level) {
@@ -277,6 +279,9 @@ export function authorize(path: string, context?: GatewayAuthContext): void {
       message: `No authorization policy configured for route: ${path}`,
     });
   }
+  // Vault scope is checked in the handler. The deployment owner may reach
+  // that check independently of workspace membership.
+  if (!workspaceOnly && context?.deploymentMode === 'server' && path.startsWith('vault.') && canSeeDeploymentItems(context)) return;
 
   switch (level) {
     case 'viewer':
@@ -292,8 +297,8 @@ export function authorize(path: string, context?: GatewayAuthContext): void {
       requireOwner(context);
       break;
     case 'deployment-owner':
-      // Desktop keeps existing workspace-owner authorization for kernel changes.
-      if (context?.deploymentMode === 'desktop' && (path === 'extensions.upgrade' || path === 'extensions.uninstall')) {
+      // Desktop keeps workspace-owner authorization for its local operations.
+      if (context?.deploymentMode === 'desktop' && path !== 'system.transferDeploymentOwner') {
         requireOwner(context);
       } else requireDeploymentOwner(context);
       break;
@@ -314,7 +319,7 @@ export function canSeeDeploymentItems(context?: GatewayAuthContext): boolean {
   return Boolean(context?.user && context.session && context.isDeploymentOwner?.());
 }
 
-function requireDeploymentOwner(context?: GatewayAuthContext): void {
+export function requireDeploymentOwner(context?: GatewayAuthContext): void {
   if (!context?.user) throw new ORPCError('UNAUTHORIZED', { message: 'Authentication required' });
   if (!canSeeDeploymentItems(context)) throw new ORPCError('FORBIDDEN', { message: 'Deployment owner required' });
 }

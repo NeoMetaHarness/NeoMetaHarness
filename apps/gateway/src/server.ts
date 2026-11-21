@@ -59,6 +59,7 @@ import {
 import {
   authorize,
   canSeeDeploymentItems,
+  requireDeploymentOwner,
   getPolicy,
   ROUTE_POLICY,
   CONTRACT_POLICY,
@@ -323,21 +324,23 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   }, dataDir, process.env.NMH_EXTENSION_PYTHON);
 
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
-    authorize(`vault.${operation}`, context);
-    if (scope?.workspaceId && scope.workspaceId !== context?.workspaceId) {
-      // Cross-workspace access needs a sufficient role in the target workspace
-      // itself. Scope ids that are not Neo workspaces (the legacy 'default'
-      // scope, engine tenants) belong to the instance: only an owner of the
-      // bootstrap workspace, and the operator's authorizeVault hook still applies.
+    const procedure = `vault.${operation}`;
+    authorize(procedure, context);
+    if (scope?.workspaceId) {
       const kysely = auth.kysely;
-      const userId = context?.user?.id;
-      let held: string | undefined;
-      if (kysely && userId) {
+      const target = await kysely.selectFrom('organization').select('id')
+        .where('id', '=', scope.workspaceId).executeTakeFirst();
+      if (!target && mode === 'server') {
+        requireDeploymentOwner(context);
+      } else {
+        authorize(procedure, context, { workspaceOnly: true });
+      }
+      if (scope.workspaceId !== context?.workspaceId && (target || mode === 'desktop')) {
+        const userId = context?.user?.id;
         const memberRole = async (organizationId: string) => (await kysely.selectFrom('member').select('role')
           .where('userId', '=', userId).where('organizationId', '=', organizationId)
           .executeTakeFirst() as { role: string } | undefined)?.role;
-        const target = await kysely.selectFrom('organization').select('id')
-          .where('id', '=', scope.workspaceId).executeTakeFirst();
+        let held: string | undefined;
         if (target) {
           held = await memberRole(scope.workspaceId);
         } else {
@@ -345,9 +348,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             .orderBy('createdAt').executeTakeFirst() as { id: string } | undefined;
           held = bootstrap && (await memberRole(bootstrap.id)) === 'owner' ? 'owner' : undefined;
         }
+        if (!held) throw new ORPCError('FORBIDDEN', { message: 'Cross-workspace vault access forbidden' });
+        authorize(procedure, { ...context!, workspaceId: scope.workspaceId, role: held as GatewayAuthContext['role'] }, { workspaceOnly: true });
       }
-      if (!held) throw new ORPCError('FORBIDDEN', { message: 'Cross-workspace vault access forbidden' });
-      authorize(`vault.${operation}`, { ...context!, workspaceId: scope.workspaceId, role: held as GatewayAuthContext['role'] });
     }
     if (options.authorizeVault && (await options.authorizeVault(operation, scope)) !== true) {
       throw new ORPCError('UNAUTHORIZED', { message: 'Vault access denied' });
@@ -430,11 +433,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
     return context.workspaceId;
   };
-  const inboxVisible = (item: { workspace?: string }, context: GatewayAuthContext, role = context.role) => {
+  const inboxVisible = (item: Pick<InboxItem, 'workspace' | 'source'>, context: GatewayAuthContext, role = context.role) => {
     if (mode === 'desktop') return true;
     if (item.workspace) return Boolean(role && item.workspace === context.workspaceId);
-    return canSeeDeploymentItems(context);
+    return (item.source === 'neo/binding' || item.source === 'neo/upstream' || item.source === 'neo/github')
+      && canSeeDeploymentItems(context);
   };
+  const scheduleVisible = (job: { workspace?: string; botId: string; text: string }, context: GatewayAuthContext) =>
+    inboxVisible(job, context) || (!job.workspace && job.botId === 'neo-system' && job.text === '@neo/upstream check'
+      && canSeeDeploymentItems(context));
   const ROLE_RANK = { viewer: 0, member: 1, admin: 2, owner: 3 } as const;
   /**
    * The caller's role now (null: no longer a member), never above the role the stream opened with. Long-lived
@@ -459,8 +466,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   const cronJob = async (id: string, context: GatewayAuthContext) => {
     // Desktop keeps its old answers for unknown ids ({ deleted: false } and the like).
     if (mode === 'desktop') return;
-    const job = (await invokeInbox('cron/list', {}) as { id: string; workspace?: string }[]).find((entry) => entry.id === id);
-    if (!job || !inboxVisible(job, context)) throw new ORPCError('NOT_FOUND', { message: 'Schedule not found' });
+    const job = (await invokeInbox('cron/list', {}) as { id: string; workspace?: string; botId: string; text: string }[]).find((entry) => entry.id === id);
+    if (!job || !scheduleVisible(job, context)) throw new ORPCError('NOT_FOUND', { message: 'Schedule not found' });
     return job;
   };
   const memoryProvenance = (context: GatewayAuthContext): string => {
@@ -686,7 +693,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           authorize('inbox.cron.list', context);
           const jobs = await invokeInbox('cron/list', {}) as { id: string; text: string; botId: string; schedule: string;
             mode: 'observe' | 'act'; workspace?: string }[];
-          return jobs.filter((job) => inboxVisible(job, context));
+          return jobs.filter((job) => scheduleVisible(job, context));
         }),
         delete: os.inbox.cron.delete.handler(async ({ input, context }) => {
           authorize('inbox.cron.delete', context);
@@ -1598,12 +1605,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
+      const backupRoute = path === '/x/backup/backup' || path === '/x/backup/restore';
+      if (backupRoute) authorize(path, context);
       if (kernel.hasRoute(path)) {
         if (!context?.user) {
           res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }));
           return;
         }
-        authorize(path, context as GatewayAuthContext);
+        if (!backupRoute) authorize(path, context as GatewayAuthContext);
         if (req.method !== 'GET') {
           res.writeHead(405).end();
           return;

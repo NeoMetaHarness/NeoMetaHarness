@@ -127,7 +127,8 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
       ['corp-question', corp.id, 'question'], ['corp-failed', corp.id, 'failed'],
       ['corp-destructive', corp.id, 'approval', { approval: { destructive: true, reason: 'deletes memory' } }],
       // An unstamped Hermes channel binding belongs to the deployment.
-      ['hermes-binding', undefined, 'suggestion', { source: 'neo/channel' }],
+      ['hermes-binding', undefined, 'suggestion', { source: 'neo/binding' }],
+      ['private-channel', undefined, 'suggestion', { source: 'neo/channel' }],
       ['upstream-bump', undefined, 'suggestion', { source: 'neo/upstream' }],
     ] });
     const ids = async (token: string) => ((await call(token, 'inbox/list', {})).body as { id: string }[]).map((item) => item.id).sort();
@@ -239,7 +240,7 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
       return stream;
     };
     const aliceEvents = listen(alice); const bobEvents = listen(bob); const ownerEvents = listen(owner);
-    for (const id of ['corp-suggestion', 'finance-suggestion', 'hermes-binding', 'upstream-bump']) await fixture('test/emit', { id });
+    for (const id of ['corp-suggestion', 'finance-suggestion', 'private-channel', 'hermes-binding', 'upstream-bump']) await fixture('test/emit', { id });
     await Promise.all([waitForEvents(aliceEvents.heard, 1), waitForEvents(bobEvents.heard, 1), waitForEvents(ownerEvents.heard, 3)]);
     assert.deepEqual(aliceEvents.heard, ['corp-suggestion']);
     assert.deepEqual(bobEvents.heard, ['finance-suggestion']);
@@ -286,7 +287,7 @@ test('P6-10: a transferred deployment owner loses visibility on an existing stre
     assert.equal((await fetch(`${base}/extensions/enable`, json({ json: { id: 'engine-superagent' } }, as(founder)))).status, 200);
     const fixture = (route: string, body: unknown = {}) => gateway.kernel.invokeRoute(`/x/engine-superagent/${route}`, 'RPC', body);
     await fixture('test/seed', { items: [['upstream-bump', undefined, 'suggestion', { source: 'neo/upstream' }],
-      ['hermes-binding', undefined, 'suggestion', { source: 'neo/channel' }],
+      ['hermes-binding', undefined, 'suggestion', { source: 'neo/binding' }],
       ['workspace-marker', corp.id, 'suggestion']] });
     const ids = async (token: string) => ((await (await fetch(`${base}/inbox/list`, json({ json: {} }, as(token)))).json() as { json: { id: string }[] })
       .json.map((item) => item.id).sort());
