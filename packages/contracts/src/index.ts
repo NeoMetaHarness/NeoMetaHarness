@@ -413,7 +413,7 @@ export type ModelProviderRecord = z.infer<typeof modelProvider>;
 export type ModelSelectionRecord = z.infer<typeof modelSelection>;
 export type ModelRolesRecord = z.infer<typeof modelRoles>;
 export type ModelRoleName = z.infer<typeof modelRole>;
-export const modelsContract = {
+const modelsConfigContract = {
   providers: {
     list: oc.output(z.array(modelProvider)),
     put: oc.input(z.object({
@@ -436,6 +436,11 @@ export const modelsContract = {
       .output(z.object({ profile: modelProfile, selection: modelSelection.nullable() })),
   },
 };
+/**
+ * The caller's workspace configuration, plus `deployment`: the deployment's own (Hermes profiles and registry
+ * evaluation use it; P1-13), which only the deployment owner manages (P1-14).
+ */
+export const modelsContract = { ...modelsConfigContract, deployment: modelsConfigContract };
 
 const pandaCandidate = modelSelection.extend({ modelId: z.string().trim().min(1).max(256) });
 export const pandaSettingsSchema = z.object({
@@ -457,11 +462,14 @@ export const pandaSettingsSchema = z.object({
   }).strict().optional(),
 }).strict();
 export type PandaSettings = z.infer<typeof pandaSettingsSchema>;
+const pandaSettingsContract = {
+  get: oc.output(pandaSettingsSchema.nullable()),
+  set: oc.input(pandaSettingsSchema).output(pandaSettingsSchema),
+};
 export const pandaContract = {
-  settings: {
-    get: oc.output(pandaSettingsSchema.nullable()),
-    set: oc.input(pandaSettingsSchema).output(pandaSettingsSchema),
-  },
+  settings: pandaSettingsContract,
+  /** The deployment's router settings (P1-13); deployment owner only (P1-14). */
+  deployment: { settings: pandaSettingsContract },
   health: oc.output(z.object({ ok: z.boolean(), configured: z.boolean() })),
 };
 

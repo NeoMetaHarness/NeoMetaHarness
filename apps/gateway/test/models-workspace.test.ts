@@ -87,6 +87,41 @@ test('P1-13 server: model provider keys, roles and router settings are each work
     assert.equal((await rpc(corpOwner, 'x/models-router-panda/settings/get')).body.endpoint, 'http://127.0.0.1:9');
     assert.equal((await rpc(financeAdmin, 'x/models-router-panda/settings/get')).body, null, 'Finance does not see Corp\'s router');
     console.log('P1-13_PANDA_WORKSPACE PASS router settings stay in their workspace');
+
+    // The deployment's configuration (Hermes profiles, registry evaluation) has its own routes, deployment owner only.
+    const deploymentRoutes = [
+      ['x/models/deployment/providers/list', undefined],
+      ['x/models/deployment/providers/put', { id: 'dep', kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', apiKey: 'x' }],
+      ['x/models/deployment/providers/delete', { id: 'legacy' }],
+      ['x/models/deployment/providers/test', { id: 'legacy' }],
+      ['x/models/deployment/roles/get', undefined],
+      ['x/models/deployment/roles/set', { role: 'default', providerId: 'legacy', model: 'x' }],
+      ['x/models/deployment/override/get', { profile: 'default' }],
+      ['x/models/deployment/override/set', { profile: 'default' }],
+      ['x/models-router-panda/deployment/settings/get', undefined],
+      ['x/models-router-panda/deployment/settings/set', panda],
+    ] as const;
+    for (const [path, input] of deploymentRoutes) {
+      assert.equal((await rpc(financeAdmin, path, input)).status, 403, `a workspace admin cannot use ${path}`);
+    }
+    assert.deepEqual((await rpc(corpOwner, 'x/models/deployment/providers/list')).body.map((p: any) => p.id), ['legacy']);
+    assert.equal((await rpc(corpOwner, 'x/models/deployment/providers/put', { id: 'dep', kind: 'openai-compatible',
+      baseUrl: 'http://127.0.0.1:9/v1', apiKey: 'deployment-key' })).status, 200);
+    assert.equal((await rpc(corpOwner, 'x/models/deployment/roles/set', { role: 'eval', providerId: 'dep', model: 'dep-eval' })).status, 200);
+    assert.equal((await rpc(corpOwner, 'x/models/deployment/roles/get')).body.eval.model, 'dep-eval');
+    assert.equal(await gateway.vault.get({ kind: 'workspace', workspaceId: 'default' }, 'NEO_MODEL_DEP_KEY'), 'deployment-key');
+    // Deployment-level work (registry evaluation, Hermes) now resolves it; Corp's own configuration is untouched.
+    assert.deepEqual(await hub.resolve('eval').then((b: any) => [b.model, b.apiKey]), ['dep-eval', 'deployment-key']);
+    assert.deepEqual((await rpc(corpOwner, 'x/models/providers/list')).body.map((p: any) => p.id).sort(), ['legacy', 'shared']);
+    await assert.rejects(hub.resolve('eval', undefined, undefined, corp.id), /unconfigured/, 'the deployment binding is not Corp\'s');
+    const deploymentPanda = { ...panda, endpoint: 'http://127.0.0.1:8' };
+    assert.equal((await rpc(corpOwner, 'x/models-router-panda/deployment/settings/set', deploymentPanda)).status, 200);
+    assert.equal((await rpc(corpOwner, 'x/models-router-panda/deployment/settings/get')).body.endpoint, 'http://127.0.0.1:8');
+    assert.equal((await rpc(corpOwner, 'x/models-router-panda/settings/get')).body.endpoint, 'http://127.0.0.1:9', 'Corp\'s router is untouched');
+    // Disabled extension: the deployment routes report 404 like the workspace ones.
+    assert.equal((await rpc(corpOwner, 'extensions/disable', { id: 'models-router-panda' })).status, 200);
+    assert.equal((await rpc(corpOwner, 'x/models-router-panda/deployment/settings/get')).status, 404);
+    console.log('P1-13_DEPLOYMENT_MODELS PASS deployment model and router configuration: deployment owner only, separate from every workspace');
   } finally {
     await gateway.close();
     await rm(root, { recursive: true, force: true, maxRetries: 5 });

@@ -552,6 +552,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Model Hub extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  /** The deployment's own Model Hub / Panda store (workspaceDirectory key); only deployment-owner routes use it. */
+  const DEPLOYMENT_CONFIG = 'default';
   /** Model Hub and Panda configuration is the caller's workspace's (P1-13); desktop has its one. */
   const modelsWorkspace = (context: GatewayAuthContext): string | undefined => {
     if (mode === 'desktop') return undefined;
@@ -786,6 +788,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
       },
       'models-router-panda': {
+        deployment: {
+          settings: {
+            get: os.x['models-router-panda'].deployment.settings.get.handler(async ({ context }) => {
+              authorize('x.models-router-panda.deployment.settings.get', context);
+              return invokePanda('settings/get', { workspace: DEPLOYMENT_CONFIG }) as Promise<import('@neometaharness/contracts').PandaSettings | null>;
+            }),
+            set: os.x['models-router-panda'].deployment.settings.set.handler(async ({ input, context }) => {
+              authorize('x.models-router-panda.deployment.settings.set', context);
+              return invokePanda('settings/set', { ...input, workspace: DEPLOYMENT_CONFIG }) as Promise<import('@neometaharness/contracts').PandaSettings>;
+            }),
+          },
+        },
         settings: {
           get: os.x['models-router-panda'].settings.get.handler(async ({ context }) => {
             requireAdminOrOwner(context);
@@ -802,6 +816,47 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
       },
       models: {
+        // The deployment's configuration, used by deployment-level work (Hermes profiles, registry evaluation).
+        deployment: {
+          providers: {
+            list: os.x.models.deployment.providers.list.handler(async ({ context }) => {
+              authorize('x.models.deployment.providers.list', context);
+              return invokeModels('providers/list', { workspace: DEPLOYMENT_CONFIG }) as Promise<ModelProviderRecord[]>;
+            }),
+            put: os.x.models.deployment.providers.put.handler(async ({ input, context }) => {
+              authorize('x.models.deployment.providers.put', context);
+              return invokeModels('providers/put', { ...input, workspace: DEPLOYMENT_CONFIG }) as Promise<ModelProviderRecord>;
+            }),
+            delete: os.x.models.deployment.providers.delete.handler(async ({ input, context }) => {
+              authorize('x.models.deployment.providers.delete', context);
+              return invokeModels('providers/delete', { ...input, workspace: DEPLOYMENT_CONFIG }) as Promise<{ deleted: boolean }>;
+            }),
+            test: os.x.models.deployment.providers.test.handler(async ({ input, context }) => {
+              authorize('x.models.deployment.providers.test', context);
+              return invokeModels('providers/test', { ...input, workspace: DEPLOYMENT_CONFIG }) as Promise<{ ok: boolean; models: number; status: number }>;
+            }),
+          },
+          roles: {
+            get: os.x.models.deployment.roles.get.handler(async ({ context }) => {
+              authorize('x.models.deployment.roles.get', context);
+              return invokeModels('roles/get', { workspace: DEPLOYMENT_CONFIG }) as Promise<ModelRolesRecord>;
+            }),
+            set: os.x.models.deployment.roles.set.handler(async ({ input, context }) => {
+              authorize('x.models.deployment.roles.set', context);
+              return invokeModels('roles/set', { ...input, workspace: DEPLOYMENT_CONFIG }) as Promise<{ role: ModelRoleName; selection: ModelSelectionRecord }>;
+            }),
+          },
+          override: {
+            get: os.x.models.deployment.override.get.handler(async ({ input, context }) => {
+              authorize('x.models.deployment.override.get', context);
+              return invokeModels('override/get', { ...input, workspace: DEPLOYMENT_CONFIG }) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;
+            }),
+            set: os.x.models.deployment.override.set.handler(async ({ input, context }) => {
+              authorize('x.models.deployment.override.set', context);
+              return invokeModels('override/set', { ...input, workspace: DEPLOYMENT_CONFIG }) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;
+            }),
+          },
+        },
         providers: {
           list: os.x.models.providers.list.handler(async ({ context }) => {
             requireViewer(context);
@@ -1668,7 +1723,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         const procedure = path.slice(1).split('/').join('.');
         if (CONTRACT_POLICY[procedure]) {
           authorize(procedure, context as GatewayAuthContext);
-          const extensionPath = path.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+          // Deployment configuration procedures are served by the same extension routes.
+          const extensionPath = path.replace(/^\/x\/(models|models-router-panda)\/deployment\//, '/x/$1/')
+            .replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
           // Existing Honcho and Channels procedures report their own disabled state.
           // Destination resolution requires a live Channels extension.
           const selfReporting = path === '/x/memory-honcho/status' || path === '/x/memory-honcho/list' || (path.startsWith('/x/channels/') && path !== '/x/channels/notification/resolve');

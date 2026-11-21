@@ -143,6 +143,17 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.models.roles.get': 'viewer',
   'x.models.roles.set': 'admin',
   'x.models.override.set': 'admin',
+  // The deployment's own model and router configuration (Hermes profiles, registry evaluation): P1-13 / P1-14.
+  'x.models.deployment.providers.list': 'deployment-owner',
+  'x.models.deployment.providers.put': 'deployment-owner',
+  'x.models.deployment.providers.delete': 'deployment-owner',
+  'x.models.deployment.providers.test': 'deployment-owner',
+  'x.models.deployment.roles.get': 'deployment-owner',
+  'x.models.deployment.roles.set': 'deployment-owner',
+  'x.models.deployment.override.get': 'deployment-owner',
+  'x.models.deployment.override.set': 'deployment-owner',
+  'x.models-router-panda.deployment.settings.get': 'deployment-owner',
+  'x.models-router-panda.deployment.settings.set': 'deployment-owner',
 
   // extensions
   'extensions.list': 'viewer',
