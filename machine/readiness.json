@@ -386,9 +386,9 @@
     },
     "P4-9": {
       "title": "Honcho dreaming + report, standing intents",
-      "status": "in_progress",
+      "status": "done",
       "owner": "opus",
-      "note": "Returned 2026-11-20: cross-workspace route check (H1), intent forgery via memory-local add/update (H2), accept mode per workspace, retracted intents resurrected via L2, read-window duplicates."
+      "evidence": "PM review 2026-11-21 on main+work/opus-p49 merge (8cb419d): pnpm check PASS; typecheck memory-honcho, memory-local, engine-superagent PASS; gateway tests PASS (incl. inbox-workspace, memory-workspace); test:p4-9 PASS 2/2; test:toggle PASS seed=300387; test:p4-5, test:p6-1, test:p6-3 PASS; test:p6-9 PASS (startup 11.9s). Code read: gateway scopes inbox/memory to caller workspace in server mode, raw /x/memory-local routes go through the same scoped handlers, neo.intent source reserved to intents routes, provenance server-assigned."
     }
   },
   "p3_tasks": {
@@ -628,10 +628,9 @@
     },
     "P6-10": {
       "title": "Inbox and memory workspace isolation (inbox.list/events/actions and memory-local routes scoped to the caller workspace)",
-      "status": "in_progress",
-      "note": "Found 2026-11-20 by P4-9 review: inbox.list is unfiltered across workspaces (server.ts inbox handlers); memory-local routes trust input.workspace. Pre-existing; systemic.",
+      "status": "done",
       "owner": "opus",
-      "code_check_2026_11_21": "Code ahead of readiness: work/opus-p49 carries P6-10 commits through \"review fixes 2\" on top of P4-9, unmerged."
+      "evidence": "PM review 2026-11-21 on main+work/opus-p49 merge (8cb419d): pnpm check PASS; typecheck memory-honcho, memory-local, engine-superagent PASS; gateway tests PASS (incl. inbox-workspace, memory-workspace); test:p4-9 PASS 2/2; test:toggle PASS seed=300387; test:p4-5, test:p6-1, test:p6-3 PASS; test:p6-9 PASS (startup 11.9s). Code read: gateway scopes inbox/memory to caller workspace in server mode, raw /x/memory-local routes go through the same scoped handlers, neo.intent source reserved to intents routes, provenance server-assigned."
     }
   }
 }
