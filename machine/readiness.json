@@ -236,7 +236,7 @@
       "title": "Deployment-level owner role, separate from the per-org owner",
       "status": "in_progress",
       "owner": "sol61",
-      "note": "User decision 2026-11-21. Today any org owner/admin has deployment-wide power (packages/auth/src/index.ts:104-110, 368-391). P6-10 hides deployment items from everyone (canSeeDeploymentItems returns false) until this lands."
+      "note": "Part 1 merged 2026-11-22 (deployment owner role: first server user, atomic transfer; org creation, kernel upgrade/install/uninstall, system.backup/restore and instance vault scopes deployment-owner only; canSeeDeploymentItems true only for the deployment owner, limited to deployment item sources). PM evidence: test:p1-14 PASS x2, auth tests, test:p1-10, test:p6-9, gateway, toggle, pnpm check, secret scan PASS; full regression 62/62; independent re-check (Sol-B) found all 3 review findings fixed. Part 2 in progress (sol61, work/sol61-p114b): gate deployment-scoped routes (channels, engine-hermes, GitHub/upstream sources, skills-registry mutations) to the deployment owner."
     }
   },
   "p2_tasks": {
