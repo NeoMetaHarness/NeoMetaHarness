@@ -34,6 +34,7 @@ gantt
 - Kernel: manifest, resolver, permissions, Cordis mount, process extensions (JSON-RPC/MCP), projections, health, toggle, blue/green upgrade.
 - P1-10: a verified kernel-owned generation remains eligible to run when its bundled extension is absent.
 - Neo API contracts and event bus; workspaces, members, roles; vault.
+- P1-14: a deployment-level owner role, separate from the per-org `owner` role (decided 2026-11-21). Only the deployment owner sees and manages deployment-wide items (Hermes and channel bindings, kernel upgrades, org creation in server mode); in desktop mode the single user is the deployment owner.
 - `@neometaharness/ui` on Astryx + Neo theme (in NeoMetaHarness-design-system); slot runtime.
 - App shell: navigation, Inbox placeholder, **Extensions** page, schema-driven Settings, onboarding skeleton; Tauri 2 desktop (tray, global launcher, updater, deep links) + PWA; perf budgets wired into `neo check`.
 - **Exit:** install / enable / disable a sample TS and a sample Python extension live, without a restart.
@@ -56,6 +57,7 @@ gantt
 ## P4: Memory and Skills fabric (weeks 6–9, parallel)
 - Local memory: MCP server, auth, provenance, trust levels, soul-file export; Hermes memory provider; DSH context plugin.
 - Honcho self-hosted (`memory-honcho`), L1 ↔ L2 sync, dreaming + report, standing intents.
+- P4-10: only workspace admins can add or change standing intents (decided 2026-11-21).
 - Skill Registry (git-backed), Hermes skills sync, projections, eval gate, autonomy ceilings, rollback, Hub install with scan.
 - App: Memory browser, SOUL / USER editor, Skills library / learn / curator / versions.
 - **Exit:** `/learn` a procedure on a bot → it's versioned in the registry → a DSH session and another bot can use it.
@@ -76,6 +78,8 @@ gantt
 ## P7: Hardening and v1.0 (weeks 16–17)
 - Toggle-safety test over all official extensions; security review (Security-Trust repo); backups and restore drill.
 - Installers (Win / macOS / Linux, Docker Compose); docs site; onboarding under 15 minutes.
+- P7-12: measure the PRD §6 success metrics from the running product (attention, learning, time to first value) and show them in the App (decided 2026-11-21).
+- P7-13: fix the docs that disagree with the code (sweep of 2026-11-21; the code is the source of truth).
 - **v1.0 public release.**
 
 ## After v1

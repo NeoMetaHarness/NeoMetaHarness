@@ -231,6 +231,12 @@
       "note": "Found 2026-11-20 by x-search security review: any extension key/settings are shared across workspaces in server mode (packages/kernel/src/index.ts settings use workspaceId \"default\").",
       "owner": "opus",
       "code_check_2026_11_21": "Code ahead of readiness: work/opus-p113 is 11 commits ahead of main (per-workspace settings table + schema validation), unmerged. Main still uses workspaceId \"default\" (packages/kernel/src/index.ts:287,316)."
+    },
+    "P1-14": {
+      "title": "Deployment-level owner role, separate from the per-org owner",
+      "status": "in_progress",
+      "owner": "sol61",
+      "note": "User decision 2026-11-21. Today any org owner/admin has deployment-wide power (packages/auth/src/index.ts:104-110, 368-391). P6-10 hides deployment items from everyone (canSeeDeploymentItems returns false) until this lands."
     }
   },
   "p2_tasks": {
@@ -389,6 +395,12 @@
       "status": "done",
       "owner": "opus",
       "evidence": "PM review 2026-11-21 on main+work/opus-p49 merge (8cb419d): pnpm check PASS; typecheck memory-honcho, memory-local, engine-superagent PASS; gateway tests PASS (incl. inbox-workspace, memory-workspace); test:p4-9 PASS 2/2; test:toggle PASS seed=300387; test:p4-5, test:p6-1, test:p6-3 PASS; test:p6-9 PASS (startup 11.9s). Code read: gateway scopes inbox/memory to caller workspace in server mode, raw /x/memory-local routes go through the same scoped handlers, neo.intent source reserved to intents routes, provenance server-assigned."
+    },
+    "P4-10": {
+      "title": "Standing intents: admin-only add/change",
+      "status": "in_progress",
+      "owner": "sol-a",
+      "note": "User decision 2026-11-21 (recommended admin-only). P4-9 shipped with any member able to add an intent."
     }
   },
   "p3_tasks": {
@@ -568,6 +580,18 @@
     "P7-11": {
       "title": "v1.0 public release",
       "status": "not_started"
+    },
+    "P7-12": {
+      "title": "PRD success metrics measured in the running product",
+      "status": "in_progress",
+      "owner": "codex",
+      "note": "User decision 2026-11-21. PRD §6 runtime metrics had no task (P7-11 readiness audit)."
+    },
+    "P7-13": {
+      "title": "Docs that disagree with the code (sweep 2026-11-21)",
+      "status": "in_progress",
+      "owner": "antigravity",
+      "note": "User decision 2026-11-21: fix the 20 mismatches from the docs sweep; code is the source of truth."
     }
   },
   "p6_tasks": {
