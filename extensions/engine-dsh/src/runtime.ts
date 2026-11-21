@@ -331,7 +331,7 @@ export class DshAgentRuntime {
       return { sessionId: session.id, pid: session.pid };
     } catch (error) {
       await session.stop(true);
-      this.computers?.unassign('dsh', sessionId);
+      this.computers?.unassign('dsh', sessionId, input.workspaceId);
       await this.computerMcp?.forget('dsh', sessionId);
       this.skills?.forgetDsh(sessionId);
       this.memory?.forget(sessionId);
@@ -390,11 +390,12 @@ export class DshAgentRuntime {
 
   async cancel(input: { sessionId: string; workspaceId?: string }): Promise<{ cancelled: boolean }> {
     const session = this.session(input.sessionId, input.workspaceId);
+    const workspaceId = this.owners.get(input.sessionId);
     await session.stop(true);
     this.sessions.delete(input.sessionId);
     this.owners.delete(input.sessionId);
     this.reportSettings.delete(input.sessionId);
-    this.computers?.unassign('dsh', input.sessionId);
+    this.computers?.unassign('dsh', input.sessionId, workspaceId);
     await this.computerMcp?.forget('dsh', input.sessionId);
     this.skills?.forgetDsh(input.sessionId);
     this.memory?.forget(input.sessionId);
@@ -403,11 +404,12 @@ export class DshAgentRuntime {
 
   async shutdown(input: { sessionId: string; workspaceId?: string }): Promise<{ stopped: boolean }> {
     const session = this.session(input.sessionId, input.workspaceId);
+    const workspaceId = this.owners.get(input.sessionId);
     await session.stop();
     this.sessions.delete(input.sessionId);
     this.owners.delete(input.sessionId);
     this.reportSettings.delete(input.sessionId);
-    this.computers?.unassign('dsh', input.sessionId);
+    this.computers?.unassign('dsh', input.sessionId, workspaceId);
     await this.computerMcp?.forget('dsh', input.sessionId);
     this.skills?.forgetDsh(input.sessionId);
     this.memory?.forget(input.sessionId);
@@ -417,7 +419,7 @@ export class DshAgentRuntime {
   async stop(): Promise<void> {
     this.closing = true;
     await Promise.all([...this.sessions.values()].map((session) => session.stop(true)));
-    for (const id of this.sessions.keys()) this.computers?.unassign('dsh', id);
+    for (const id of this.sessions.keys()) this.computers?.unassign('dsh', id, this.owners.get(id));
     for (const id of this.sessions.keys()) {
       this.skills?.forgetDsh(id);
       this.memory?.forget(id);
