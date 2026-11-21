@@ -585,7 +585,7 @@
       "title": "PRD success metrics measured in the running product",
       "status": "done",
       "owner": "codex",
-      "evidence": "PM review 2026-11-22 on main 158c9b0 + work/codex-p712 (c3c8c75; PM resolved a one-line policy.ts conflict with P1-14 and fixed Metrics.tsx Button disabled->isDisabled, fb12f8d). extensions/metrics reads PRD §6 signals via superagent/skills-registry services (no file reads, no telemetry); x.metrics.summary admin-only, workspace from session; unmeasurable PRD rates return null with reason; proxies labelled. test:p7-12 PASS x2 + rerun, superagent, gateway, toggle, pnpm check, secret scan PASS; full regression: 48 suites OK first run, the 14 suites failing on the app type error all PASS after the fix. Cross-review (Opus) x2: all findings fixed."
+      "evidence": "PM review 2026-11-22 on main 158c9b0 + work/codex-p712 (c3c8c75; PM resolved a one-line policy.ts conflict with P1-14 and fixed Metrics.tsx Button disabled->isDisabled, fb12f8d). extensions/metrics reads PRD §6 signals via superagent/skills-registry services (no file reads, no telemetry); x.metrics.summary admin-only, workspace from session; unmeasurable PRD rates return null with reason; proxies labelled. test:p7-12 PASS x2 + rerun, superagent, gateway, toggle, pnpm check, secret scan PASS; full regression: 49 suites OK first run; the 14 suites failing on the app type error (incl. toggle, root and app p1-2) all PASS after the fix. Cross-review (Opus) x2: all findings fixed."
     },
     "P7-13": {
       "title": "Docs that disagree with the code (sweep 2026-11-21)",
