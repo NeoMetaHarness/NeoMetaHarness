@@ -25,7 +25,7 @@ gantt
 | ID | Task | Done when |
 |---|---|---|
 | P0-1 | Create org repos per [06](06-org-structure.md) with AGENTS.md, README, `machine/*.json`, templates, guardrails (≤ 20 writes per task, so batch it) | Repos exist; ROUTER.md complete |
-| P0-2 | Product monorepo scaffold (pnpm), local `pnpm check` pipeline, pre-push hooks | `pnpm check` green |
+| P0-2 | Product monorepo scaffold (pnpm + uv), local `pnpm check` pipeline | `pnpm check` green |
 | P0-3 | **Seam spikes:** (a) T3 server driven by T3's headless `contracts` + `client-runtime` from a non-T3 React app; (b) Hermes `api_server` + dashboard backend API coverage for bots, cron, kanban, skills, memory, platforms, providers; (c) Hermes external-screen / computer-use seam; (d) DSH `computerUse` / `browserUse` provider + SDK JSON-RPC; (e) superagent custom Source + MCP in worker preset; (f) Hermes memory-provider plugin; (g) Astryx app in a Tauri 2 shell (Windows WebView2, macOS WKWebView, Linux WebKitGTK) + PWA, with the Node gateway as a sidecar; port the PandaCode streaming bench | Each works, or has a written fallback |
 | P0-4 | Upstream registry + lock + `pnpm upstream:check` (local) | Lists drift for all engines |
 | P0-5 | ADRs: kernel = Cordis, Neo API style, DB layer, auth model | Merged |
@@ -72,7 +72,7 @@ gantt
 - `engine-superagent`: profile, Neo Sources (channel, cron, coding, agents, app, GitHub), worker MCP delegation, Policy from members' identities.
 - Honcho for the super agent; Inbox in Astryx (approvals, questions, failures).
 - Report / assessment contracts, accept modes + Suggestions, `@neo` comment and check Sources; ticket post-mortems + episodes → skills fabric; playbooks; decision logger (Panda-compatible trace format).
-- `neo upstream` as a super-agent routine requiring a configured maintenance bot (Neo maintains itself).
+- Upstream drift checking via system cron `@neo/upstream check` creating admin Suggestions; `neo upstream` execution routine requiring a configured maintenance bot (`botId`) to run approved bumps.
 - **Exit:** "build X and tell me on WhatsApp when the PR is up", "research Y every Monday on a bot's computer", and "remember Z" all work end to end and survive restarts.
 
 ## P7: Hardening and v1.0 (weeks 16–17)

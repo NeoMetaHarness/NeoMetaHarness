@@ -61,11 +61,13 @@ flowchart TB
 | Layer | What | Tech (swappable) |
 |---|---|---|
 | **Clients** | Neo App: one codebase for web, PWA and the desktop app ([ADR 0001](adr/0001-desktop-shell.md)) | React 19, Astryx, StyleX, TanStack Router; hot streams rendered outside React; desktop = **Tauri 2** shell over the OS webview, with the gateway as a sidecar; shell APIs behind `@neometaharness/shell` |
-| **Gateway** | Neo Gateway: extension host, Neo API, auth/teams, agents service, registries, vault | Node 22+ (≥ 22.12; host baseline runtime for gateway and services), TypeScript, **Cordis** kernel behind `@neometaharness/kernel` ([ADR 0004](adr/0004-kernel.md)), **oRPC** contracts ([ADR 0002](adr/0002-api-style.md)), **Kysely** over SQLite by default / Postgres for teams ([ADR 0003](adr/0003-db-layer.md)) |
+| **Gateway** | Neo Gateway: extension host, Neo API, auth/teams, agents service, registries, vault | Node 22+ (≥ 22.12; host baseline runtime for gateway and services)[^node-runtime], TypeScript, **Cordis** kernel behind `@neometaharness/kernel` ([ADR 0004](adr/0004-kernel.md)), **oRPC** contracts ([ADR 0002](adr/0002-api-style.md)), **Kysely** over SQLite by default / Postgres for teams ([ADR 0003](adr/0003-db-layer.md)) |
 | **Engines** | DSH + superagent bundle, Hermes, T3 server: each wrapped by an *engine extension* | as upstream ships them (TS / Python) |
 | **Capabilities** | computers, channels, models, memory, skills, tools, sources: interfaces plus provider extensions | any language, via in-process TS or out-of-process JSON-RPC/MCP |
 | **Data** | L1 local memory, L2 Honcho, skill registry, gateway DB, artifacts | SQLite/FTS5, Postgres + pgvector, git-backed skill repo, filesystem / S3-compatible |
 | **Platform** | `neo` CLI, installers, upstream tooling, backups, telemetry (opt-in) | Win/macOS/Linux, Docker Compose, systemd, Tailscale (optional) |
+
+[^node-runtime]: The host baseline runtime is Node ≥ 22.12 (supported LTS for gateway, desktop sidecar, and extensions). Upstream DeepSeek Harness engine packages declare Node ≥ 24.9.0.
 
 ## 3. Engines and what we take from each
 
@@ -77,7 +79,7 @@ flowchart TB
 | **T3 Code** | Provider orchestration (Claude Code, Codex, Cursor, OpenCode, any ACP agent incl. DSH), threads, checkpoints, worktrees, git/PR, terminals, remote environments | T3 **server** over its authenticated WebSocket RPC (orchestration protocol v2, Effect schemas) through a **thin Neo RPC client** in `engine-t3` (validated against the pinned `packages/contracts` schemas). Both T3 client packages are `private` and are not consumed as an SDK ([spike a](../spikes/P0-3a-t3-headless-client/README.md)). Neo authenticates with a scoped session (`t3 auth session issue` / pairing). T3 `/mcp` for agents | `engine-t3` |
 | **bot-hq** *(adopted)* | Bot-team UX: chat that shows the work, screen per bot, takeover, routines, tasks, Library, approvals, voice, bot-to-bot | Code moved into `packages/agents` and generalised (see §5) | first-party |
 | **Honcho** | Permanent memory, dialectic user/agent modelling | REST v3, `harness-plugin-core`, `hermes-plugin-honcho` | `memory-honcho` |
-| **Hermes-Agents-Local-Memory** *(ours)* | L1 memory: SQLite facts / cards / summaries, markdown export | in-process oRPC + MCP | `memory-local` |
+| **Hermes-Agents-Local-Memory** *(ours)* | L1 memory: SQLite facts / cards / summaries, markdown export | in-process oRPC + gateway HTTP `/internal/memory/*` (MCP planned) | `memory-local` |
 | **OpenClaw** *(ideas only)* | SOUL.md, USER.md / MEMORY.md / daily notes, dreaming, standing intents, memory provenance, channel trust model | none (we port the ideas) | features of `memory-local`, `skills-fabric`, `soul` |
 | **Astryx** | 150+ components, patterns, themes, CLI | npm `@astryxdesign/*` | `@neometaharness/ui` |
 
@@ -235,8 +237,8 @@ dsh-superagent bundle on a DSH profile (`engine-superagent`), plus:
 
 The org follows the BrowserHarness GitHub guardrails: **no GitHub Actions**, local tests, at most 20 GitHub writes per task. So:
 - `upstream/registry.yaml` + `upstream.lock.json` pin each engine.
-- `pnpm upstream:check` (local) fetches upstream releases and SHAs. Upstream bumps verify **contract tests** for every seam plus the extension tests, updating `upstream.lock.json` (a unified `neo upstream bump <name>` routine is planned).
-- The super agent runs `upstream:check` as a **cron Source** and opens a Ticket when a bump is ready or a contract breaks; executing the upstream routine requires a maintenance bot assigned via `inbox.upstream.configure({ botId })`. Neo maintains itself.
+- `pnpm upstream:check` (local) fetches upstream releases and SHAs (read-only drift check against GitHub/npm; `--write-lock` pins without running tests). Upstream bumps verified against contract tests are planned.
+- The neo-system cron `@neo/upstream check` runs without a bot. Detected drift creates a destructive Inbox Suggestion that an admin approves, not a Ticket. Nothing detects contract breaks today. A `botId` is only needed to run an approved bump routine via `inbox.upstream.configure({ botId })`, or for automatic reviews outside observe mode.
 - No personal forks: engines are fetched from their **source repos** at the pinned ref. A fork is created only if we must send an upstream PR.
 - DSH / dsh-superagent (developer preview) are bumped weekly; the others follow stable releases.
 - bot-hq: adopted. Upstream changes are reviewed monthly and copied by hand.

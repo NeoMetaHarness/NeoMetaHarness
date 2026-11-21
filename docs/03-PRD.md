@@ -94,7 +94,7 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 ### 5.6 Memory
 | ID | Requirement | P |
 |---|---|---|
-| ME-1 | L1 local memory (in-process oRPC + MCP) as the default memory provider for all engines | P0 |
+| ME-1 | L1 local memory (in-process oRPC + gateway HTTP `/internal/memory/*`; MCP planned) as the default memory provider for all engines | P0 |
 | ME-2 | L2 Honcho self-hosted; L1 ↔ L2 sync | P0 |
 | ME-3 | SOUL.md / USER.md / MEMORY.md / daily notes as exported views; edited in the App | P0 |
 | ME-4 | Dreaming with provenance + review report | P1 |
@@ -121,10 +121,10 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 | ID | Requirement | P |
 |---|---|---|
 | PL-1 | Extension system per [05](05-extension-system.md): manifest, lifecycle, toggle, permissions, health | P0 |
-| PL-2 | TS and Python extension SDKs + `neo ext new` templates (planned; sample extensions and templates provided today) | P1 |
+| PL-2 | TS and Python extension SDKs + `neo ext new` templates (planned; sample-ts and sample-py reference extensions provided today) | P1 |
 | PL-3 | Workspaces, members, roles; SQLite default, Postgres option | P0 |
 | PL-4 | Topologies: all-in-one, hybrid, server; `neo install / doctor / backup` (unified CLI planned; installer checks and `pnpm neo:backup / restore` today) | P0 |
-| PL-5 | Upstream registry + local `pnpm upstream:check` / `neo upstream bump` + contract tests (no GitHub Actions) | P0 |
+| PL-5 | Upstream registry + local `pnpm upstream:check` (`neo upstream bump` and contract tests are planned; no GitHub Actions) | P0 |
 | PL-6 | Opt-in telemetry (OpenTelemetry); health page | P1 |
 
 ### Non-goals for v1
@@ -150,7 +150,7 @@ Native mobile apps, a hosted SaaS, billing, a public extension marketplace with 
 | Computer seams in Hermes / DSH may not accept external screens | P0 verification; fall back to Neo MCP computer tools that engines call |
 | Memory poisoning, extension supply chain | Trust levels, candidate memory, signatures, permission review, process isolation |
 | System webviews differ (WebKitGTK on Linux) | Playwright Chromium + WebKit matrix, RFB/noVNC viewer by default, `@neometaharness/shell` keeps an Electron fallback possible |
-| No CI (GitHub guardrails) | Local `pnpm check` pipeline; pre-push hooks; reproducible scratch profiles |
+| No CI (GitHub guardrails) | Local `pnpm check` pipeline (run by hand); reproducible scratch profiles |
 
 ## 8. Open questions (non-blocking)
 - Product name and brand ("Neo" in UI?) → NeoMetaHarness-Brand.

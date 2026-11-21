@@ -120,4 +120,4 @@ From bot-hq's architecture doc, compared against Hermes' code tree. **Each item 
 | Cordis plugin / bundle / patch API | DSH | all `neo-dsh-*` plugins, superagent bundle |
 | Superagent Source kind interface (`src/sources/kind.ts`) | dsh-superagent | Neo Sources |
 | Honcho REST v3 + harness-plugin-core config | Honcho | `neo-dsh-honcho`, `hermes-plugin-honcho` |
-| Local memory in-process oRPC `/x/memory-local` (+ MCP, new) | ours | every agent |
+| Local memory in-process oRPC `/x/memory-local` + gateway HTTP `/internal/memory/*` (MCP planned) | ours | every agent |

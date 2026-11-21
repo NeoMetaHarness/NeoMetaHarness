@@ -58,14 +58,15 @@ packages/
   egress/       network egress controls and domain allowlists
   vault/        secrets encryption, key management, scoped projections
 extensions/     official extensions, each independently toggleable
-  Built: backup, channels, coding-workflow, computer-docker, computer-fake, computer-headless-chrome,
-    computer-hermes-screen, computer-local-sandbox, computer-local, computer-vnc, computers-mcp,
-    engine-dsh, engine-hermes, engine-superagent, engine-t3, memory-honcho, memory-local,
-    models-router-panda, models, sample-py, sample-ts, skills-registry
-  Planned: computer-orgo (task P3-10), skills-fabric, soul, voice-xai, apps-composio, x-search,
-    dsh-plugins/ (neo-dsh-memory, -soul, -report, -skills, -honcho), hermes-plugins/ (neo_local_memory, neo_soul, neo_bridge…)
+  Built: backup, channels (includes WhatsApp plugin), coding-workflow, computer-docker, computer-fake,
+    computer-headless-chrome, computer-hermes-screen, computer-local-sandbox, computer-local, computer-vnc,
+    computers-mcp, engine-dsh (with built-in neo-memory, -soul, -report, -skills plugins),
+    engine-hermes (with built-in memory-plugin 'neo'), engine-superagent, engine-t3, memory-honcho,
+    memory-local, models-router-panda, models, sample-py, sample-ts, skills-registry
+  Partly built in other extensions: soul, skills-fabric (P6-7 done)
+  Planned: computer-orgo (task P3-10), voice-xai, apps-composio, x-search
 upstream/       registry.yaml · upstream.lock.json · sources/ (pinned checkouts, gitignored)
-apps/gateway/test/ and tests/  one suite per engine seam
+contracts-tests/  one suite per engine seam (planned; tests/ currently holds toggle-safety)
 deploy/         installers (win/mac/linux), docker compose, systemd
 training/       decision traces, datasets, router-model training (later)
 docs/           architecture, ADRs

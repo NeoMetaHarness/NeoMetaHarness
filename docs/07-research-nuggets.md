@@ -71,7 +71,7 @@ Training cost almost nothing: $1.67 on Modal for v4.
   {"status":"ready|question|blocked|failed|dropped","summary":"","question":"","options":[],"changes":"","tests":"what was actually run","risks":""}
   ```
   It drives the Inbox, verification, escalation, Panda `record_outcome` and training labels uniformly. A matching **assessment contract** covers Eval.
-- **Accept modes per workspace: `observe` (default), `act-with-approval`, and `act`.** In `observe`, inferred work becomes a **Suggestion** a person starts or dismisses. `act-with-approval` stages actions for approval, while `act` executes autonomous actions directly.
+- **Accept modes: `observe` (default), `act-with-approval`, and `act`.** Operating at workspace level today; **accept modes per source or project** are planned (in `observe`, inferred work becomes a **Suggestion** a person starts or dismisses, providing a trust ramp where Neo earns `act` per source; `act-with-approval` stages actions for approval, while `act` executes autonomous actions directly).
 - **New Sources:** `@agent` / `@neo` comments in code (git grep), and **failing checks** (periodic check command) as triggers.
 - **Ticket stages** (first match wins): answer → review → blocked → failed → queued → working → ended. These become the Inbox lanes. Worker slots reserve one extra slot for runs a person starts.
 - **An honest autonomy matrix:** "careful" mode maps to what each CLI can really enforce. Claude Code permissions and the Codex OS sandbox can restrict; others can't. The App shows this truthfully when you pick an executor and an autonomy level.
