@@ -209,9 +209,9 @@
     },
     "P1-10": {
       "title": "Blue/green extension upgrade in the kernel",
-      "status": "review",
+      "status": "done",
       "owner": "sol61",
-      "evidence": "Round 3 at fa2c020: test:p1-10, standalone kernel tests, Gateway tests, test:toggle and test:p6-9 each passed twice on Windows. Coverage includes interpreter and path restrictions, Cordis import confinement, mode-independent integrity, read-only generations, multi-file Python restart, process route deadlines, retained disabled upgrades, owner-only uninstall and standalone managed restore. The focused GitHub poll expiry regression passed. P6-9 replacement startup was 15.3 and 11.9 seconds with clean SQLite cleanup. Earlier at a0ef5da: P6-9, P4-3 and P1-5 each passed 3 consecutive runs, and a forced P6-9 deadline exited 1."
+      "evidence": "PM review 2026-11-21 on main+work/sol61-p110 merge (14309f2 tree): pnpm check PASS; test:p1-10 PASS (TS/Python blue-green, atomic switch, drain, health rollback, restart); gateway tests PASS; test:toggle PASS seed=381381; test:p6-4 PASS 4/4 (the original return reason; 429 cooldown no longer resolves as success); test:p6-9 PASS 2/2 (startup 14.5s/13.7s). Helper round 3 at fa2c020: test:p1-10, standalone kernel tests, Gateway tests, test:toggle and test:p6-9 each passed twice on Windows. Coverage includes interpreter and path restrictions, Cordis import confinement, mode-independent integrity, read-only generations, multi-file Python restart, process route deadlines, retained disabled upgrades, owner-only uninstall and standalone managed restore. The focused GitHub poll expiry regression passed. P6-9 replacement startup was 15.3 and 11.9 seconds with clean SQLite cleanup. Earlier at a0ef5da: P6-9, P4-3 and P1-5 each passed 3 consecutive runs, and a forced P6-9 deadline exited 1."
     },
     "P1-11": {
       "title": "Desktop auto-updater (Tauri updater): real signing key and update flow",
