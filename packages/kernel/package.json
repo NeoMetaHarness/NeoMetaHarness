@@ -22,6 +22,6 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx test/generation.test.ts && tsx test/upgrade-core.test.ts && tsx test/upgrade.test.ts"
+    "test": "tsx test/generation.test.ts && tsx test/upgrade-core.test.ts && tsx test/upgrade.test.ts && tsx test/workspace-settings.test.ts"
   }
 }

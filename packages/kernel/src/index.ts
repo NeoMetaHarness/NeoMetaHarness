@@ -133,6 +133,9 @@ export class NeoKernel {
   private closing = false;
   private readonly workspaceScope = new AsyncLocalStorage<string | undefined>();
   private readonly fallbackWorkspace: string | undefined;
+  /** Pre-P1-13 settings have moved (or there is nowhere to move them from). */
+  private legacyMigrated = true;
+  private legacyRun?: Promise<void>;
   private operation: Promise<unknown> = Promise.resolve();
   private order: string[] = [];
 
@@ -178,8 +181,8 @@ export class NeoKernel {
       }
     }
     this.order = resolveOrder(this.discovered);
-    const legacyTarget = this.fallbackWorkspace ?? await this.options.legacyWorkspace?.();
-    if (legacyTarget) await this.migrateLegacySettings(legacyTarget);
+    this.legacyMigrated = false;
+    await this.ensureLegacyMigrated();
     for (const id of this.order) {
       this.entries.set(id, { desired: await this.db.getEnabled(id), status: 'disabled' });
     }
@@ -458,7 +461,16 @@ export class NeoKernel {
   contributionIds(): string[] { return [...this.snapshot.contributions.keys()]; }
   async invokeRoute(path: string, method: string, body?: unknown): Promise<unknown | undefined> {
     const route = this.snapshot.routes.get(path);
-    return route?.generation.invoke(route.handler, method, body);
+    if (!route) return undefined;
+    // runInWorkspace preloads the generations active when the request began. A generation that became active
+    // since (blue/green switch) loads the request's workspace here, before its handler reads settings.
+    const workspaceId = this.workspaceScope.getStore();
+    const generation = route.generation;
+    if (workspaceId && workspaceId !== this.fallbackWorkspace && generation.settingsSchema
+      && !generation.workspaceSettings.has(workspaceId)) {
+      await this.generationSettings(generation.id, generation, workspaceId);
+    }
+    return generation.invoke(route.handler, method, body);
   }
   hasRoute(path: string): boolean { return this.snapshot.routes.has(path); }
   routesFor(id: string): string[] { return [...this.snapshot.routes.keys()].filter((route) => route.startsWith(`/x/${id}/`)); }
@@ -482,6 +494,7 @@ export class NeoKernel {
    * sees schema defaults and no secrets.
    */
   async runInWorkspace<T>(workspaceId: string | undefined, work: () => T | Promise<T>): Promise<T> {
+    await this.ensureLegacyMigrated();
     if (workspaceId && workspaceId !== this.fallbackWorkspace) {
       for (const [id, generation] of this.active) {
         if (generation.settingsSchema && !generation.workspaceSettings.has(workspaceId)) {
@@ -501,6 +514,7 @@ export class NeoKernel {
 
   /** A generation's snapshot for one workspace, loaded on first use (a concurrent save's newer copy wins). */
   private async generationSettings(id: string, generation: ExtensionGeneration, workspaceId: string): Promise<Record<string, unknown>> {
+    await this.ensureLegacyMigrated();
     if (workspaceId === this.fallbackWorkspace) return generation.settings;
     const loaded = generation.workspaceSettings.get(workspaceId);
     if (loaded) return loaded;
@@ -544,6 +558,7 @@ export class NeoKernel {
     sanitized: Record<string, unknown>;
     schema?: ExtensionSettingsSchema;
   }> {
+    await this.ensureLegacyMigrated();
     const active = this.active.get(id);
     if (!active) return this.readSettings(id, this.discovered.get(id)?.manifest.settings, workspaceId);
     const schema = structuredClone(active.settingsSchema);
@@ -585,6 +600,7 @@ export class NeoKernel {
    */
   private async writeSettings(id: string, incomingValues: Record<string, unknown>, workspaceId: string | undefined): Promise<Record<string, unknown>> {
     if (!workspaceId) throw new Error('Settings are saved for a workspace');
+    await this.ensureLegacyMigrated();
     const active = this.active.get(id);
     const schema = active?.settingsSchema ?? this.discovered.get(id)?.manifest.settings;
     const accepted = coerceSettingValues(id, schema, incomingValues);
@@ -621,6 +637,33 @@ export class NeoKernel {
    * 'default' scope) become the fallback workspace's (desktop: its one workspace). Values already stored per
    * workspace win; nothing is removed before it is copied.
    */
+  /**
+   * Move pre-P1-13 settings once a target workspace exists: at discover, or (server mode, when the first
+   * workspace is created after start) on the first settings access after it appears.
+   */
+  private ensureLegacyMigrated(): Promise<void> {
+    if (this.legacyMigrated) return Promise.resolve();
+    this.legacyRun ??= (async () => {
+      const target = this.fallbackWorkspace ?? await this.options.legacyWorkspace?.();
+      if (!target) {
+        if (!this.options.legacyWorkspace) this.legacyMigrated = true;
+        return;
+      }
+      await this.migrateLegacySettings(target);
+      // Snapshots of the target read before the move held defaults; they reload on next use.
+      for (const generation of this.active.values()) generation.workspaceSettings.delete(target);
+      if (target === this.fallbackWorkspace) {
+        for (const [id, generation] of this.active) {
+          const values = (await this.readSettings(id, generation.settingsSchema, target)).values;
+          for (const key of Object.keys(generation.settings)) delete generation.settings[key];
+          Object.assign(generation.settings, values);
+        }
+      }
+      this.legacyMigrated = true;
+    })().finally(() => { this.legacyRun = undefined; });
+    return this.legacyRun;
+  }
+
   private async migrateLegacySettings(workspaceId: string): Promise<void> {
     for (const legacy of (await this.db.listLegacyExtensionSettings?.()) ?? []) {
       const current = await this.db.getWorkspaceSettings?.(legacy.id, workspaceId);

@@ -241,6 +241,11 @@ test('P1-13 server: pre-P1-13 settings move into the bootstrap workspace (kept u
       corp = await (await fetch(`${base}/auth/organization/create`, json({ name: 'Corp', slug: 'corp' }, { authorization: `Bearer ${owner}` }))).json() as { id: string };
       finance = await (await fetch(`${base}/auth/organization/create`,
         json({ name: 'Finance', slug: 'finance', keepCurrentActiveOrganization: true }, { authorization: `Bearer ${owner}` }))).json() as { id: string };
+      // The first workspace appeared after start: the next settings access moves the rows, no restart needed.
+      const got = await fetch(`${base}/settings/get`, json({ json: { extension: EXT } }, { authorization: `Bearer ${owner}` }));
+      assert.deepEqual((await got.json() as any).json.values,
+        { greeting: 'Legacy hello', enabled: true, retries: 4, apiKey: { set: true } }, 'migrated on first access');
+      assert.deepEqual(await (first.db as any).listLegacyExtensionSettings(), [], 'the legacy rows were moved without a restart');
     } finally {
       await first.close();
     }
@@ -262,7 +267,7 @@ test('P1-13 server: pre-P1-13 settings move into the bootstrap workspace (kept u
     } finally {
       await gateway.close();
     }
-    console.log('P1-13_SERVER_MIGRATION PASS legacy settings wait for, then move into, the bootstrap workspace');
+    console.log('P1-13_SERVER_MIGRATION PASS legacy settings wait for, then move into, the bootstrap workspace (on first access, and they persist)');
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
