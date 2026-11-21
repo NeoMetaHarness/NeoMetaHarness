@@ -1,5 +1,7 @@
 import { defineExtension } from '@neometaharness/kernel';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { open, rm, stat } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import { createEgressFetch, validateEgressUrl } from '@neometaharness/egress';
 import { xSearchInput, type NeoSearchService, type XSearchInput, type XSearchOutput } from '@neometaharness/contracts';
@@ -138,27 +140,32 @@ export class XSearchService implements NeoSearchService {
         httpClient.request(String(url), init ?? {})) as typeof fetch
       : undefined;
     this.guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected);
-    if (quotaFile) {
-      try {
-        const state = JSON.parse(readFileSync(quotaFile, 'utf8')) as {
+  }
+
+  private loadQuotaState(): void {
+    if (!this.quotaFile) return;
+    this.counterDay = -1;
+    this.userCounters.clear();
+    this.workspaceCounters.clear();
+    try {
+      const state = JSON.parse(readFileSync(this.quotaFile, 'utf8')) as {
           day: number;
           users: [string, QuotaCounter][];
           workspaces: [string, QuotaCounter][];
-        };
-        if (!Number.isSafeInteger(state.day) || !Array.isArray(state.users) || !Array.isArray(state.workspaces)
-          || ![...state.users, ...state.workspaces].every(([id, counter]) =>
-            typeof id === 'string' && counter && Number.isSafeInteger(counter.minute)
-            && Number.isSafeInteger(counter.minuteCount) && counter.minuteCount >= 0
-            && Number.isSafeInteger(counter.dayCount) && counter.dayCount >= 0)) {
-          throw new Error('Invalid X Search quota state');
-        }
-        this.counterDay = state.day;
-        for (const [id, counter] of state.users) this.userCounters.set(id, counter);
-        for (const [id, counter] of state.workspaces) this.workspaceCounters.set(id, counter);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          throw new Error('X Search quota state is unreadable', { cause: error });
-        }
+      };
+      if (!Number.isSafeInteger(state.day) || !Array.isArray(state.users) || !Array.isArray(state.workspaces)
+        || ![...state.users, ...state.workspaces].every(([id, counter]) =>
+          typeof id === 'string' && counter && Number.isSafeInteger(counter.minute)
+          && Number.isSafeInteger(counter.minuteCount) && counter.minuteCount >= 0
+          && Number.isSafeInteger(counter.dayCount) && counter.dayCount >= 0)) {
+        throw new Error('Invalid X Search quota state');
+      }
+      this.counterDay = state.day;
+      for (const [id, counter] of state.users) this.userCounters.set(id, counter);
+      for (const [id, counter] of state.workspaces) this.workspaceCounters.set(id, counter);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error('X Search quota state is unreadable', { cause: error });
       }
     }
   }
@@ -182,7 +189,47 @@ export class XSearchService implements NeoSearchService {
     return counter;
   }
 
-  private charge(requester: SearchRequester): void {
+  private async charge(requester: SearchRequester): Promise<void> {
+    if (!this.quotaFile) {
+      this.chargeCurrent(requester);
+      return;
+    }
+
+    // The serving and staged generations share this file during blue/green upgrades.
+    // Exclusivity covers reading, checking limits, and persisting each charge.
+    const lockFile = `${this.quotaFile}.lock`;
+    const deadline = Date.now() + 5_000;
+    let lock: Awaited<ReturnType<typeof open>>;
+    while (true) {
+      try {
+        lock = await open(lockFile, 'wx', 0o600);
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw new Error('X Search quota lock could not be acquired', { cause: error });
+        }
+        try {
+          const existing = await stat(lockFile);
+          // The critical section performs only local synchronous file operations.
+          if (Date.now() - existing.mtimeMs > 30_000) await rm(lockFile, { force: true });
+        } catch (statError) {
+          if ((statError as NodeJS.ErrnoException).code !== 'ENOENT') throw statError;
+        }
+        if (Date.now() >= deadline) throw new Error('X Search quota store is busy');
+        await delay(20);
+      }
+    }
+    try {
+      this.loadQuotaState();
+      this.chargeCurrent(requester);
+      this.saveQuotaState();
+    } finally {
+      await lock.close();
+      await rm(lockFile, { force: true });
+    }
+  }
+
+  private chargeCurrent(requester: SearchRequester): void {
     if (!requester?.userId?.trim() || !requester.workspaceId?.trim()) {
       throw new Error('X Search requires requester user and workspace identity');
     }
@@ -209,19 +256,20 @@ export class XSearchService implements NeoSearchService {
     workspace.minuteCount++;
     user.dayCount++;
     workspace.dayCount++;
-    if (this.quotaFile) {
-      const temporaryFile = `${this.quotaFile}.pending`;
-      try {
-        writeFileSync(temporaryFile, JSON.stringify({
-          day: this.counterDay,
-          users: [...this.userCounters],
-          workspaces: [...this.workspaceCounters],
-        }), { mode: 0o600 });
-        renameSync(temporaryFile, this.quotaFile);
-      } catch (error) {
-        try { rmSync(temporaryFile, { force: true }); } catch { /* preserve original error */ }
-        throw new Error('X Search quota state could not be saved', { cause: error });
-      }
+  }
+
+  private saveQuotaState(): void {
+    const temporaryFile = `${this.quotaFile}.pending`;
+    try {
+      writeFileSync(temporaryFile, JSON.stringify({
+        day: this.counterDay,
+        users: [...this.userCounters],
+        workspaces: [...this.workspaceCounters],
+      }), { mode: 0o600 });
+      renameSync(temporaryFile, this.quotaFile!);
+    } catch (error) {
+      try { rmSync(temporaryFile, { force: true }); } catch { /* preserve original error */ }
+      throw new Error('X Search quota state could not be saved', { cause: error });
     }
   }
 
@@ -239,7 +287,7 @@ export class XSearchService implements NeoSearchService {
     if (input.excludedHandles) tool.excluded_x_handles = input.excludedHandles;
     if (input.fromDate) tool.from_date = input.fromDate;
     if (input.toDate) tool.to_date = input.toDate;
-    this.charge(requester);
+    await this.charge(requester);
     let response: Response;
     try {
       response = await this.guardedFetch(endpoint.href, {

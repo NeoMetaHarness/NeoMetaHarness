@@ -210,6 +210,31 @@ try {
   await persistent.search({ query: 'third' }, alice);
   persistent = new XSearchService(persistentSettings, persistentClient, () => now, quotaFile);
   await assert.rejects(persistent.search({ query: 'restart daily quota' }, alice), /user day/);
+  // A blue/green candidate starts before the serving generation's final charges.
+  // Both must see the same durable counters after the candidate is published.
+  const upgradeFile = join(home, 'upgrade-search-quotas.json');
+  const upgradeSettings = {
+    ...persistentSettings,
+    requestsPerMinutePerUser: 2,
+  };
+  const serving = new XSearchService(upgradeSettings, persistentClient, () => now, upgradeFile);
+  const candidate = new XSearchService(upgradeSettings, persistentClient, () => now, upgradeFile);
+  await serving.search({ query: 'serving after candidate activation' }, alice);
+  await candidate.search({ query: 'candidate after publication' }, alice);
+  await assert.rejects(serving.search({ query: 'old generation after publication' }, alice), /user minute/);
+  const upgradeState = JSON.parse(await readFile(upgradeFile, 'utf8'));
+  assert.equal(upgradeState.users.find(([id]: [string]) => id === alice.userId)[1].minuteCount, 2);
+
+  const concurrentFile = join(home, 'concurrent-search-quotas.json');
+  const concurrentSettings = { ...persistentSettings, requestsPerMinutePerUser: 1 };
+  const first = new XSearchService(concurrentSettings, persistentClient, () => now, concurrentFile);
+  const second = new XSearchService(concurrentSettings, persistentClient, () => now, concurrentFile);
+  const concurrent = await Promise.allSettled([
+    first.search({ query: 'simultaneous first' }, alice),
+    second.search({ query: 'simultaneous second' }, alice),
+  ]);
+  assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(concurrent.filter(result => result.status === 'rejected').length, 1);
   now += 86_400_000;
   await persistent.search({ query: 'next day' }, alice);
   const capped = new XSearchService({ apiKey, requestsPerMinutePerUser: 0, requestsPerDayPerUser: Infinity }, {
