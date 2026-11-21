@@ -18,8 +18,8 @@ Even core features ship as extensions. Only the **kernel** (loader, permissions,
 | Kind | Examples | Can be turned off? |
 |---|---|---|
 | Engine | `engine-dsh`, `engine-hermes`, `engine-t3`, `engine-superagent` | Yes. Dependent features show "needs X" |
-| Capability provider | `computer-local`, `computer-orgo`, `channel-whatsapp`, `memory-honcho`, `models-openrouter` | Yes |
-| Feature | `agents`, `coding`, `skills-fabric`, `inbox`, `voice-xai`, `apps-composio`, `x-search` | Yes |
+| Capability provider | `computer-local`, `computer-docker`, `computer-vnc`, `computer-hermes-screen`, `memory-local`, `memory-honcho`, `channels`, `models` | Yes |
+| Feature / Workflow | `coding-workflow`, `skills-registry`, `backup`, `models-router-panda`, `computers-mcp` | Yes |
 | UI-only | pages, panels, widgets, themes | Yes |
 | Content | skill packs, agent templates, workflows, SOUL presets | Yes |
 
@@ -41,7 +41,13 @@ Even core features ship as extensions. Only the **kernel** (loader, permissions,
   },
   "contributes": {
     "computerProviders": [{ "id": "orgo", "capabilities": ["screen","input","browserCdp","shell"] }],
-    "settings": "schema/settings.json",       // JSON Schema → auto-rendered Astryx form
+    "settings": {                            // JSON Schema object → auto-rendered Astryx form
+      "type": "object",
+      "properties": {
+        "apiKey": { "type": "string", "secret": true },
+        "timeout": { "type": "number", "default": 30 }
+      }
+    },
     "ui": { "routes": [], "slots": [{ "slot": "computer.detail.actions", "component": "ui/OrgoActions.js" }] },
     "tools": [], "skills": [], "channels": [], "modelProviders": [], "memoryProviders": [],
     "sources": [], "commands": [], "themes": []
@@ -109,7 +115,7 @@ discover → install → verify → (review permissions) → enable → running 
 ## 8. Distribution
 - Official extensions live in the product monorepo under `extensions/`.
 - The registry index lives in **NeoMetaHarness-Extensions** (`machine/extensions-registry.json`). Sources: registry, git URL, npm, PyPI, or a local path.
-- `neo ext list | install | enable | disable | upgrade | remove | new` (scaffold from a template: TS-cordis, TS-process, Python-process, UI-only, content).
+- Extension lifecycle operations (`list`, `enable`, `disable`, `install`) are performed via Gateway API procedures (`api.extensions.*`) and the App Extensions page.
 
 ## 9. Adding a route
 

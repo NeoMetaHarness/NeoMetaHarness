@@ -25,9 +25,9 @@ gantt
 | ID | Task | Done when |
 |---|---|---|
 | P0-1 | Create org repos per [06](06-org-structure.md) with AGENTS.md, README, `machine/*.json`, templates, guardrails (≤ 20 writes per task, so batch it) | Repos exist; ROUTER.md complete |
-| P0-2 | Product monorepo scaffold (pnpm + uv), local `neo check` pipeline, pre-push hooks | `neo check` green |
+| P0-2 | Product monorepo scaffold (pnpm), local `pnpm check` pipeline, pre-push hooks | `pnpm check` green |
 | P0-3 | **Seam spikes:** (a) T3 server driven by T3's headless `contracts` + `client-runtime` from a non-T3 React app; (b) Hermes `api_server` + dashboard backend API coverage for bots, cron, kanban, skills, memory, platforms, providers; (c) Hermes external-screen / computer-use seam; (d) DSH `computerUse` / `browserUse` provider + SDK JSON-RPC; (e) superagent custom Source + MCP in worker preset; (f) Hermes memory-provider plugin; (g) Astryx app in a Tauri 2 shell (Windows WebView2, macOS WKWebView, Linux WebKitGTK) + PWA, with the Node gateway as a sidecar; port the PandaCode streaming bench | Each works, or has a written fallback |
-| P0-4 | Upstream registry + lock + `neo upstream check` (local) | Lists drift for all engines |
+| P0-4 | Upstream registry + lock + `pnpm upstream:check` (local) | Lists drift for all engines |
 | P0-5 | ADRs: kernel = Cordis, Neo API style, DB layer, auth model | Merged |
 
 ## P1: Kernel and App shell (weeks 3–5)
@@ -36,7 +36,7 @@ gantt
 - Neo API contracts and event bus; workspaces, members, roles; vault.
 - P1-14: a deployment-level owner role, separate from the per-org `owner` role (decided 2026-11-21). Only the deployment owner sees and manages deployment-wide items (Hermes and channel bindings, kernel upgrades, org creation in server mode); in desktop mode the single user is the deployment owner.
 - `@neometaharness/ui` on Astryx + Neo theme (in NeoMetaHarness-design-system); slot runtime.
-- App shell: navigation, Inbox placeholder, **Extensions** page, schema-driven Settings, onboarding skeleton; Tauri 2 desktop (tray, global launcher, updater, deep links) + PWA; perf budgets wired into `neo check`.
+- App shell: navigation, Inbox placeholder, **Extensions** page, schema-driven Settings, onboarding skeleton; Tauri 2 desktop (tray, global launcher, updater, deep links) + PWA; perf budgets wired into `pnpm check`.
 - **Exit:** install / enable / disable a sample TS and a sample Python extension live, without a restart.
 
 ## P2: Agents (weeks 6–9)
@@ -72,7 +72,7 @@ gantt
 - `engine-superagent`: profile, Neo Sources (channel, cron, coding, agents, app, GitHub), worker MCP delegation, Policy from members' identities.
 - Honcho for the super agent; Inbox in Astryx (approvals, questions, failures).
 - Report / assessment contracts, accept modes + Suggestions, `@neo` comment and check Sources; ticket post-mortems + episodes → skills fabric; playbooks; decision logger (Panda-compatible trace format).
-- `neo upstream` as a super-agent routine (Neo maintains itself).
+- `neo upstream` as a super-agent routine requiring a configured maintenance bot (Neo maintains itself).
 - **Exit:** "build X and tell me on WhatsApp when the PR is up", "research Y every Monday on a bot's computer", and "remember Z" all work end to end and survive restarts.
 
 ## P7: Hardening and v1.0 (weeks 16–17)

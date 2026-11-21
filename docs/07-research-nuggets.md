@@ -25,7 +25,7 @@ It returns a `choice`, a ranking and an **escalation ladder** in about 10–25 m
 Training cost almost nothing: $1.67 on Modal for v4.
 
 **Use in Neo:**
-- `models-router-panda` extension (process, MCP/HTTP): the **default model picker** for every turn. Pools come from the Model Hub, and cards are extended with the user's subscriptions and local models.
+- `models-router-panda` extension (cordis in-process, oRPC/MCP): the **default model picker** for every turn. Pools come from the Model Hub, and cards are extended with the user's subscriptions and local models.
 - **Route → run → verify → record outcome → escalate on failure** becomes Neo's standard execution loop. Verification sources:
   - turn checks (tests, typecheck);
   - the report contract (§3);
@@ -71,7 +71,7 @@ Training cost almost nothing: $1.67 on Modal for v4.
   {"status":"ready|question|blocked|failed|dropped","summary":"","question":"","options":[],"changes":"","tests":"what was actually run","risks":""}
   ```
   It drives the Inbox, verification, escalation, Panda `record_outcome` and training labels uniformly. A matching **assessment contract** covers Eval.
-- **Accept modes per source or project: `observe` (default) and `act`.** In `observe`, inferred work becomes a **Suggestion** a person starts or dismisses. This gives a trust ramp: Neo earns `act` per source.
+- **Accept modes per workspace: `observe` (default), `act-with-approval`, and `act`.** In `observe`, inferred work becomes a **Suggestion** a person starts or dismisses. `act-with-approval` stages actions for approval, while `act` executes autonomous actions directly.
 - **New Sources:** `@agent` / `@neo` comments in code (git grep), and **failing checks** (periodic check command) as triggers.
 - **Ticket stages** (first match wins): answer → review → blocked → failed → queued → working → ended. These become the Inbox lanes. Worker slots reserve one extra slot for runs a person starts.
 - **An honest autonomy matrix:** "careful" mode maps to what each CLI can really enforce. Claude Code permissions and the Codex OS sandbox can restrict; others can't. The App shows this truthfully when you pick an executor and an autonomy level.

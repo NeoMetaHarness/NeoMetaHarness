@@ -38,7 +38,7 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 |---|---|---|
 | APP-1 | One Astryx-based App: web, installable PWA (phone), Tauri 2 desktop (Win/macOS/Linux) with gateway sidecar ([ADR 0001](adr/0001-desktop-shell.md)) | P0 |
 | APP-7 | Performance budget: streaming-chat bench (PandaCode W1 method): script time ≤ 2× PandaCode; desktop installer ≤ 40 MB without sidecar | P0 |
-| APP-2 | Sections: **Home / Inbox** (what needs you), **Agents**, **Coding**, **Computers**, **Skills**, **Memory**, **Channels**, **Models**, **Extensions**, **Settings** | P0 |
+| APP-2 | Sections: **Inbox** (what needs you), **Agents**, **Coding**, **Routines**, **Tasks**, **Computers**, **Skills**, **Memory**, **Extensions**, **Settings** (with sub-pages for Channels and Models) | P0 |
 | APP-3 | "Ask Neo" bar everywhere → super agent | P0 |
 | APP-4 | Onboarding wizard: role/topology, models and subscriptions, channels (choose any), computers, first bots | P0 |
 | APP-5 | Light/dark + Neo theme on Astryx; extension themes | P1 |
@@ -55,7 +55,7 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 | SA-6 | **Learns:** ticket post-mortem → candidate skills / playbooks → eval → promote | P0 |
 | SA-7 | Router model from the Model Hub; every decision logged with its outcome | P0 |
 | SA-9 | Report / assessment contracts across all executors; Inbox lanes from ticket stages | P0 |
-| SA-10 | Accept modes `observe` / `act` per source or project; Suggestions lane | P0 |
+| SA-10 | Accept modes `observe` / `act-with-approval` / `act` per workspace; Suggestions lane | P0 |
 | SA-11 | Sources: `@neo` code comments, failing checks | P1 |
 | SA-8 | Small local router model (shadow → canary → primary) | P2 (post-v1) |
 
@@ -94,7 +94,7 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 ### 5.6 Memory
 | ID | Requirement | P |
 |---|---|---|
-| ME-1 | L1 local memory (REST + MCP) as the default memory provider for all engines | P0 |
+| ME-1 | L1 local memory (in-process oRPC + MCP) as the default memory provider for all engines | P0 |
 | ME-2 | L2 Honcho self-hosted; L1 ↔ L2 sync | P0 |
 | ME-3 | SOUL.md / USER.md / MEMORY.md / daily notes as exported views; edited in the App | P0 |
 | ME-4 | Dreaming with provenance + review report | P1 |
@@ -121,10 +121,10 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 | ID | Requirement | P |
 |---|---|---|
 | PL-1 | Extension system per [05](05-extension-system.md): manifest, lifecycle, toggle, permissions, health | P0 |
-| PL-2 | TS and Python extension SDKs + `neo ext new` templates | P1 |
+| PL-2 | TS and Python sample extensions + extension templates | P1 |
 | PL-3 | Workspaces, members, roles; SQLite default, Postgres option | P0 |
-| PL-4 | Topologies: all-in-one, hybrid, server; `neo install / doctor / backup` | P0 |
-| PL-5 | Upstream registry + local `neo upstream check / bump` + contract tests (no GitHub Actions) | P0 |
+| PL-4 | Topologies: all-in-one, hybrid, server; installer check and `pnpm neo:backup / restore` | P0 |
+| PL-5 | Upstream registry + local `pnpm upstream:check` + contract tests (no GitHub Actions) | P0 |
 | PL-6 | Opt-in telemetry (OpenTelemetry); health page | P1 |
 
 ### Non-goals for v1
@@ -150,7 +150,7 @@ Native mobile apps, a hosted SaaS, billing, a public extension marketplace with 
 | Computer seams in Hermes / DSH may not accept external screens | P0 verification; fall back to Neo MCP computer tools that engines call |
 | Memory poisoning, extension supply chain | Trust levels, candidate memory, signatures, permission review, process isolation |
 | System webviews differ (WebKitGTK on Linux) | Playwright Chromium + WebKit matrix, RFB/noVNC viewer by default, `@neometaharness/shell` keeps an Electron fallback possible |
-| No CI (GitHub guardrails) | Local `neo check` pipeline; pre-push hooks; reproducible scratch profiles |
+| No CI (GitHub guardrails) | Local `pnpm check` pipeline; pre-push hooks; reproducible scratch profiles |
 
 ## 8. Open questions (non-blocking)
 - Product name and brand ("Neo" in UI?) → NeoMetaHarness-Brand.

@@ -42,24 +42,26 @@ Status: draft v0.1 · 2026-11-17 · modelled on the [BrowserHarness](https://git
 
 ```
 apps/
-  app/          Neo App (React 19 + Astryx): web + PWA
-  desktop/      Tauri 2 shell (thin Rust) around app + gateway sidecar
+  neo-app/      Neo App (React 19 + Astryx web + PWA) and Tauri 2 desktop shell (src-tauri)
   gateway/      Neo Gateway server (kernel + Neo API)
-  cli/          `neo` CLI
+  docs/         Documentation site (Astryx + Vite static site)
 packages/
   kernel/       extension host (Cordis), manifests, lifecycle, permissions, vault, event bus
   contracts/    Neo API schema (typed RPC + events)
-  sdk/          TS extension SDK          · sdk-python/  Python extension SDK
   ui/           @neometaharness/ui: Astryx + Neo patterns + slot runtime
   agents/       adopted bot-hq domain (bots, rooms, routines, tasks, library, approvals, voice)
+  auth/         Better Auth integration, session management, workspace access
+  computers/    computer abstraction layer, safety policies, provider interfaces
+  db/           Kysely database schema, migrations, SQLite/Postgres dialect
+  egress/       network egress controls and domain allowlists
+  vault/        secrets encryption, key management, scoped projections
 extensions/     official extensions, each independently toggleable
-  engine-dsh  engine-hermes  engine-t3  engine-superagent
-  memory-local  memory-honcho  skills-fabric  soul
-  computer-hermes-screen  computer-local  computer-docker  computer-vnc  computer-orgo
-  channels  models  coding  inbox  voice-xai  apps-composio  x-search
-  dsh-plugins/ (neo-dsh-memory, -soul, -report, -skills, -honcho)   hermes-plugins/ (neo_local_memory, neo_soul, neo_bridge…)
+  backup  channels  coding-workflow  computer-docker  computer-fake  computer-headless-chrome
+  computer-hermes-screen  computer-local-sandbox  computer-local  computer-vnc  computers-mcp
+  engine-dsh  engine-hermes  engine-superagent  engine-t3  memory-honcho  memory-local
+  models-router-panda  models  sample-py  sample-ts  skills-registry
 upstream/       registry.yaml · upstream.lock.json · sources/ (pinned checkouts, gitignored)
-contracts-tests/  one suite per engine seam
+apps/gateway/test/ and tests/  one suite per engine seam
 deploy/         installers (win/mac/linux), docker compose, systemd
 training/       decision traces, datasets, router-model training (later)
 docs/           architecture, ADRs
