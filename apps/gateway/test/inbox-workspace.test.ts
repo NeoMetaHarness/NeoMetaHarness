@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -17,6 +18,11 @@ const repo = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..');
 const json = (body: unknown, headers: Record<string, string> = {}) => ({
   method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
 });
+async function waitForEvents(heard: string[], count: number) {
+  const deadline = Date.now() + 5000;
+  while (heard.length < count && Date.now() < deadline) await delay(20);
+  assert.ok(heard.length >= count, `Expected ${count} events, received ${heard.join(', ')}`);
+}
 
 // A stand-in for engine-superagent: the Gateway reaches it only through its /x/engine-superagent routes.
 const superagentSrc = (file: string) => pathToFileURL(resolve(repo, 'extensions/engine-superagent/src', file)).href;
@@ -68,8 +74,9 @@ export default { activate(ctx) {
   ctx.route('events', ({ body }) => (async function* () {
     const signal = body.signal; let next = 0;
     while (!signal?.aborted) {
-      while (next < log.length) yield log[next++];
-      await new Promise((wake) => { const done = () => { waiters.delete(done); wake(); }; waiters.add(done); signal?.addEventListener('abort', done, { once: true }); });
+      while (!signal?.aborted && next < log.length) yield log[next++];
+      if (signal?.aborted) return;
+      await new Promise((wake) => { const done = () => { waiters.delete(done); signal?.removeEventListener('abort', done); wake(); }; waiters.add(done); signal?.addEventListener('abort', done, { once: true }); });
     }
   })());
 } };
@@ -86,6 +93,7 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
   const gateway = await startGateway({ databaseFile: join(root, 'state/gateway.db'), extensionsDir: extensions,
     mode: 'server', signup: 'open' });
   const base = `http://127.0.0.1:${gateway.port}`;
+  const eventStreams: { stop: () => void; done: Promise<void> }[] = [];
   try {
     const signUp = async (email: string) => {
       const response = await fetch(`${base}/auth/sign-up/email`, json({ email, password: 'Member!Pass123', name: 'x' }));
@@ -225,28 +233,28 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
         try { for await (const event of await client.inbox.events({}, { signal: controller.signal })) heard.push(event.item.id); }
         catch (error) { if (!controller.signal.aborted) throw error; }
       })();
-      return { heard, done, stop: () => controller.abort() };
+      const stream = { heard, done, stop: () => controller.abort() };
+      eventStreams.push(stream);
+      void done.catch(() => {});
+      return stream;
     };
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
     const aliceEvents = listen(alice); const bobEvents = listen(bob); const ownerEvents = listen(owner);
-    await settle();
     for (const id of ['corp-suggestion', 'finance-suggestion', 'hermes-binding', 'upstream-bump']) await fixture('test/emit', { id });
-    await settle();
+    await Promise.all([waitForEvents(aliceEvents.heard, 1), waitForEvents(bobEvents.heard, 1), waitForEvents(ownerEvents.heard, 3)]);
     assert.deepEqual(aliceEvents.heard, ['corp-suggestion']);
     assert.deepEqual(bobEvents.heard, ['finance-suggestion']);
     assert.deepEqual(ownerEvents.heard, ['corp-suggestion', 'hermes-binding', 'upstream-bump']);
     // Bob leaves Finance: after the next membership re-check his stream stops delivering and ends.
     const removed = await fetch(`${base}/auth/organization/remove-member`, json({ memberIdOrEmail: 'bob@finance.test', organizationId: finance.id }, as(owner)));
     assert.equal(removed.status, 200);
-    await new Promise((resolve) => setTimeout(resolve, 5_200));
+    await delay(5_200);
     await fixture('test/emit', { id: 'finance-approval' });
-    await settle();
+    await Promise.race([bobEvents.done, delay(3000, undefined, { ref: false }).then(() => { throw new Error('stream still open'); })]);
     assert.deepEqual(bobEvents.heard, ['finance-suggestion'], 'a removed member hears nothing more');
-    await Promise.race([bobEvents.done, new Promise((_, reject) => setTimeout(() => reject(new Error('stream still open')), 3_000))]);
-    aliceEvents.stop(); ownerEvents.stop();
-    await Promise.all([aliceEvents.done, ownerEvents.done]);
     console.log('P6-10_EVENTS PASS events stay in the caller workspace; removed members stop receiving');
   } finally {
+    for (const stream of eventStreams) stream.stop();
+    await Promise.allSettled(eventStreams.map(stream => stream.done));
     await gateway.close();
     await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
@@ -263,6 +271,8 @@ test('P6-10: a transferred deployment owner loses visibility on an existing stre
   const gateway = await startGateway({ databaseFile: join(root, 'state/gateway.db'), extensionsDir: extensions,
     mode: 'server', signup: 'open' });
   const base = `http://127.0.0.1:${gateway.port}`;
+  const controller = new AbortController();
+  let done: Promise<void> | undefined;
   try {
     const signUp = async (email: string) => (await (await fetch(`${base}/auth/sign-up/email`,
       json({ email, password: 'Member!Pass123', name: 'x' }))).json() as { token: string }).token;
@@ -276,33 +286,34 @@ test('P6-10: a transferred deployment owner loses visibility on an existing stre
     assert.equal((await fetch(`${base}/extensions/enable`, json({ json: { id: 'engine-superagent' } }, as(founder)))).status, 200);
     const fixture = (route: string, body: unknown = {}) => gateway.kernel.invokeRoute(`/x/engine-superagent/${route}`, 'RPC', body);
     await fixture('test/seed', { items: [['upstream-bump', undefined, 'suggestion', { source: 'neo/upstream' }],
-      ['hermes-binding', undefined, 'suggestion', { source: 'neo/channel' }]] });
+      ['hermes-binding', undefined, 'suggestion', { source: 'neo/channel' }],
+      ['workspace-marker', corp.id, 'suggestion']] });
     const ids = async (token: string) => ((await (await fetch(`${base}/inbox/list`, json({ json: {} }, as(token)))).json() as { json: { id: string }[] })
       .json.map((item) => item.id).sort());
-    assert.deepEqual(await ids(dave), [], 'workspace ownership does not expose deployment items');
+    assert.deepEqual(await ids(dave), ['workspace-marker'], 'workspace ownership does not expose deployment items');
     const client = createORPCClient<ContractRouterClient<typeof neoContract>>(new RPCLink({ url: base, headers: () => as(founder) }));
-    const controller = new AbortController();
     const heard: string[] = [];
-    const done = (async () => {
+    done = (async () => {
       try { for await (const event of await client.inbox.events({}, { signal: controller.signal })) heard.push(event.item.id); }
       catch (error) { if (!controller.signal.aborted) throw error; }
     })();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    void done.catch(() => {});
     await fixture('test/emit', { id: 'upstream-bump' });
     await fixture('test/emit', { id: 'hermes-binding' });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await waitForEvents(heard, 2);
     assert.deepEqual(heard, ['upstream-bump', 'hermes-binding']);
     const daveUser = await gateway.auth.kysely.selectFrom('user').select('id').where('email', '=', 'dave@corp.test').executeTakeFirstOrThrow();
     await client.system.transferDeploymentOwner({ userId: daveUser.id });
-    assert.deepEqual(await ids(founder), [], 'the former deployment owner retains only workspace visibility');
-    assert.deepEqual(await ids(dave), ['hermes-binding', 'upstream-bump']);
+    assert.deepEqual(await ids(founder), ['workspace-marker'], 'the former deployment owner retains only workspace visibility');
+    assert.deepEqual(await ids(dave), ['hermes-binding', 'upstream-bump', 'workspace-marker']);
     await fixture('test/emit', { id: 'upstream-bump' });
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    assert.deepEqual(heard, ['upstream-bump', 'hermes-binding'], 'an open stream loses deployment visibility immediately');
-    controller.abort();
-    await Promise.race([done, new Promise((wait) => setTimeout(wait, 1_000))]);
+    await fixture('test/emit', { id: 'workspace-marker' });
+    await waitForEvents(heard, 3);
+    assert.deepEqual(heard, ['upstream-bump', 'hermes-binding', 'workspace-marker'], 'an open stream loses deployment visibility immediately');
     console.log('P6-10_DEPLOYMENT PASS open streams re-check deployment ownership after transfer');
   } finally {
+    controller.abort();
+    await done?.catch(() => {});
     await gateway.close();
     await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }
