@@ -88,6 +88,32 @@ function closeWindow(pid) {
 console.log('Building frontend with Vite...');
 execFileSync(process.execPath, [join(appDir, 'node_modules/vite/bin/vite.js'), 'build'], { cwd: appDir, stdio: 'pipe' });
 
+console.log('Running installer-check unit checks (verifying rejection of placeholder key and acceptance of valid test key)...');
+const { runInstallerCheck } = await import('../../../scripts/installer-check.mjs');
+assert.throws(
+  () => runInstallerCheck({ allowPlaceholder: false }),
+  /release installer builds require a valid owner minisign public key/,
+  'installer-check must reject the placeholder public key in release mode'
+);
+// Verify placeholder passes when explicitly allowed (development/test mode)
+runInstallerCheck({ allowPlaceholder: true });
+
+// Verify well-formed dummy test key fixture is accepted without allowPlaceholder
+const dummyTestKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldUTVBERFVMWVNZTkRFUkZBS0VLRVkxMjM0NTY3ODkwMTI=';
+const baseTauriConf = JSON.parse(await readFile(join(appDir, 'src-tauri/tauri.conf.json'), 'utf8'));
+const dummyConfig = {
+  ...baseTauriConf,
+  plugins: {
+    ...baseTauriConf.plugins,
+    updater: {
+      ...baseTauriConf.plugins?.updater,
+      pubkey: dummyTestKey,
+    },
+  },
+};
+runInstallerCheck({ configOverride: dummyConfig, allowPlaceholder: false });
+console.log('Installer check verification passed (placeholder rejected, test key accepted).');
+
 console.log('Running cargo unit tests (verifying updater overrides and endpoint HTTPS enforcement)...');
 execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['test'], {
   cwd: join(appDir, 'src-tauri'), stdio: 'pipe',

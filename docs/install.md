@@ -51,7 +51,12 @@ The private signing key is owned solely by the application owner and **MUST NEVE
 - Never commit private key files, `.pem`, `.env`, or credentials to Git. `pnpm installer:check` enforces secret hygiene across build files and configuration.
 
 #### Public key configuration
-Replace `REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY` in `apps/neo-app/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) with the generated base64 public key before distributing signed update manifests. In custom deployments or tests, `NMH_UPDATER_PUBLIC_KEY` may be provided as an environment variable override.
+Before building a production release or installer, the owner places the generated base64 public key in `apps/neo-app/src-tauri/tauri.conf.json` under `plugins.updater.pubkey` (replacing the placeholder `REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY`).
+
+`scripts/installer-check.mjs` enforces that the public key is not the placeholder or empty string during release and installer validation, failing immediately if a release bundle is attempted without a configured owner public key. For local development or WebView tests, development builds allow the placeholder key (or pass `--allow-placeholder` / set `NMH_ALLOW_PLACEHOLDER_KEY=true`). In debug builds, `NMH_UPDATER_PUBLIC_KEY` and `NMH_UPDATER_ENDPOINT` environment variables can also override the configuration for local testing.
+
+#### Updater redirect policy and HTTPS enforcement
+The updater endpoint URL is strictly required to use HTTPS in production release builds. The underlying HTTP client adheres to system redirection rules; note that any followed redirects must also resolve securely to an authentic target, and minisign signature verification over the binary hash strictly protects against tampered or spoofed release payloads regardless of network transport or redirect targets.
 
 #### Publishing latest.json
 To distribute an update:
