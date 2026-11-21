@@ -138,16 +138,20 @@ try {
     fakeBoatHttp,
   );
   const isolatedComputer = await separateProvider.provision({ id: 'neo-0123456789abcdef01234567' }, { workspaceId: 'workspace-A' });
-  const scopedScreen = isolatedComputer.screen as (access?: { workspaceId: string; holder: 'agent' | 'human' }) => Promise<{ protocol: string; url?: string }>;
+  const scopedScreen = isolatedComputer.screen as (access?: { workspaceId: string; holder: 'agent' | 'human'; principalId: string }) => Promise<{ protocol: string; url?: string }>;
+  const leaseWithPrincipal = isolatedComputer.lease as (holder: 'agent' | 'human', principalId?: string) => Promise<void> | void;
   const scopedSnapshot = isolatedComputer.snapshot as (access?: { workspaceId: string }) => Promise<unknown>;
   await assert.rejects(scopedScreen(), /current workspace lease holder/, 'screen URL requires an authenticated lease context');
-  await assert.rejects(scopedScreen({ workspaceId: 'workspace-B', holder: 'agent' }), /current workspace lease holder/);
-  await assert.rejects(scopedScreen({ workspaceId: 'workspace-A', holder: 'human' }), /current workspace lease holder/);
-  assert.equal((await scopedScreen({ workspaceId: 'workspace-A', holder: 'agent' })).protocol, 'webrtc');
-  await isolatedComputer.lease('human');
-  await assert.rejects(scopedScreen({ workspaceId: 'workspace-A', holder: 'agent' }), /current workspace lease holder/);
-  assert.equal((await scopedScreen({ workspaceId: 'workspace-A', holder: 'human' })).protocol, 'webrtc');
-  await isolatedComputer.lease('agent');
+  await assert.rejects(scopedScreen({ workspaceId: 'workspace-B', holder: 'agent', principalId: 'agent-A' }), /current workspace lease holder/);
+  await assert.rejects(scopedScreen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-A' }), /current workspace lease holder/);
+  await leaseWithPrincipal('agent', 'agent-A');
+  await assert.rejects(scopedScreen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-B' }), /current workspace lease holder/);
+  assert.equal((await scopedScreen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-A' })).protocol, 'webrtc');
+  await leaseWithPrincipal('human', 'user-A');
+  await assert.rejects(scopedScreen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-A' }), /current workspace lease holder/);
+  await assert.rejects(scopedScreen({ workspaceId: 'workspace-A', holder: 'human', principalId: 'user-B' }), /current workspace lease holder/);
+  assert.equal((await scopedScreen({ workspaceId: 'workspace-A', holder: 'human', principalId: 'user-A' })).protocol, 'webrtc');
+  await leaseWithPrincipal('agent', 'agent-A');
   assert.throws(() => scopedSnapshot(), /Unknown Boat computer in workspace/);
   assert.throws(() => scopedSnapshot({ workspaceId: 'workspace-B' }), /Unknown Boat computer in workspace/);
   assert.deepEqual(await scopedSnapshot({ workspaceId: 'workspace-A' }), { id: 'snap-one' });

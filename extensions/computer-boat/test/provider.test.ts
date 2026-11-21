@@ -51,16 +51,24 @@ try {
   const id = 'neo-111111111111111111111111';
   const computer = await provider.provision({ id }, { workspaceId: 'workspace-A' });
   assert.equal((calls[0].body.labels as Record<string, string>)['neo-workspace'], 'workspace-A');
-  const screen = computer.screen as (access?: { workspaceId: string; holder: 'agent' | 'human' }) => Promise<{ protocol: string; url?: string }>;
+  const screen = computer.screen as (access?: { workspaceId: string; holder: 'agent' | 'human'; principalId: string }) => Promise<{ protocol: string; url?: string }>;
+  const lease = computer.lease as (holder: 'agent' | 'human', principalId?: string) => Promise<void> | void;
   const snapshot = computer.snapshot as (access?: { workspaceId: string }) => Promise<unknown>;
   await assert.rejects(screen(), /lease holder/);
-  await assert.rejects(screen({ workspaceId: 'workspace-B', holder: 'agent' }), /lease holder/);
-  await assert.rejects(screen({ workspaceId: 'workspace-A', holder: 'human' }), /lease holder/);
-  assert.equal((await screen({ workspaceId: 'workspace-A', holder: 'agent' })).protocol, 'webrtc');
-  await computer.lease('human');
-  await assert.rejects(screen({ workspaceId: 'workspace-A', holder: 'agent' }), /lease holder/);
-  assert.equal((await screen({ workspaceId: 'workspace-A', holder: 'human' })).protocol, 'webrtc');
-  await computer.lease('agent');
+  await assert.rejects(screen({ workspaceId: 'workspace-B', holder: 'agent', principalId: 'agent-one' }), /lease holder/);
+  await assert.rejects(screen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-one' }), /lease holder/,
+    'an unbound agent lease cannot disclose the stream');
+  await lease('agent', 'agent-one');
+  await assert.rejects(screen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-two' }), /lease holder/);
+  assert.equal((await screen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-one' })).protocol, 'webrtc');
+  await lease('human', 'user-one');
+  await assert.rejects(screen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-one' }), /lease holder/);
+  await assert.rejects(screen({ workspaceId: 'workspace-A', holder: 'human', principalId: 'user-two' }), /lease holder/);
+  assert.equal((await screen({ workspaceId: 'workspace-A', holder: 'human', principalId: 'user-one' })).protocol, 'webrtc');
+  await lease('human', 'user-two');
+  await assert.rejects(screen({ workspaceId: 'workspace-A', holder: 'human', principalId: 'user-one' }), /lease holder/,
+    'a superseded user lease cannot disclose the stream');
+  await lease('agent', 'agent-one');
   assert.throws(() => snapshot(), /workspace/);
   assert.throws(() => snapshot({ workspaceId: 'workspace-B' }), /workspace/);
   assert.deepEqual(await snapshot({ workspaceId: 'workspace-A' }), { id: 'snap-1' });
@@ -69,9 +77,9 @@ try {
   const otherComputer = await provider.provision({ id: 'neo-333333333333333333333333' }, { workspaceId: 'workspace-B' });
   const otherProvision = calls.filter(call => call.path === '/api/v1/sandboxes').at(-1)!;
   assert.equal((otherProvision.body.labels as Record<string, string>)['neo-workspace'], 'workspace-B');
-  const otherScreen = otherComputer.screen as (access?: { workspaceId: string; holder: 'agent' | 'human' }) => Promise<{ protocol: string }>;
-  await assert.rejects(otherScreen({ workspaceId: 'workspace-A', holder: 'agent' }), /lease holder/);
-  assert.equal((await otherScreen({ workspaceId: 'workspace-B', holder: 'agent' })).protocol, 'webrtc');
+  const otherScreen = otherComputer.screen as (access?: { workspaceId: string; holder: 'agent' | 'human'; principalId: string }) => Promise<{ protocol: string }>;
+  await assert.rejects(otherScreen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-one' }), /lease holder/);
+  await assert.rejects(otherScreen({ workspaceId: 'workspace-B', holder: 'agent', principalId: 'agent-one' }), /lease holder/);
   failure = 'exit';
   await assert.rejects(Promise.resolve(computer.input({ action: 'key', keys: 'Enter' })), /command failed/);
   failure = 'xdotool';

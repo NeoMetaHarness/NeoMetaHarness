@@ -4,7 +4,18 @@ import { createEgressFetch, validateEgressUrl } from '@neometaharness/egress';
 
 export interface BoatSettings { baseUrl?: string; apiKey?: string; allowPrivateNetwork?: boolean }
 export type BoatHttp = typeof fetch;
-type Instance = { sandboxId: string; workspaceId: string; url: string; key: string; blocked: boolean; holder: LeaseHolder; current?: AbortController };
+type ScreenAccess = { workspaceId: string; holder: LeaseHolder; principalId: string };
+type Instance = {
+  sandboxId: string;
+  workspaceId: string;
+  url: string;
+  key: string;
+  blocked: boolean;
+  holder: LeaseHolder;
+  leasePrincipalId?: string;
+  leaseVersion: number;
+  current?: AbortController;
+};
 const managedId = /^neo-[0-9a-f]{24}$/;
 const sandboxId = /^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
 const sizes = new Set(['small', 'default', 'large', 'xlarge']);
@@ -70,7 +81,7 @@ export class BoatComputerProvider implements ComputerProvider {
     if (!config.apiKey || typeof config.apiKey !== 'string') throw new Error('Boat API key must be configured in extension settings');
     const endpoint = validateEgressUrl(config.baseUrl ?? 'https://boat.dev/api/v1', config.allowPrivateNetwork === true);
     const instance: Instance = { sandboxId: '', workspaceId: context.workspaceId, url: endpoint.href.replace(/\/$/, ''),
-      key: config.apiKey, blocked: false, holder: 'agent' };
+      key: config.apiKey, blocked: false, holder: 'agent', leaseVersion: 0 };
     const options: Record<string, unknown> = { labels: { 'neo-computer': spec.id, 'neo-workspace': context.workspaceId } };
     if (spec.type !== undefined) {
       if (typeof spec.type !== 'string' || !sizes.has(spec.type)) throw new Error('Invalid Boat sandbox size');
@@ -104,17 +115,28 @@ export class BoatComputerProvider implements ComputerProvider {
       return result.stdout;
     };
     return {
-      screen: async (access?: { workspaceId: string; holder: LeaseHolder }) => {
-        // The caller must supply a trusted, authenticated lease context. No public route exposes this URL.
-        if (this.disposed || !access || access.workspaceId !== instance.workspaceId || access.holder !== instance.holder) {
+      screen: async (access?: ScreenAccess) => {
+        // Both principal IDs must come from authenticated registry state, never a client-supplied identity.
+        const leaseVersion = instance.leaseVersion;
+        const authorized = () => !this.disposed && instance.leaseVersion === leaseVersion &&
+          !!access?.principalId && access.workspaceId === instance.workspaceId &&
+          access.holder === instance.holder && access.principalId === instance.leasePrincipalId;
+        if (!authorized()) {
           throw new Error('Boat screen requires the current workspace lease holder');
         }
         const result = await this.request<{ desktopUrl?: string; provisioning?: boolean }>(instance, 'POST', `${path}/desktop`);
+        if (!authorized()) throw new Error('Boat screen requires the current workspace lease holder');
         if (result.provisioning || !result.desktopUrl) throw new Error('Boat desktop is still provisioning');
         // Bearer WebRTC URL: never log, cache, or serialize through a Gateway route.
         return { protocol: 'webrtc', url: result.desktopUrl };
       },
-      lease: (holder: LeaseHolder) => { instance.holder = holder; instance.blocked = holder === 'human'; if (instance.blocked) instance.current?.abort(); },
+      lease: (holder: LeaseHolder, principalId?: string) => {
+        instance.holder = holder;
+        instance.leasePrincipalId = principalId?.trim() || undefined;
+        instance.leaseVersion++;
+        instance.blocked = holder === 'human';
+        if (instance.blocked) instance.current?.abort();
+      },
       interrupt: () => { instance.blocked = true; instance.current?.abort(); },
       resumeInput: () => { instance.blocked = false; },
       input: async (action: ComputerInput) => {
