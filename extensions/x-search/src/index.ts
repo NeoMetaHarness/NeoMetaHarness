@@ -1,7 +1,6 @@
 import { defineExtension } from '@neometaharness/kernel';
-import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
-import { open, rm, stat } from 'node:fs/promises';
-import { setTimeout as delay } from 'node:timers/promises';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { createEgressFetch, validateEgressUrl } from '@neometaharness/egress';
 import { xSearchInput, type NeoSearchService, type XSearchInput, type XSearchOutput } from '@neometaharness/contracts';
@@ -142,13 +141,13 @@ export class XSearchService implements NeoSearchService {
     this.guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected);
   }
 
-  private loadQuotaState(): void {
-    if (!this.quotaFile) return;
+  private loadQuotaState(serialized?: string): void {
     this.counterDay = -1;
     this.userCounters.clear();
     this.workspaceCounters.clear();
+    if (!serialized) return;
     try {
-      const state = JSON.parse(readFileSync(this.quotaFile, 'utf8')) as {
+      const state = JSON.parse(serialized) as {
           day: number;
           users: [string, QuotaCounter][];
           workspaces: [string, QuotaCounter][];
@@ -164,9 +163,7 @@ export class XSearchService implements NeoSearchService {
       for (const [id, counter] of state.users) this.userCounters.set(id, counter);
       for (const [id, counter] of state.workspaces) this.workspaceCounters.set(id, counter);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw new Error('X Search quota state is unreadable', { cause: error });
-      }
+      throw new Error('X Search quota state is unreadable', { cause: error });
     }
   }
 
@@ -194,38 +191,34 @@ export class XSearchService implements NeoSearchService {
       this.chargeCurrent(requester);
       return;
     }
-
-    // The serving and staged generations share this file during blue/green upgrades.
-    // Exclusivity covers reading, checking limits, and persisting each charge.
-    const lockFile = `${this.quotaFile}.lock`;
-    const deadline = Date.now() + 5_000;
-    let lock: Awaited<ReturnType<typeof open>>;
-    while (true) {
-      try {
-        lock = await open(lockFile, 'wx', 0o600);
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-          throw new Error('X Search quota lock could not be acquired', { cause: error });
-        }
-        try {
-          const existing = await stat(lockFile);
-          // The critical section performs only local synchronous file operations.
-          if (Date.now() - existing.mtimeMs > 30_000) await rm(lockFile, { force: true });
-        } catch (statError) {
-          if ((statError as NodeJS.ErrnoException).code !== 'ENOENT') throw statError;
-        }
-        if (Date.now() >= deadline) throw new Error('X Search quota store is busy');
-        await delay(20);
-      }
-    }
+    // SQLite's BEGIN IMMEDIATE serializes charges across processes and staged
+    // generations. OS-owned locks are released when a process exits.
+    const database = new DatabaseSync(this.quotaFile);
     try {
-      this.loadQuotaState();
-      this.chargeCurrent(requester);
-      this.saveQuotaState();
+      database.exec('PRAGMA busy_timeout = 5000');
+      database.exec('CREATE TABLE IF NOT EXISTS quota_state (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL)');
+      database.exec('BEGIN IMMEDIATE');
+      try {
+        const row = database.prepare('SELECT value FROM quota_state WHERE id = 1').get() as { value: string } | undefined;
+        // Preserve counters written by older versions before the SQLite store existed.
+        const legacyFile = this.quotaFile.replace(/\.sqlite$/, '.json');
+        const initial = row?.value ?? (legacyFile !== this.quotaFile && existsSync(legacyFile)
+          ? readFileSync(legacyFile, 'utf8') : undefined);
+        this.loadQuotaState(initial);
+        this.chargeCurrent(requester);
+        const state = JSON.stringify({
+          day: this.counterDay,
+          users: [...this.userCounters],
+          workspaces: [...this.workspaceCounters],
+        });
+        database.prepare('INSERT INTO quota_state (id, value) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value').run(state);
+        database.exec('COMMIT');
+      } catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+      }
     } finally {
-      await lock.close();
-      await rm(lockFile, { force: true });
+      database.close();
     }
   }
 
@@ -256,21 +249,6 @@ export class XSearchService implements NeoSearchService {
     workspace.minuteCount++;
     user.dayCount++;
     workspace.dayCount++;
-  }
-
-  private saveQuotaState(): void {
-    const temporaryFile = `${this.quotaFile}.pending`;
-    try {
-      writeFileSync(temporaryFile, JSON.stringify({
-        day: this.counterDay,
-        users: [...this.userCounters],
-        workspaces: [...this.workspaceCounters],
-      }), { mode: 0o600 });
-      renameSync(temporaryFile, this.quotaFile!);
-    } catch (error) {
-      try { rmSync(temporaryFile, { force: true }); } catch { /* preserve original error */ }
-      throw new Error('X Search quota state could not be saved', { cause: error });
-    }
   }
 
   async search(rawInput: XSearchInput, requester: SearchRequester): Promise<XSearchOutput> {
@@ -317,7 +295,7 @@ export default defineExtension({
       ?? (extensionDataRoot ? join(extensionDataRoot, 'x-search') : undefined);
     if (!dataDir) throw new Error('X Search needs isolated extension storage for metered quotas');
     mkdirSync(dataDir, { recursive: true });
-    const search = new XSearchService(settings, client, Date.now, join(dataDir, 'quotas.json'));
+    const search = new XSearchService(settings, client, Date.now, join(dataDir, 'quotas.sqlite'));
     ctx.provide('neo.search', search);
     ctx.effect(() => () => search.dispose());
     ctx.contribute('tools', {

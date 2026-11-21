@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, utimes } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -191,7 +192,7 @@ try {
   now += 86_400_000;
   await metered.search({ query: 'new day' }, alice);
   assert.equal(meteredRequests, 6);
-  const quotaFile = join(home, 'persisted-search-quotas.json');
+  const quotaFile = join(home, 'persisted-search-quotas.sqlite');
   const persistentSettings = {
     apiKey, requestsPerMinutePerUser: 2, requestsPerMinutePerWorkspace: 3,
     requestsPerDayPerUser: 3, requestsPerDayPerWorkspace: 5,
@@ -212,7 +213,7 @@ try {
   await assert.rejects(persistent.search({ query: 'restart daily quota' }, alice), /user day/);
   // A blue/green candidate starts before the serving generation's final charges.
   // Both must see the same durable counters after the candidate is published.
-  const upgradeFile = join(home, 'upgrade-search-quotas.json');
+  const upgradeFile = join(home, 'upgrade-search-quotas.sqlite');
   const upgradeSettings = {
     ...persistentSettings,
     requestsPerMinutePerUser: 2,
@@ -222,10 +223,19 @@ try {
   await serving.search({ query: 'serving after candidate activation' }, alice);
   await candidate.search({ query: 'candidate after publication' }, alice);
   await assert.rejects(serving.search({ query: 'old generation after publication' }, alice), /user minute/);
-  const upgradeState = JSON.parse(await readFile(upgradeFile, 'utf8'));
+  const upgradeDb = new DatabaseSync(upgradeFile);
+  const upgradeRow = upgradeDb.prepare('SELECT value FROM quota_state WHERE id = 1').get() as { value: string };
+  const upgradeState = JSON.parse(upgradeRow.value);
+  upgradeDb.close();
   assert.equal(upgradeState.users.find(([id]: [string]) => id === alice.userId)[1].minuteCount, 2);
 
-  const concurrentFile = join(home, 'concurrent-search-quotas.json');
+  const concurrentFile = join(home, 'concurrent-search-quotas.sqlite');
+  // Simulate a lock left by a crashed earlier generation. Two waiters must
+  // proceed through SQLite's transaction lock without deleting the old lock.
+  const abandonedLock = join(home, 'concurrent-search-quotas.json.lock');
+  await writeFile(abandonedLock, 'abandoned-owner-token');
+  const oldTime = new Date(Date.now() - 60_000);
+  await utimes(abandonedLock, oldTime, oldTime);
   const concurrentSettings = { ...persistentSettings, requestsPerMinutePerUser: 1 };
   const first = new XSearchService(concurrentSettings, persistentClient, () => now, concurrentFile);
   const second = new XSearchService(concurrentSettings, persistentClient, () => now, concurrentFile);
@@ -235,6 +245,21 @@ try {
   ]);
   assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(concurrent.filter(result => result.status === 'rejected').length, 1);
+  assert.equal(await readFile(abandonedLock, 'utf8'), 'abandoned-owner-token');
+  const concurrentDb = new DatabaseSync(concurrentFile);
+  const concurrentRow = concurrentDb.prepare('SELECT value FROM quota_state WHERE id = 1').get() as { value: string };
+  assert.equal(JSON.parse(concurrentRow.value).users[0][1].minuteCount, 1);
+  concurrentDb.close();
+
+  // A legacy JSON snapshot is imported under the same database transaction.
+  const migratedFile = join(home, 'migrated-search-quotas.sqlite');
+  await writeFile(join(home, 'migrated-search-quotas.json'), JSON.stringify({
+    day: Math.floor(now / 86_400_000),
+    users: [[alice.userId, { minute: Math.floor(now / 60_000), minuteCount: 1, dayCount: 1 }]],
+    workspaces: [[alice.workspaceId, { minute: Math.floor(now / 60_000), minuteCount: 1, dayCount: 1 }]],
+  }));
+  const migrated = new XSearchService(concurrentSettings, persistentClient, () => now, migratedFile);
+  await assert.rejects(migrated.search({ query: 'legacy quota remains' }, alice), /user minute/);
   now += 86_400_000;
   await persistent.search({ query: 'next day' }, alice);
   const capped = new XSearchService({ apiKey, requestsPerMinutePerUser: 0, requestsPerDayPerUser: Infinity }, {
