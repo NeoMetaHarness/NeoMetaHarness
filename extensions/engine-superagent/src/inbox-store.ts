@@ -9,9 +9,15 @@ export class InboxStore {
   load(): InboxItem[] {
     if (!existsSync(this.filename)) return [];
     const records = inboxItemSchema.array().parse(JSON.parse(readFileSync(this.filename, 'utf8')));
-    // Upstream bump Suggestions hold no in-memory Eval (accepting one starts a new ticket), so they survive.
-    const resumable = (item: InboxItem) => item.status === 'suggestion' && item.source === 'neo/upstream';
-    return records.map(item => item.status === 'running' || (item.status === 'suggestion' && !resumable(item)) ? {
+    // Upstream bump and memory dream Suggestions hold no in-memory Eval (their state lives outside the
+    // engine), so they survive a restart.
+    const resumable = (item: InboxItem) => item.status === 'suggestion'
+      && (item.source === 'neo/upstream' || item.source === 'neo/memory');
+    return records.map(item => item.dream && item.status === 'running' ? {
+      // A dream interrupted mid-apply is offered again; memory-honcho re-checks every step it already wrote.
+      ...item, status: 'approval' as const, kind: 'approval' as const, mode: 'act' as const, updatedAt: Date.now(),
+      approval: { destructive: item.destructive ?? true, reason: 'Applying this dream was interrupted by a restart; approve to finish it' },
+    } : item.status === 'running' || (item.status === 'suggestion' && !resumable(item)) ? {
       ...item, status: 'blocked' as const, updatedAt: Date.now(), report: {
         status: 'blocked' as const, summary: 'Engine restarted; submit a new request to continue this item.',
         changes: [], tests: [], risks: ['Upstream tickets are held in memory and cannot resume after restart.'], options: [],

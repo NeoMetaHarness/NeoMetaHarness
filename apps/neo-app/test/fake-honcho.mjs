@@ -10,7 +10,15 @@ export async function fakeHoncho(key = 'isolated-honcho-key') {
   let sequence = 0;
 
   const server = createServer(async (req, res) => {
-    const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
+    const requestUrl = new URL(req.url, 'http://127.0.0.1');
+    const pathname = requestUrl.pathname;
+    // fastapi-pagination pages (Honcho list endpoints): page is 1-based, size is the page length.
+    const page = (items) => {
+      const size = Number(requestUrl.searchParams.get('size') ?? 50);
+      const number = Number(requestUrl.searchParams.get('page') ?? 1);
+      return { items: items.slice((number - 1) * size, number * size), page: number, size,
+        total: items.length, pages: Math.max(1, Math.ceil(items.length / size)) };
+    };
     const send = (code, value) => {
       res.writeHead(code, { 'content-type': 'application/json' });
       res.end(JSON.stringify(value));
@@ -42,8 +50,17 @@ export async function fakeHoncho(key = 'isolated-honcho-key') {
     }
     // src/routers/sessions.py:272, POST /{workspace_id}/sessions/list.
     if (req.method === 'POST' && rest === 'sessions/list') {
-      return send(200, { items: [...sessions.keys()].filter((id) => id.startsWith(workspace + '/'))
-        .map((id) => ({ id: id.slice(workspace.length + 1) })) });
+      return send(200, page([...sessions.keys()].filter((id) => id.startsWith(workspace + '/'))
+        .map((id) => ({ id: id.slice(workspace.length + 1) }))));
+    }
+    // Upstream src/routers/messages.py GET and PUT /{session_id}/messages/{message_id} (the PUT updates metadata),
+    // as already called by HonchoStore.update/delete. Line numbers not cited: no pinned Honcho checkout is cached.
+    const messageRoute = /^sessions\/([\w-]+)\/messages\/(message_\d+)$/.exec(rest);
+    if (messageRoute) {
+      const message = sessions.get(workspace + '/' + messageRoute[1])?.find((item) => item.id === messageRoute[2]);
+      if (!message) return send(404, { detail: 'Unknown message' });
+      if (req.method === 'GET') return send(200, message);
+      if (req.method === 'PUT') { message.metadata = body.metadata ?? message.metadata; return send(200, message); }
     }
     const sessionRoute = /^sessions\/([\w-]+)\/(messages|messages\/list|context)$/.exec(rest);
     if (sessionRoute) {
@@ -63,7 +80,7 @@ export async function fakeHoncho(key = 'isolated-honcho-key') {
         return send(200, created);
       }
       // src/routers/messages.py:325, POST /{session_id}/messages/list.
-      if (req.method === 'POST' && operation === 'messages/list') return send(200, { items: [...stored].reverse() });
+      if (req.method === 'POST' && operation === 'messages/list') return send(200, page([...stored].reverse()));
       // src/routers/sessions.py:744-748, GET /{session_id}/context.
       if (req.method === 'GET' && operation === 'context') {
         return send(200, { id: session, messages: [...stored], summary: null,

@@ -10,7 +10,11 @@ import { loadPinnedSuperagent } from './pinned.js';
 import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './model.js';
 import { ModelRouteRejected } from '../../models/src/hub.js';
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
-import { NeoCronSource, type ScheduledAsk } from './cron-source.js';
+import { cronAsk, NeoCronSource, type ScheduledAsk } from './cron-source.js';
+import { dshReportItem } from './dsh-report.js';
+
+/** Decision records carry their item's workspace (P6-10), so listing can filter at the source. */
+const scoped = (item: { workspace?: string }) => (item.workspace ? { workspace: item.workspace } : {});
 import { FakeChannelSource, type ChannelMessage, type ChannelSource } from './channel-source.js';
 import { blockedReason, isDestructive } from './ask-policy.js';
 import { DecisionLog } from './decision-log.js';
@@ -21,6 +25,10 @@ import { PollingGitHubSource, type GitHubConfig, type GitHubEvent, type GitHubSo
 import { AcceptModeStore } from './accept-mode.js';
 
 type Role = 'viewer' | 'member' | 'admin' | 'owner';
+/** memory-honcho's dream applier (looked up per call, so toggling memory-honcho is always safe). */
+type MemoryDreams = { apply(id: string): Promise<{ applied: number; skipped: number; changes: string[] }>; reject(id: string): Promise<void> };
+type DreamProposal = { dreamId: string; workspace: string; summary: string; proposals: number;
+  destructive: boolean; applied: boolean; changes: string[]; risks: string[] };
 const isAdmin = (role?: Role) => role === 'admin' || role === 'owner';
 
 // `neo upstream` (P6-8). Neo only proposes: a bump runs only when an admin approves it, and then as a
@@ -46,6 +54,8 @@ const askSchema = z.object({
   text: z.string().min(1), botId: z.string().min(1), mode: z.enum(['observe', 'act']).default('observe'),
   notification: z.object({ channelId: z.string() }).optional(),
   requesterRole: z.enum(['viewer', 'member', 'admin', 'owner']).default('member'),
+  /** Set by the Gateway from the caller (server mode); the item and any schedule keep it. */
+  workspace: z.string().min(1).optional(),
 });
 
 /** The only Neo-specific boundary that can ingest a Source Trigger. */
@@ -74,14 +84,8 @@ class SuperagentService {
   async reportDsh(input: { sessionId: string; workspaceId: string; profile: string;
     turn: string; status: 'ready' | 'failed'; summary: string; question: string }): Promise<void> {
     if (this.closed) return;
-    const now = Date.now();
-    const report: Report = { status: input.status, summary: input.summary.slice(0, 2000),
-      changes: [], tests: [], risks: [], options: [] };
-    const item: InboxItem = { id: randomUUID(), botId: input.profile, source: 'neo/dsh',
-      requesterRole: 'member', mode: 'observe', status: input.status,
-      text: input.question.slice(0, 1000) || `DSH ${input.profile} session ${input.sessionId}`,
-      report, createdAt: now, updatedAt: now };
-    await this.finish(item, report);
+    const item = dshReportItem(input, randomUUID(), Date.now());
+    await this.finish(item, item.report as Report);
   }
   private readonly candidates = new Map<string, Candidate>();
   private readonly events: InboxEvent[] = [];
@@ -112,6 +116,67 @@ class SuperagentService {
   private acceptModeStored = false;
   private routine!: UpstreamRoutineStore;
   private upstreamChecker: UpstreamChecker = checkUpstreams;
+
+  private dreams?: () => MemoryDreams | undefined;
+  attachDreams(dreams: () => MemoryDreams | undefined): void { this.dreams = dreams; }
+
+  /**
+   * A memory dream report becomes one Inbox item. Applied dreams (accept mode `act`, nothing destructive)
+   * are a ready report; otherwise observe makes a Suggestion and act modes ask for approval. Deleting
+   * memory is destructive, so accepting or approving such a dream needs an admin.
+   */
+  proposeDream(input: DreamProposal): { id: string } {
+    if (this.closed) throw new Error('Inbox is disabled');
+    const acceptMode = this.acceptModes.get(input.workspace); // the dream's own workspace (review M1)
+    const now = Date.now();
+    const base = { id: randomUUID(), botId: 'neo-memory', source: 'neo/memory' as const, requesterRole: 'member' as const,
+      workspace: input.workspace,
+      text: `Memory dream for workspace ${input.workspace}`, acceptMode, destructive: input.destructive,
+      dream: { id: input.dreamId, workspace: input.workspace, proposals: input.proposals },
+      report: { status: 'ready' as const, summary: input.summary.slice(0, 2000), changes: input.changes.slice(0, 100),
+        tests: [], risks: input.risks.slice(0, 20), options: [] }, createdAt: now, updatedAt: now };
+    const item: InboxItem = input.applied ? { ...base, mode: 'act', status: 'ready' }
+      : acceptMode === 'observe' ? { ...base, mode: 'observe', status: 'suggestion', kind: 'suggestion' }
+        : { ...base, mode: 'act', status: 'approval', kind: 'approval', approval: { destructive: input.destructive,
+          reason: input.destructive ? 'This dream deletes duplicate or stale memory; an admin must approve it'
+            : 'Approve writing these memory changes' } };
+    return { id: this.update(item, {}).id };
+  }
+
+  private async applyDream(item: InboxItem): Promise<InboxItem> {
+    const dreams = this.dreams?.();
+    // The item stays pending, so it can be accepted again once memory-honcho is enabled.
+    if (!dreams) throw new Error('Memory dreaming is disabled; enable memory-honcho to apply this dream');
+    const running = this.update(item, { status: 'running', kind: undefined, mode: 'act' });
+    try {
+      const result = await dreams.apply(item.dream!.id);
+      const skipped = result.skipped ? `; skipped ${result.skipped} that changed since the dream` : '';
+      return this.update(running, { status: 'ready', report: { status: 'ready',
+        summary: `Applied ${result.applied} memory changes${skipped}.`, changes: result.changes.slice(0, 100),
+        tests: [], risks: [], options: [] } });
+    } catch (error) {
+      const summary = `Dream could not be applied: ${error instanceof Error ? error.message : String(error)}`;
+      return this.update(running, { status: 'failed', report: { status: 'failed', summary,
+        changes: [], tests: [], risks: [summary], options: [] } });
+    }
+  }
+
+  /**
+   * Best effort: if memory-honcho is disabled now, the Dreamer reconciles later. It sees this item is no longer
+   * pending (dreamPending) and rejects the dream itself, so a stale proposal never blocks the next dream.
+   */
+  private async rejectDream(item: InboxItem): Promise<void> {
+    try { await this.dreams?.()?.reject(item.dream!.id); } catch { /* reconciled by the Dreamer on its next pass */ }
+  }
+
+  /** Whether a memory dream's Inbox item still waits for a decision or is being applied. */
+  dreamPending(id: string): boolean {
+    const item = this.items.get(id);
+    return Boolean(item?.dream) && (item!.status === 'suggestion' || item!.status === 'approval' || item!.status === 'running');
+  }
+
+  /** The accept mode of one workspace (a dream follows its own workspace's mode). */
+  acceptModeFor(workspace: string): AcceptMode { return this.acceptModes.get(workspace); }
 
   /** Inject the `neo upstream` check runner (tests use a scripted fake; production runs upstream:check). */
   useUpstreamChecker(checker: UpstreamChecker): void { this.upstreamChecker = checker; }
@@ -202,8 +267,7 @@ class SuperagentService {
         await this.checkUpstream();
         return;
       }
-      await this.ask({ text: job.text, botId: job.botId, mode: job.mode,
-        requesterRole: job.requesterRole ?? 'member' }, 'neo/cron');
+      await this.ask(cronAsk(job), 'neo/cron');
     });
     await this.cron.start();
     if (!this.cron.list().some((job) => job.botId === 'neo-system' && job.text === '@neo/upstream check')) {
@@ -284,7 +348,7 @@ class SuperagentService {
       return this.update(item, patch);
     }
     const prior = await this.decisions.list({ ticketId: item.id, limit: 20 });
-    const traceId = await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+    const traceId = await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
       inputsSummary: item.text.slice(0, 240), candidates: [], chosenAction: 'ticket.complete',
       modelRole: 'eval', latencyMs: 0, outcome: complete.status });
     const episode: InboxItem['episode'] = {
@@ -353,10 +417,13 @@ class SuperagentService {
     this.acceptModeStored = true;
   }
 
-  acceptModeGet(): { mode: AcceptMode } { return { mode: this.acceptModes.get() }; }
-  acceptModeSet(input: { mode: AcceptMode }): { mode: AcceptMode } {
+  /** The accept mode of one workspace (the Gateway names the caller's; 'default' is the desktop/instance one). */
+  acceptModeGet(input: { workspace?: string } = {}): { mode: AcceptMode } {
+    return { mode: this.acceptModes.get(input.workspace ?? 'default') };
+  }
+  acceptModeSet(input: { mode: AcceptMode; workspace?: string }): { mode: AcceptMode } {
     this.acceptModeStored = true;
-    return { mode: this.acceptModes.set(input.mode) };
+    return { mode: this.acceptModes.set(input.mode, input.workspace ?? 'default') };
   }
 
   /**
@@ -438,7 +505,7 @@ class SuperagentService {
     } catch (error) {
       summary = { ...summary, failed: `${summary.failed}. Post-mortem review: ${error instanceof Error ? error.message : String(error)}` };
     } finally {
-      if (!this.closed) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+      if (!this.closed) await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: [], chosenAction: 'postmortem',
         modelRole: 'eval', model_id: modelId, latencyMs: Date.now() - started, outcome });
     }
@@ -512,7 +579,7 @@ class SuperagentService {
         escalated = true;
         await initial.runEscalated({ text: item.text, ticketId: item.id, source: item.source ?? 'neo/app' },
           evaluateBinding, async (entry) => {
-            await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+            await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
               inputsSummary: item.text.slice(0, 240), candidates: candidate.triggers.map((trigger) => trigger.id),
               chosenAction: entry.attempt === 1 ? 'eval' : 'escalate', modelRole: 'eval',
               model_id: `${entry.selection.providerId}/${entry.selection.model}`,
@@ -527,7 +594,7 @@ class SuperagentService {
       if (error instanceof ModelRouteRejected) outcome = 'declined';
       throw error;
     } finally {
-      if (!escalated) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+      if (!escalated) await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: candidate.triggers.map((trigger) => trigger.id),
         chosenAction: 'eval', modelRole: 'eval', model_id: modelId, latencyMs: Date.now() - started, outcome });
     }
@@ -540,7 +607,7 @@ class SuperagentService {
       reason: 'Explicit Ask Neo request', evalId: candidate.evalId,
     });
     this.candidates.delete(`${source}:${item.id}`);
-    await this.decisions.record({ ticketId: item.id, source, inputsSummary: item.text.slice(0, 240),
+    await this.decisions.record({ ticketId: item.id, ...scoped(item), source, inputsSummary: item.text.slice(0, 240),
       candidates: [candidate.evalId], chosenAction: 'accept', modelRole: 'eval',
       latencyMs: Date.now() - started, outcome: 'accepted' });
   }
@@ -554,6 +621,7 @@ class SuperagentService {
     if ((item.destructive ?? isDestructive(item.text)) && role && !isAdmin(role)) {
       throw new Error('Accepting destructive work requires admin or owner');
     }
+    if (item.dream) return this.applyDream(item);
     const reason = blockedReason(role ?? item.requesterRole ?? 'member', 'act', item.text);
     if (reason) {
       return this.finish(item, { status: 'blocked', summary: reason,
@@ -578,6 +646,7 @@ class SuperagentService {
     const item = this.items.get(input.id);
     if (!item || item.status !== 'suggestion') throw new Error('Only Suggestions can be dismissed');
     const reason = input.reason?.trim() || `Dismissed by ${role ?? 'member'}`;
+    if (item.dream) await this.rejectDream(item);
     const triggerId = `${item.source ?? 'neo/app'}:${item.id}`;
     const candidate = this.candidates.get(triggerId);
     if (candidate) {
@@ -585,7 +654,7 @@ class SuperagentService {
       catch { /* The Eval already ended upstream; the Inbox record is still dismissed. */ }
       this.candidates.delete(triggerId);
     }
-    await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+    await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
       inputsSummary: reason.slice(0, 240), candidates: candidate ? [candidate.evalId] : [],
       chosenAction: 'dismiss', modelRole: 'eval', latencyMs: 0, outcome: 'dismissed' });
     return this.update(item, { status: 'dismissed', kind: 'suggestion' });
@@ -615,6 +684,17 @@ class SuperagentService {
     if (!item || item.status !== 'approval') throw new Error('Ticket is not awaiting approval');
     if (item.approval?.destructive && role !== 'admin' && role !== 'owner') {
       throw new Error('Destructive approval requires admin or owner');
+    }
+    if (item.dream) {
+      const approval = { destructive: item.approval?.destructive ?? false, reason: input.reason.trim(),
+        decision: (input.decision === 'approve' ? 'approved' : 'denied') as 'approved' | 'denied' };
+      if (input.decision === 'deny') {
+        await this.rejectDream(item);
+        const summary = `Dream denied: ${input.reason.trim()}`;
+        return this.update(item, { status: 'blocked', kind: undefined, approval,
+          report: { status: 'blocked', summary, changes: [], tests: [], risks: [summary], options: [] } });
+      }
+      return this.applyDream(this.update(item, { approval }));
     }
     if (item.source === 'neo/github') {
       if (role !== 'admin' && role !== 'owner') throw new Error('GitHub publishing requires admin approval');
@@ -737,7 +817,7 @@ class SuperagentService {
     }
     return this.items.get(item.id)!;
   }
-  listDecisions(input: { ticketId?: string; limit?: number }) { return this.decisions.list(input); }
+  listDecisions(input: { ticketId?: string; limit?: number; workspace?: string }) { return this.decisions.list(input); }
 
   cronList(): ScheduledAsk[] { return this.cron!.list(); }
   cronCreate(input: unknown): Promise<ScheduledAsk> {
@@ -816,7 +896,7 @@ class SuperagentService {
       }
       await this.finish(this.update(item, { kind: status === 'failed' ? 'failure' : undefined }), report);
     } finally {
-      if (!this.closed) await this.decisions.record({ ticketId: item.id, source: item.source ?? 'neo/app',
+      if (!this.closed) await this.decisions.record({ ticketId: item.id, ...scoped(item), source: item.source ?? 'neo/app',
         inputsSummary: item.text.slice(0, 240), candidates: [assignmentId], chosenAction: 'delegate',
         modelRole: 'coding', latencyMs: Date.now() - started, outcome });
     }
@@ -892,6 +972,10 @@ export default defineExtension({
     }
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
     await github.start();
+    // memory-honcho dreams report here; their apply/reject comes back through memory-honcho's service.
+    service.attachDreams(() => ctx.inject<MemoryDreams>('memoryDreams'));
+    ctx.provide('memoryInboxSink', { acceptMode: (workspace: string) => service.acceptModeFor(workspace),
+      propose: (input: DreamProposal) => service.proposeDream(input), isPending: (id: string) => service.dreamPending(id) });
     ctx.provide('dshInboxSink', { report: (input: Parameters<typeof service.reportDsh>[0]) =>
       service.reportDsh(input) });
     // Before the first poll (scheduled on a timer by start) so P6-4 installs keep their behaviour.
@@ -904,11 +988,11 @@ export default defineExtension({
     });
     ctx.route('ask', ({ body }) => service.ask(body));
     ctx.route('list', () => service.list());
-    ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number }));
+    ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number; workspace?: string }));
     ctx.route('accept', ({ body }) => service.accept(body as { id: string }, (body as { role?: Role }).role));
     ctx.route('dismiss', ({ body }) => service.dismiss(body as { id: string; reason?: string }, (body as { role?: Role }).role));
-    ctx.route('accept-mode/get', () => service.acceptModeGet());
-    ctx.route('accept-mode/set', ({ body }) => service.acceptModeSet(body as { mode: AcceptMode }));
+    ctx.route('accept-mode/get', ({ body }) => service.acceptModeGet((body ?? {}) as { workspace?: string }));
+    ctx.route('accept-mode/set', ({ body }) => service.acceptModeSet(body as { mode: AcceptMode; workspace?: string }));
     ctx.route('reply', ({ body }) => service.reply(body as { id: string; answer: string }));
     ctx.route('approval/decide', ({ body }) => service.decideApproval(body as {
       id: string; decision: 'approve' | 'deny'; reason: string;

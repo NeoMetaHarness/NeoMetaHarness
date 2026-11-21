@@ -23,6 +23,7 @@ import {
   type ModelSelectionRecord,
   type ModelRolesRecord,
   type ModelRoleName,
+  type DreamReport,
 } from '@neometaharness/contracts';
 import {
   VaultService,
@@ -80,6 +81,8 @@ export {
 
 export interface GatewayOptions {
   databaseFile: string;
+  /** Test seam: who may see deployment-level Inbox items in server mode (default: nobody; see canSeeDeploymentItems). */
+  canSeeDeploymentItems?: (context: GatewayAuthContext, role: GatewayAuthContext['role']) => boolean;
   dataDir?: string;
   extensionsDir?: string;
   port?: number;
@@ -285,6 +288,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   // Channel platforms publish into, and the Inbox subscribes to, this one bus.
   const channelBus = new ChannelBus();
   const kernel = new NeoKernel(db, {
+    // Read-only deployment mode, for extensions whose background work differs per mode (memory-honcho's nightly pass).
+    deploymentMode: mode,
     backupSource: backupStorage,
     backupProtectedPaths: [dataDir, dirname(resolve(options.databaseFile)), resolve(options.extensionsDir ?? defaultExtensions)],
     channelSource: channelBus,
@@ -380,6 +385,87 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Local memory extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  // Memory is per workspace. In server mode a caller may only name their own workspace ('default' means
+  // "mine"); any other name is refused. Desktop is a single tenant whose sessions name memory workspaces
+  // freely (DSH sessions, the legacy 'default'), so every name there belongs to the one owner.
+  const memoryWorkspace = (requested: string | undefined, context: GatewayAuthContext): string => {
+    if (mode === 'desktop') return requested ?? 'default';
+    const own = context.workspaceId;
+    if (!own) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
+    if (requested === undefined || requested === 'default' || requested === own) return own;
+    throw new ORPCError('FORBIDDEN', { message: 'Memory belongs to another workspace' });
+  };
+  /** The workspace an id-addressed memory write must belong to (none to check in desktop mode). */
+  const memoryOwner = (context: GatewayAuthContext) => mode === 'desktop' ? undefined : memoryWorkspace(undefined, context);
+  /**
+   * Memory provenance is assigned here from the authenticated caller, never taken from the request. The
+   * superagent's worker MCP bridge key (memory.remember) keeps that tool's own wording; the user id is always
+   * appended, so a key that merely borrows the bridge's name still names its real owner.
+   */
+  /**
+   * The accept-mode workspace of a caller: desktop keeps its single 'default' mode; in server mode each
+   * workspace has its own (the same key its memory dreams use, so a dream follows the caller's setting).
+   */
+  const acceptModeWorkspace = (context: GatewayAuthContext): string => mode === 'desktop' ? 'default' : memoryWorkspace(undefined, context);
+  /**
+   * P6-10 Inbox isolation. In server mode an item belongs to the workspace stamped on it, and a caller sees and
+   * acts only on their own workspace's items; an item with no workspace (a channel/Hermes binding, GitHub,
+   * upstream) is not shown to any workspace. Desktop is a single tenant and sees every item, as before.
+   */
+  const inboxWorkspace = (context: GatewayAuthContext): string | undefined => {
+    if (mode === 'desktop') return undefined;
+    if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
+    return context.workspaceId;
+  };
+  /**
+   * Who may see and act on deployment-level Inbox items and schedules (no workspace: GitHub, upstream bumps,
+   * the system upstream schedule) in server mode. Nobody, for now: "owner" is a per-workspace role and any
+   * admin can create a workspace and own it, so it cannot stand for the deployment. A deployment-owner concept
+   * (pending the owner's decision) replaces this one function.
+   */
+  const canSeeDeploymentItems = options.canSeeDeploymentItems ?? ((_context: GatewayAuthContext, _role: GatewayAuthContext['role']) => false);
+  const inboxVisible = (item: { workspace?: string; source?: string }, context: GatewayAuthContext, role = context.role) => {
+    if (mode === 'desktop') return true;
+    if (item.workspace) return item.workspace === inboxWorkspace(context);
+    // Channel/Hermes bindings carry other people's conversations: never deployment-visible.
+    if (item.source === 'neo/channel') return false;
+    return canSeeDeploymentItems(context, role);
+  };
+  const ROLE_RANK = { viewer: 0, member: 1, admin: 2, owner: 3 } as const;
+  /**
+   * The caller's role now (null: no longer a member), never above the role the stream opened with. Long-lived
+   * streams re-check it so a removed or demoted member stops receiving events. Desktop has one owner.
+   */
+  const currentInboxRole = async (context: GatewayAuthContext): Promise<GatewayAuthContext['role'] | null> => {
+    if (mode === 'desktop') return context.role;
+    if (!context.user?.id || !context.workspaceId || !context.role) return null;
+    const row = await kyselyDb.selectFrom('member').select('role').where('userId', '=', context.user.id)
+      .where('organizationId', '=', context.workspaceId).executeTakeFirst() as { role?: keyof typeof ROLE_RANK } | undefined;
+    const held = row?.role;
+    if (!held || !(held in ROLE_RANK)) return null;
+    return ROLE_RANK[held] < ROLE_RANK[context.role as keyof typeof ROLE_RANK] ? held : context.role;
+  };
+  /** The caller's item, or NOT_FOUND (another workspace's item is indistinguishable from a missing one). */
+  const inboxItem = async (id: string, context: GatewayAuthContext): Promise<InboxItem> => {
+    const item = (await invokeInbox('list', {}) as InboxItem[]).find((entry) => entry.id === id);
+    if (!item || !inboxVisible(item, context)) throw new ORPCError('NOT_FOUND', { message: 'Inbox item not found' });
+    return item;
+  };
+  /** The caller's schedule, or NOT_FOUND (another workspace's schedule is indistinguishable from a missing one). */
+  const cronJob = async (id: string, context: GatewayAuthContext) => {
+    // Desktop keeps its old answers for unknown ids ({ deleted: false } and the like).
+    if (mode === 'desktop') return;
+    const job = (await invokeInbox('cron/list', {}) as { id: string; workspace?: string }[]).find((entry) => entry.id === id);
+    if (!job || !inboxVisible(job, context)) throw new ORPCError('NOT_FOUND', { message: 'Schedule not found' });
+    return job;
+  };
+  const memoryProvenance = (context: GatewayAuthContext): string => {
+    const user = `user:${context.user?.id ?? 'unknown'}`;
+    const key = context.apiKey?.name;
+    if (key === 'superagent-bridge') return `explicit user request through Neo worker MCP; ${user}`;
+    if (key) return `API key ${key}; ${user}`;
+    return `Neo Memory UI; ${user}`;
+  };
   const invokeHoncho = async (route: string, body: unknown) => {
     const path = '/x/memory-honcho/' + route;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Honcho extension disabled' });
@@ -465,57 +551,64 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('inbox.ask', context);
         const notification = input.notify ? (authorize('x.channels.notification.resolve', context),
           await invokeChannels('notification/resolve', { ...input.notify, botId: input.botId })) : undefined;
-        return invokeInbox('ask', { ...input, ...(notification ? { notification } : {}), requesterRole: context.role, requesterId: context.user?.id }) as Promise<InboxItem>;
+        const workspace = inboxWorkspace(context);
+        return invokeInbox('ask', { ...input, ...(notification ? { notification } : {}), requesterRole: context.role,
+          requesterId: context.user?.id, ...(workspace ? { workspace } : {}) }) as Promise<InboxItem>;
       }),
       list: os.inbox.list.handler(async ({ context }) => {
         authorize('inbox.list', context);
-        return invokeInbox('list', {}) as Promise<InboxItem[]>;
+        const items = await invokeInbox('list', {}) as InboxItem[];
+        return items.filter((item) => inboxVisible(item, context));
       }),
       decisions: {
         list: os.inbox.decisions.list.handler(async ({ input, context }) => {
           authorize('inbox.decisions.list', context);
-          return invokeInbox('decisions/list', input) as Promise<import('@neometaharness/contracts').InboxDecision[]>;
+          type Decision = import('@neometaharness/contracts').InboxDecision;
+          if (mode === 'desktop') return invokeInbox('decisions/list', input) as Promise<Decision[]>;
+          // Decision records carry their item's workspace; the store returns only the caller's (bounded by limit).
+          return invokeInbox('decisions/list', { ...input, workspace: inboxWorkspace(context) }) as Promise<Decision[]>;
         }),
       },
       accept: os.inbox.accept.handler(async ({ input, context }) => {
         authorize('inbox.accept', context);
         // Accepting a Suggestion starts work: destructive work needs an admin or owner (as approvals do).
-        const items = await invokeInbox('list', {}) as InboxItem[];
-        const item = items.find((entry) => entry.id === input.id);
-        if (item?.destructive && context.role !== 'admin' && context.role !== 'owner') {
+        const item = await inboxItem(input.id, context);
+        if (item.destructive && context.role !== 'admin' && context.role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Accepting destructive work requires admin or owner' });
         }
         return invokeInbox('accept', { ...input, role: context.role }) as Promise<InboxItem>;
       }),
       dismiss: os.inbox.dismiss.handler(async ({ input, context }) => {
         authorize('inbox.dismiss', context);
+        await inboxItem(input.id, context);
         return invokeInbox('dismiss', { ...input, role: context.role }) as Promise<InboxItem>;
       }),
       acceptMode: {
         get: os.inbox.acceptMode.get.handler(async ({ context }) => {
           authorize('inbox.acceptMode.get', context);
-          return invokeInbox('accept-mode/get', {}) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
+          return invokeInbox('accept-mode/get', { workspace: acceptModeWorkspace(context) }) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
         }),
         set: os.inbox.acceptMode.set.handler(async ({ input, context }) => {
           authorize('inbox.acceptMode.set', context);
-          return invokeInbox('accept-mode/set', input) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
+          return invokeInbox('accept-mode/set', { ...input, workspace: acceptModeWorkspace(context) }) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
         }),
       },
       reply: os.inbox.reply.handler(async ({ input, context }) => {
         authorize('inbox.reply', context);
+        await inboxItem(input.id, context);
         return invokeInbox('reply', input) as Promise<InboxItem>;
       }),
       approval: { decide: os.inbox.approval.decide.handler(async ({ input, context }) => {
         authorize('inbox.approval.decide', context);
-        const items = await invokeInbox('list', {}) as InboxItem[];
-        const item = items.find((entry) => entry.id === input.id);
-        if ((item?.approval?.destructive || item?.source === 'neo/github') && context.role !== 'admin' && context.role !== 'owner') {
+        const item = await inboxItem(input.id, context);
+        if ((item.approval?.destructive || item.source === 'neo/github') && context.role !== 'admin' && context.role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Destructive approval requires admin or owner' });
         }
         return invokeInbox('approval/decide', { ...input, role: context.role }) as Promise<InboxItem>;
       }) },
       retry: os.inbox.retry.handler(async ({ input, context }) => {
         authorize('inbox.retry', context);
+        await inboxItem(input.id, context);
         return invokeInbox('retry', input) as Promise<InboxItem>;
       }),
       upstream: {
@@ -558,24 +651,37 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       events: os.inbox.events.handler(async function* ({ input, signal, context }) {
         authorize('inbox.events', context);
         const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;
-        yield* stream;
+        if (mode === 'desktop') { yield* stream; return; }
+        // Membership is re-checked (at most every 5 s): a removed member's stream ends, a demoted one narrows.
+        let role: GatewayAuthContext['role'] | null = await currentInboxRole(context);
+        let checkedAt = Date.now();
+        for await (const event of stream) {
+          if (Date.now() - checkedAt >= 5_000) { role = await currentInboxRole(context); checkedAt = Date.now(); }
+          if (!role) return;
+          if (inboxVisible(event.item, context, role)) yield event;
+        }
       }),
       cron: {
         create: os.inbox.cron.create.handler(async ({ input, context }) => {
           authorize('inbox.cron.create', context);
-          return invokeInbox('cron/create', { ...input, requesterRole: context.role }) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }>;
+          const workspace = inboxWorkspace(context);
+          return invokeInbox('cron/create', { ...input, requesterRole: context.role, ...(workspace ? { workspace } : {}) }) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }>;
         }),
         list: os.inbox.cron.list.handler(async ({ context }) => {
           authorize('inbox.cron.list', context);
-          return invokeInbox('cron/list', {}) as Promise<{ id: string; text: string; botId: string; schedule: string; mode: 'observe' | 'act' }[]>;
+          const jobs = await invokeInbox('cron/list', {}) as { id: string; text: string; botId: string; schedule: string;
+            mode: 'observe' | 'act'; workspace?: string }[];
+          return jobs.filter((job) => inboxVisible(job, context));
         }),
         delete: os.inbox.cron.delete.handler(async ({ input, context }) => {
           authorize('inbox.cron.delete', context);
+          await cronJob(input.id, context);
           return invokeInbox('cron/delete', input) as Promise<{ deleted: boolean }>;
         }),
         fire: os.inbox.cron.fire.handler(async ({ input, context }) => {
           authorize('inbox.cron.fire', context);
           if (process.env.NODE_ENV !== 'test') throw new ORPCError('NOT_FOUND');
+          await cronJob(input.id, context);
           return invokeInbox('cron/fire', input) as Promise<{ ok: boolean }>;
         }),
       },
@@ -777,35 +883,75 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         status: os.x['memory-honcho'].status.handler(async ({ input, context }) => {
           authorize('x.memory-honcho.status', context);
           if (!kernel.hasRoute('/x/memory-honcho/status')) return 'off';
-          return invokeHoncho('status', input) as Promise<'ok' | 'degraded' | 'off'>;
+          return invokeHoncho('status', { ...input, workspace: memoryWorkspace(input.workspace, context) }) as Promise<'ok' | 'degraded' | 'off'>;
         }),
         list: os.x['memory-honcho'].list.handler(async ({ input, context }) => {
           authorize('x.memory-honcho.list', context);
           if (!kernel.hasRoute('/x/memory-honcho/list')) return [];
-          return invokeHoncho('list', input) as ReturnType<typeof db.memories.list>;
+          return invokeHoncho('list', { ...input, workspace: memoryWorkspace(input.workspace, context) }) as ReturnType<typeof db.memories.list>;
         }),
+        dream: {
+          run: os.x['memory-honcho'].dream.run.handler(async ({ input, context }) => {
+            authorize('x.memory-honcho.dream.run', context);
+            return invokeHoncho('dream/run', { workspace: memoryWorkspace(input.workspace, context) }) as Promise<DreamReport>;
+          }),
+          last: os.x['memory-honcho'].dream.last.handler(async ({ input, context }) => {
+            authorize('x.memory-honcho.dream.last', context);
+            return invokeHoncho('dream/last', { workspace: memoryWorkspace(input.workspace, context) }) as Promise<DreamReport | null>;
+          }),
+        },
       },
       'memory-local': {
         list: os.x['memory-local'].list.handler(async ({ input, context }) => {
           authorize('x.memory-local.list', context);
-          return invokeMemory('list', input) as ReturnType<typeof db.memories.list>;
+          return invokeMemory('list', { ...input, workspace: memoryWorkspace(input.workspace, context) }) as ReturnType<typeof db.memories.list>;
         }),
         add: os.x['memory-local'].add.handler(async ({ input, context }) => {
           authorize('x.memory-local.add', context);
-          return invokeMemory('add', input) as ReturnType<typeof db.memories.add>;
+          // The intent source is reserved, and provenance is the authenticated user, never caller-supplied.
+          if (input.source === 'neo.intent') throw new ORPCError('BAD_REQUEST', { message: 'Standing intents are added through memory-local.intents.add' });
+          return invokeMemory('add', { ...input, workspace: memoryWorkspace(input.workspace, context),
+            provenance: memoryProvenance(context) }) as ReturnType<typeof db.memories.add>;
         }),
         update: os.x['memory-local'].update.handler(async ({ input, context }) => {
           authorize('x.memory-local.update', context);
-          return (await invokeMemory('update', input) as Awaited<ReturnType<typeof db.memories.update>>) ?? null;
+          if (input.source === 'neo.intent') throw new ORPCError('BAD_REQUEST', { message: 'Standing intents change only through memory-local.intents' });
+          // Provenance is server-assigned here too: memory-local appends who edited the entry to its existing provenance.
+          const { provenance: _ignored, ...changes } = input;
+          return (await invokeMemory('update', { ...changes, workspace: memoryOwner(context),
+            editedBy: memoryProvenance(context) }) as Awaited<ReturnType<typeof db.memories.update>>) ?? null;
         }),
         delete: os.x['memory-local'].delete.handler(async ({ input, context }) => {
           authorize('x.memory-local.delete', context);
-          return invokeMemory('delete', input) as Promise<{ deleted: boolean }>;
+          return invokeMemory('delete', { ...input, workspace: memoryOwner(context) }) as Promise<{ deleted: boolean }>;
         }),
         export: os.x['memory-local'].export.handler(async ({ input, context }) => {
           authorize('x.memory-local.export', context);
-          return invokeMemory('export', input) as ReturnType<typeof db.memories.export>;
+          return invokeMemory('export', { workspace: memoryWorkspace(input.workspace, context) }) as ReturnType<typeof db.memories.export>;
         }),
+        intents: {
+          list: os.x['memory-local'].intents.list.handler(async ({ input, context }) => {
+            authorize('x.memory-local.intents.list', context);
+            return invokeMemory('intents/list', { workspace: memoryWorkspace(input.workspace, context) }) as ReturnType<typeof db.memories.list>;
+          }),
+          // Provenance is the authenticated user, never caller-supplied.
+          add: os.x['memory-local'].intents.add.handler(async ({ input, context }) => {
+            authorize('x.memory-local.intents.add', context);
+            return invokeMemory('intents/add', { text: input.text, workspace: memoryWorkspace(input.workspace, context),
+              provenance: `user:${context.user!.id} via Neo app` }) as ReturnType<typeof db.memories.add>;
+          }),
+          retract: os.x['memory-local'].intents.retract.handler(async ({ input, context }) => {
+            authorize('x.memory-local.intents.retract', context);
+            // A retracted intent also leaves Honcho, so no dream or L2 context can bring it back.
+            const workspace = memoryWorkspace(input.workspace, context);
+            const result = await invokeMemory('intents/retract', { id: input.id, workspace }) as { retracted: boolean; text?: string };
+            if (result.retracted && result.text && kernel.hasRoute('/x/memory-honcho/forget-intent')) {
+              try { await invokeHoncho('forget-intent', { workspace, text: result.text }); }
+              catch (error) { console.error('Honcho intent cleanup failed:', error instanceof Error ? error.message : error); }
+            }
+            return { retracted: result.retracted };
+          }),
+        },
       },
       'engine-dsh': {
         create: os.x['engine-dsh'].create.handler(async ({ input, context }) => {
@@ -1267,10 +1413,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           const scoped = await invokeMemory('list', { workspace: consumer.workspace, query }) as Array<{
             text: string; source: string; trust: string; subject: 'user' | 'bot'; subject_id: string;
           }>;
-          const entries = scoped.filter((entry) => entry.subject_id === 'global' || entry.subject_id === name);
+          const entries = scoped.filter((entry) => (entry.subject_id === 'global' || entry.subject_id === name)
+            && entry.source !== 'neo.intent');
           const localContext = entries.slice(0, 15)
             .map((entry) => '- ' + entry.text + ' [' + entry.source + '; ' + entry.trust + ']')
             .join('\n').slice(0, 2800);
+          // Standing intents ride along on every turn, whatever the query; only confirmed ones count.
+          const intents = (await invokeMemory('intents/list', { workspace: consumer.workspace }) as Array<{
+            text: string; trust: string; provenance: string;
+          }>).filter((entry) => entry.trust === 'confirmed').slice(0, 20);
+          // Provenance (a user id) stays in Neo; model providers only see that the intent is confirmed.
+          const intentContext = intents.length ? ('Standing intents:\n' + intents.map((entry) =>
+            '- ' + entry.text.replace(/\s+/g, ' ').slice(0, 300) + ' [standing intent; confirmed]').join('\n')).slice(0, 1500) : '';
           let honchoContext = '';
           if (kernel.hasRoute('/x/memory-honcho/context')) {
             try {
@@ -1281,7 +1435,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
                 '- honcho: ' + line.replace(/\s+/g, ' ').slice(0, 350)).join('\n');
             } catch { /* L2 outage cannot stop the turn */ }
           }
-          const context = [localContext, honchoContext].filter(Boolean).join('\n').slice(0, 6000);
+          const context = [intentContext, localContext, honchoContext].filter(Boolean).join('\n').slice(0, 6000);
           res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ context }));
         } else {
           const assistant = payload.assistant;

@@ -3,11 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "typecheck": "tsc --noEmit" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/dream.test.ts && tsx test/store.test.ts"
+  },
   "dependencies": {
     "@neometaharness/kernel": "workspace:*",
     "@neometaharness/db": "workspace:*",
-    "@neometaharness/vault": "workspace:*"
+    "@neometaharness/vault": "workspace:*",
+    "@neometaharness/contracts": "workspace:*"
   },
-  "devDependencies": { "@types/node": "22.18.13", "typescript": "5.9.3" }
+  "devDependencies": {
+    "@types/node": "22.18.13",
+    "typescript": "5.9.3",
+    "tsx": "4.20.6"
+  }
 }

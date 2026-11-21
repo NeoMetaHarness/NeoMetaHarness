@@ -2,6 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+/** The Inbox ask a fired schedule makes: it keeps the schedule's workspace (P6-10). */
+export function cronAsk(job: ScheduledAsk) {
+  return { text: job.text, botId: job.botId, mode: job.mode, requesterRole: job.requesterRole ?? 'member',
+    ...(job.workspace ? { workspace: job.workspace } : {}) };
+}
+
 export interface ScheduledAsk {
   id: string;
   schedule: string;
@@ -9,6 +15,8 @@ export interface ScheduledAsk {
   botId: string;
   mode: 'observe' | 'act';
   requesterRole?: 'member' | 'admin' | 'owner';
+  /** The workspace whose member scheduled it (server mode); fired items carry it. */
+  workspace?: string;
 }
 
 const LIMITS = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]] as const;

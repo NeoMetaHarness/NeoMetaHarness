@@ -85,10 +85,16 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.memory-local.update': 'member',
   'x.memory-local.delete': 'member',
   'x.memory-local.export': 'viewer',
+  'x.memory-local.intents.list': 'viewer',
+  'x.memory-local.intents.add': 'member',
+  'x.memory-local.intents.retract': 'member',
 
   // x.memory-honcho
   'x.memory-honcho.status': 'viewer',
   'x.memory-honcho.list': 'viewer',
+  // A dream only proposes; writing waits for the accept mode or an Inbox decision.
+  'x.memory-honcho.dream.run': 'member',
+  'x.memory-honcho.dream.last': 'viewer',
 
   // x.skills-registry
   'x.skills-registry.list': 'viewer',

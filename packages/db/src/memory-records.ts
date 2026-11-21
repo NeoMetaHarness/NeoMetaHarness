@@ -18,7 +18,7 @@ export interface MemoryEntry {
   updated_at: number;
 }
 
-export interface MemoryQuery { workspace: string; subjectId?: string; query?: string; limit?: number }
+export interface MemoryQuery { workspace: string; subjectId?: string; query?: string; limit?: number; source?: string }
 export interface MemoryDraft {
   workspace: string; subject: MemorySubject; subjectId: string;
   text: string; source: string; provenance: string; trust: MemoryTrust;
@@ -28,6 +28,10 @@ export interface MemoryDraft {
 export interface MemoryStore {
   list(query: MemoryQuery): Promise<MemoryEntry[]>;
   add(draft: MemoryDraft): Promise<MemoryEntry>;
+  /** One entry by id, whatever its age (optional: stores without random access omit it). */
+  get?(id: string): Promise<MemoryEntry | undefined>;
+  /** Every workspace that holds at least one entry (optional). */
+  workspaces?(): Promise<string[]>;
   update(id: string, changes: Partial<Pick<MemoryDraft, 'text' | 'trust' | 'source' | 'provenance'>>): Promise<MemoryEntry | undefined>;
   delete(id: string): Promise<boolean>;
   export(workspace: string): Promise<Record<'SOUL.md' | 'USER.md' | 'MEMORY.md', string>>;
@@ -63,9 +67,10 @@ export class MemoryRecords implements MemoryStore {
     }
   }
 
-  async list({ workspace, subjectId, query = '', limit = 100 }: MemoryQuery): Promise<MemoryEntry[]> {
+  async list({ workspace, subjectId, query = '', limit = 100, source }: MemoryQuery): Promise<MemoryEntry[]> {
     let statement = this.db.selectFrom('memory_entry').selectAll()
       .where('workspace', '=', workspace);
+    if (source) statement = statement.where('source', '=', source);
     if (subjectId) statement = statement.where('subject_id', 'in', ['global', subjectId]);
     const search = query.trim();
     if (search) {
@@ -78,6 +83,15 @@ export class MemoryRecords implements MemoryStore {
       } else statement = statement.where('text', 'like', `%${search}%`);
     }
     return statement.orderBy('updated_at', 'desc').limit(Math.min(Math.max(limit, 1), 500)).execute();
+  }
+
+  async workspaces(): Promise<string[]> {
+    const rows = await this.db.selectFrom('memory_entry').select('workspace').distinct().execute();
+    return rows.map((row) => row.workspace).sort();
+  }
+
+  async get(id: string): Promise<MemoryEntry | undefined> {
+    return this.db.selectFrom('memory_entry').selectAll().where('id', '=', id).executeTakeFirst();
   }
 
   async add(draft: MemoryDraft): Promise<MemoryEntry> {
