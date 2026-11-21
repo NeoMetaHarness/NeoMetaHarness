@@ -248,13 +248,13 @@ test('10 core auth & RBAC checks through real gateway HTTP/oRPC', async () => {
     const ownerDisable = await ownerClient.extensions.disable({ id: 'sample-ts' });
     assert.equal(ownerDisable.status, 'disabled');
 
-    // Channel credentials and connections are workspace configuration.
+    // Channel credentials and connections belong to the deployment.
     const channelInput = { profile: 'example' };
     const connectInput = { ...channelInput, platform: 'telegram' as const, token: 'test-credential' };
     const disconnectInput = { ...channelInput, platform: 'telegram' as const };
     await assert.rejects(unauthClient.x.channels.list(channelInput), (e: any) => e.code === 'UNAUTHORIZED');
-    await assert.rejects(viewerClient.x.channels.list(channelInput), (e: any) => e.code === 'NOT_FOUND');
-    await assert.rejects(viewerClient.x.channels.status(channelInput), (e: any) => e.code === 'NOT_FOUND');
+    await assert.rejects(viewerClient.x.channels.list(channelInput), (e: any) => e.code === 'FORBIDDEN');
+    await assert.rejects(viewerClient.x.channels.status(channelInput), (e: any) => e.code === 'FORBIDDEN');
     await assert.rejects(viewerClient.x.channels.connect(connectInput), (e: any) => e.code === 'FORBIDDEN');
     await assert.rejects(viewerClient.x.channels.disconnect(disconnectInput), (e: any) => e.code === 'FORBIDDEN');
     await assert.rejects(memberClient.x.channels.connect(connectInput), (e: any) => e.code === 'FORBIDDEN');

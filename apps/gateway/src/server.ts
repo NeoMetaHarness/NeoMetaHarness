@@ -59,6 +59,7 @@ import {
 import {
   authorize,
   canSeeDeploymentItems,
+  authorizeInboxAction,
   requireDeploymentOwner,
   getPolicy,
   ROUTE_POLICY,
@@ -477,15 +478,17 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
     return context.workspaceId;
   };
+  const isDeploymentInboxItem = (item: Pick<InboxItem, 'workspace' | 'source'>) =>
+    !item.workspace && (item.source === 'neo/binding' || item.source === 'neo/upstream' || item.source === 'neo/github');
   const inboxVisible = (item: Pick<InboxItem, 'workspace' | 'source'>, context: GatewayAuthContext, role = context.role) => {
     if (mode === 'desktop') return true;
     if (item.workspace) return Boolean(role && item.workspace === context.workspaceId);
-    return (item.source === 'neo/binding' || item.source === 'neo/upstream' || item.source === 'neo/github')
-      && canSeeDeploymentItems(context);
+    return isDeploymentInboxItem(item) && canSeeDeploymentItems(context);
   };
+  const isDeploymentSchedule = (job: { workspace?: string; botId: string; text: string }) =>
+    !job.workspace && job.botId === 'neo-system' && job.text === '@neo/upstream check';
   const scheduleVisible = (job: { workspace?: string; botId: string; text: string }, context: GatewayAuthContext) =>
-    inboxVisible(job, context) || (!job.workspace && job.botId === 'neo-system' && job.text === '@neo/upstream check'
-      && canSeeDeploymentItems(context));
+    inboxVisible(job, context) || (isDeploymentSchedule(job) && canSeeDeploymentItems(context));
   const ROLE_RANK = { viewer: 0, member: 1, admin: 2, owner: 3 } as const;
   /**
    * The caller's role now (null: no longer a member), never above the role the stream opened with. Long-lived
@@ -501,18 +504,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     return ROLE_RANK[held] < ROLE_RANK[context.role as keyof typeof ROLE_RANK] ? held : context.role;
   };
   /** The caller's item, or NOT_FOUND (another workspace's item is indistinguishable from a missing one). */
-  const inboxItem = async (id: string, context: GatewayAuthContext): Promise<InboxItem> => {
+  const inboxItemForAction = async (procedure: string, id: string, context: GatewayAuthContext) => {
     const item = (await invokeInbox('list', {}) as InboxItem[]).find((entry) => entry.id === id);
     if (!item || !inboxVisible(item, context)) throw new ORPCError('NOT_FOUND', { message: 'Inbox item not found' });
-    return item;
+    const role = authorizeInboxAction(procedure, context, isDeploymentInboxItem(item) ? 'deployment' : 'workspace');
+    return { item, role };
   };
   /** The caller's schedule, or NOT_FOUND (another workspace's schedule is indistinguishable from a missing one). */
-  const cronJob = async (id: string, context: GatewayAuthContext) => {
+  const authorizeCronJob = async (procedure: string, id: string, context: GatewayAuthContext) => {
     // Desktop keeps its old answers for unknown ids ({ deleted: false } and the like).
     if (mode === 'desktop') return;
     const job = (await invokeInbox('cron/list', {}) as { id: string; workspace?: string; botId: string; text: string }[]).find((entry) => entry.id === id);
     if (!job || !scheduleVisible(job, context)) throw new ORPCError('NOT_FOUND', { message: 'Schedule not found' });
-    return job;
+    authorizeInboxAction(procedure, context, isDeploymentSchedule(job) ? 'deployment' : 'workspace');
   };
   const memoryProvenance = (context: GatewayAuthContext): string => {
     const user = `user:${context.user?.id ?? 'unknown'}`;
@@ -649,18 +653,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
       },
       accept: os.inbox.accept.handler(async ({ input, context }) => {
-        authorize('inbox.accept', context);
+        authorizeInboxAction('inbox.accept', context);
+        const { item, role } = await inboxItemForAction('inbox.accept', input.id, context);
         // Accepting a Suggestion starts work: destructive work needs an admin or owner (as approvals do).
-        const item = await inboxItem(input.id, context);
-        if (item.destructive && context.role !== 'admin' && context.role !== 'owner') {
+        if (item.destructive && role !== 'admin' && role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Accepting destructive work requires admin or owner' });
         }
-        return invokeInbox('accept', { ...input, role: context.role }) as Promise<InboxItem>;
+        return invokeInbox('accept', { ...input, role }) as Promise<InboxItem>;
       }),
       dismiss: os.inbox.dismiss.handler(async ({ input, context }) => {
-        authorize('inbox.dismiss', context);
-        await inboxItem(input.id, context);
-        return invokeInbox('dismiss', { ...input, role: context.role }) as Promise<InboxItem>;
+        authorizeInboxAction('inbox.dismiss', context);
+        const { role } = await inboxItemForAction('inbox.dismiss', input.id, context);
+        return invokeInbox('dismiss', { ...input, role }) as Promise<InboxItem>;
       }),
       acceptMode: {
         get: os.inbox.acceptMode.get.handler(async ({ context }) => {
@@ -673,21 +677,21 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
       },
       reply: os.inbox.reply.handler(async ({ input, context }) => {
-        authorize('inbox.reply', context);
-        await inboxItem(input.id, context);
+        authorizeInboxAction('inbox.reply', context);
+        await inboxItemForAction('inbox.reply', input.id, context);
         return invokeInbox('reply', input) as Promise<InboxItem>;
       }),
       approval: { decide: os.inbox.approval.decide.handler(async ({ input, context }) => {
-        authorize('inbox.approval.decide', context);
-        const item = await inboxItem(input.id, context);
-        if ((item.approval?.destructive || item.source === 'neo/github') && context.role !== 'admin' && context.role !== 'owner') {
+        authorizeInboxAction('inbox.approval.decide', context);
+        const { item, role } = await inboxItemForAction('inbox.approval.decide', input.id, context);
+        if ((item.approval?.destructive || item.source === 'neo/github') && role !== 'admin' && role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Destructive approval requires admin or owner' });
         }
-        return invokeInbox('approval/decide', { ...input, role: context.role }) as Promise<InboxItem>;
+        return invokeInbox('approval/decide', { ...input, role }) as Promise<InboxItem>;
       }) },
       retry: os.inbox.retry.handler(async ({ input, context }) => {
-        authorize('inbox.retry', context);
-        await inboxItem(input.id, context);
+        authorizeInboxAction('inbox.retry', context);
+        await inboxItemForAction('inbox.retry', input.id, context);
         return invokeInbox('retry', input) as Promise<InboxItem>;
       }),
       upstream: {
@@ -753,14 +757,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           return jobs.filter((job) => scheduleVisible(job, context));
         }),
         delete: os.inbox.cron.delete.handler(async ({ input, context }) => {
-          authorize('inbox.cron.delete', context);
-          await cronJob(input.id, context);
+          authorizeInboxAction('inbox.cron.delete', context);
+          await authorizeCronJob('inbox.cron.delete', input.id, context);
           return invokeInbox('cron/delete', input) as Promise<{ deleted: boolean }>;
         }),
         fire: os.inbox.cron.fire.handler(async ({ input, context }) => {
-          authorize('inbox.cron.fire', context);
+          authorizeInboxAction('inbox.cron.fire', context);
           if (process.env.NODE_ENV !== 'test') throw new ORPCError('NOT_FOUND');
-          await cronJob(input.id, context);
+          await authorizeCronJob('inbox.cron.fire', input.id, context);
           return invokeInbox('cron/fire', input) as Promise<{ ok: boolean }>;
         }),
       },
@@ -902,35 +906,35 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           return invokeChannels('notification/resolve', input) as Promise<{ channelId: string }>;
         }) },
         list: os.x.channels.list.handler(async ({ input, context }) => {
-          requireViewer(context);
+          authorize('x.channels.list', context);
           return invokeChannels('list', input) as Promise<any>;
         }),
         connect: os.x.channels.connect.handler(async ({ input, context }) => {
-          requireAdminOrOwner(context);
+          authorize('x.channels.connect', context);
           return invokeChannels('connect', input) as Promise<{ connected: boolean }>;
         }),
         disconnect: os.x.channels.disconnect.handler(async ({ input, context }) => {
-          requireAdminOrOwner(context);
+          authorize('x.channels.disconnect', context);
           return invokeChannels('disconnect', input) as Promise<{ disconnected: boolean }>;
         }),
         status: os.x.channels.status.handler(async ({ input, context }) => {
-          requireViewer(context);
+          authorize('x.channels.status', context);
           return invokeChannels('status', input) as Promise<any>;
         }),
         senders: os.x.channels.senders.handler(async ({ input, context }) => {
-          requireAdminOrOwner(context);
+          authorize('x.channels.senders', context);
           return invokeChannels('senders', input) as Promise<any>;
         }),
         allow: os.x.channels.allow.handler(async ({ input, context }) => {
-          requireAdminOrOwner(context);
+          authorize('x.channels.allow', context);
           return invokeChannels('allow', input) as Promise<any>;
         }),
         revoke: os.x.channels.revoke.handler(async ({ input, context }) => {
-          requireAdminOrOwner(context);
+          authorize('x.channels.revoke', context);
           return invokeChannels('revoke', input) as Promise<any>;
         }),
         approve: os.x.channels.approve.handler(async ({ input, context }) => {
-          requireAdminOrOwner(context);
+          authorize('x.channels.approve', context);
           return invokeChannels('approve', input) as Promise<any>;
         }),
       },
@@ -1270,19 +1274,19 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             return invokeHermes('cron/create', input) as Promise<{ id: string }>;
           }),
           update: os.x['engine-hermes'].cron.update.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.cron.update', context);
             return invokeHermes('cron/update', input) as Promise<Record<string, unknown>>;
           }),
           pause: os.x['engine-hermes'].cron.pause.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.cron.pause', context);
             return invokeHermes('cron/pause', input) as Promise<Record<string, unknown>>;
           }),
           trigger: os.x['engine-hermes'].cron.trigger.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.cron.trigger', context);
             return invokeHermes('cron/trigger', input) as Promise<Record<string, unknown>>;
           }),
           history: os.x['engine-hermes'].cron.history.handler(async ({ input, context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.cron.history', context);
             return invokeHermes('cron/history', input) as Promise<{ runs: Record<string, unknown>[]; limit: number }>;
           }),
           delete: os.x['engine-hermes'].cron.delete.handler(async ({ input, context }) => {
@@ -1292,31 +1296,31 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         },
         kanban: {
           boards: os.x['engine-hermes'].kanban.boards.handler(async ({ context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.kanban.boards', context);
             return invokeHermes('kanban/boards', {}) as Promise<{ boards: Record<string, unknown>[]; current: string }>;
           }),
           createBoard: os.x['engine-hermes'].kanban.createBoard.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.kanban.createBoard', context);
             return invokeHermes('kanban/create-board', input) as Promise<Record<string, unknown>>;
           }),
           board: os.x['engine-hermes'].kanban.board.handler(async ({ input, context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.kanban.board', context);
             return invokeHermes('kanban/board', input) as Promise<{ columns: { name: string; tasks: Record<string, unknown>[] }[]; assignees: string[]; latest_event_id: number; now: number }>;
           }),
           create: os.x['engine-hermes'].kanban.create.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.kanban.create', context);
             return invokeHermes('kanban/create', input) as Promise<{ task: Record<string, unknown> | null }>;
           }),
           assign: os.x['engine-hermes'].kanban.assign.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.kanban.assign', context);
             return invokeHermes('kanban/assign', input) as Promise<{ task: Record<string, unknown> }>;
           }),
           task: os.x['engine-hermes'].kanban.task.handler(async ({ input, context }) => {
-            requireViewer(context);
+            authorize('x.engine-hermes.kanban.task', context);
             return invokeHermes('kanban/task', input) as Promise<{ task: Record<string, unknown>; events: unknown[]; runs: unknown[] }>;
           }),
           dispatch: os.x['engine-hermes'].kanban.dispatch.handler(async ({ input, context }) => {
-            requireMember(context);
+            authorize('x.engine-hermes.kanban.dispatch', context);
             return invokeHermes('kanban/dispatch', input) as Promise<Record<string, unknown>>;
           }),
         },

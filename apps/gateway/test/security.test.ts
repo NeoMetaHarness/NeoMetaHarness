@@ -167,9 +167,10 @@ test('SEC-05: authorization runs before the extension-availability check for eve
     // Admin-only route on a missing extension: a member is refused by policy, not told "not found".
     assert.equal((await fetch(`${base}/x/models/providers/delete`, json({ json: { id: 'openai' } }, as(member.token!)))).status, 403,
       'member hits policy before availability on an admin route');
-    // A route the member may call reports the missing extension only after authorization.
-    assert.equal((await fetch(`${base}/x/engine-hermes/profiles/create`, json({ json: { name: 'bot' } }, as(member.token!)))).status, 404,
-      'authorized member learns the extension is unavailable');
+    assert.equal((await fetch(`${base}/x/engine-hermes/profiles/create`, json({ json: { name: 'bot' } }, as(member.token!)))).status, 403,
+      'a workspace member cannot check availability of a deployment-owner route');
+    assert.equal((await fetch(`${base}/x/engine-hermes/profiles/create`, json({ json: { name: 'bot' } }, as(owner.token!)))).status, 404,
+      'deployment owner learns the extension is unavailable after authorization');
     // Owner on a missing extension: authorized, then 404.
     assert.equal((await fetch(`${base}/x/models/providers/delete`, json({ json: { id: 'openai' } }, as(owner.token!)))).status, 404);
     // Unknown procedure under a known prefix is still 404 for an authenticated caller.

@@ -9,6 +9,7 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
 import { extensionIntegrity } from '@neometaharness/kernel';
 import { unsealFixtureTree } from '../../../packages/kernel/test/upgrade-fixtures.js';
+import { getContractProcedurePaths } from '../src/policy.js';
 import { startGateway } from '../src/server.js';
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
@@ -18,7 +19,7 @@ const notFound = (error: unknown) => (error as { code?: string })?.code === 'NOT
 const backupInput = { out: 'fixture.neo', passphrase: 'fixture-passphrase' };
 const restoreInput = { archive: 'fixture.neo', dataDir: 'fixture-destination', passphrase: 'fixture-passphrase' };
 
-async function prepareFixture(mode: 'server' | 'desktop') {
+async function prepareFixture(mode: 'server' | 'desktop', withDeploymentRoutes = false) {
   const home = await mkdtemp(join(tmpdir(), 'neo-p114-'));
   const extensionsDir = join(home, 'bundled');
   const dataDir = join(home, 'data');
@@ -31,14 +32,43 @@ async function prepareFixture(mode: 'server' | 'desktop') {
       runtime: { type: 'cordis', entry: 'index.mjs' },
     }));
     await writeFile(join(dir, 'index.mjs'), `export default { activate(ctx) {
-      ctx.route('list', () => [{
+      const items = [{
         id: 'binding', source: 'neo/binding', text: 'Hermes binding fixture',
         botId: 'fake', mode: 'observe', status: 'suggestion', createdAt: 1, updatedAt: 1,
       }, {
         id: 'private-message', source: 'neo/channel', text: 'Private conversation from workspace B',
         botId: 'fake', mode: 'observe', status: 'suggestion', createdAt: 2, updatedAt: 2,
-      }]);
-      ctx.route('accept', ({ body }) => { throw new Error('Unexpected scripted accept: ' + body.id); });
+      }];
+      const notice = (id, source) => ({ ...items[0], id, source, destructive: true });
+      if (${withDeploymentRoutes}) {
+        items.push(notice('upstream', 'neo/upstream'), notice('github', 'neo/github'));
+        ctx.route('ask', ({ body }) => {
+          const item = { ...items[0], ...body, id: 'ask-' + items.length, source: 'neo/app' };
+          items.push(item);
+          return item;
+        });
+        const modes = new Map();
+        ctx.route('accept-mode/get', ({ body }) => ({ mode: modes.get(body.workspace) ?? 'observe' }));
+        ctx.route('accept-mode/set', ({ body }) => {
+          modes.set(body.workspace, body.mode);
+          return { mode: body.mode };
+        });
+        for (const [path, result] of Object.entries({
+          'github/configure': { ok: true },
+          'github/status': { repositories: [], mode: 'observe', hasToken: false, pausedUntil: null, stopped: false },
+          'github/poll': { checked: 2, created: 1, pausedUntil: null },
+          'github/pull-request': null,
+          'upstream/check': { checked: 2, drift: 1 },
+          'upstream/configure': { ok: true },
+          'upstream/status': { botId: null, lastCheckedAt: null, lastDrift: null, lastError: null },
+          'cron/list': [{ id: 'system-upstream', botId: 'neo-system', text: '@neo/upstream check', schedule: 'weekly', mode: 'observe' }],
+          'cron/delete': { deleted: true },
+        })) ctx.route(path, () => result);
+        for (const path of ['accept', 'dismiss', 'approval/decide', 'reply', 'retry']) {
+          ctx.route(path, ({ body }) => ({ ...items.find(item => item.id === body.id), text: path + ':' + (body.role ?? '') }));
+        }
+      }
+      ctx.route('list', () => items);
     } };`);
   }
   await writeExtension(join(extensionsDir, id), '1.0.0');
@@ -53,6 +83,37 @@ async function prepareFixture(mode: 'server' | 'desktop') {
     ctx.route('backup', ({ body }) => ({ out: body?.out ?? 'fixture.neo', files: 2, format: 1 }));
     ctx.route('restore', ({ body }) => ({ dataDir: body?.dataDir ?? 'fixture-destination', databaseFile: 'fixture.db', files: 2, format: 1 }));
   } };`);
+  if (withDeploymentRoutes) {
+    const scripted = {
+      channels: {
+        'list': { platforms: [] }, 'status': { platforms: [] },
+        'connect': { connected: true }, 'disconnect': { disconnected: true },
+        'senders': { senders: [] }, 'allow': { senders: [] }, 'revoke': { senders: [] },
+        'approve': { senderId: '15550123456', role: 'member' },
+        'notification/resolve': { channelId: 'scripted-notification' },
+      },
+      'engine-hermes': {
+        'profiles/list': { profiles: [{ name: 'scripted', path: '/fixture' }] },
+        'runs/start': { run_id: 'scripted-run' }, 'cron/list': [],
+        'cron/update': { id: 'scripted-job' }, 'kanban/create-board': { slug: 'scripted-board' },
+        'skills/list': [{ name: 'scripted-skill' }], 'kanban/boards': { boards: [], current: 'scripted' },
+      },
+      'skills-registry': {
+        'list': [], 'ceiling': { ceiling: 'suggest' }, 'ceiling/get': { ceiling: 'suggest' }, 'ceiling/set': { ceiling: 'auto-low' },
+        'evaluate': { status: 'passed', version: 1 },
+      },
+    };
+    for (const [extensionId, routes] of Object.entries(scripted)) {
+      const dir = join(extensionsDir, extensionId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'neo.extension.json'), JSON.stringify({
+        id: extensionId, version: '1.0.0', displayName: extensionId, runtime: { type: 'cordis', entry: 'index.mjs' },
+      }));
+      await writeFile(join(dir, 'index.mjs'), `export default { activate(ctx) {
+        for (const [path, result] of Object.entries(${JSON.stringify(routes)})) ctx.route(path, () => result);
+      } };`);
+    }
+  }
   const upgrade = { id, directory: candidate, integrity: await extensionIntegrity(candidate) };
   const options = {
     databaseFile: join(dataDir, 'gateway.db'), dataDir, extensionsDir, mode,
@@ -73,7 +134,9 @@ async function prepareFixture(mode: 'server' | 'desktop') {
     await rm(home, { recursive: true, force: true, maxRetries: 5 });
   }
   const base = () => `http://127.0.0.1:${gateway!.port}`;
-  const raw = (path: string, token: string) => fetch(base() + path, { headers: bearer(token) });
+  const raw = (path: string, token: string, input?: unknown) => fetch(base() + path, input === undefined
+    ? { headers: bearer(token) }
+    : { method: 'POST', headers: { ...bearer(token), 'content-type': 'application/json' }, body: JSON.stringify({ json: input }) });
   const client = (token: string) => createORPCClient<ContractRouterClient<typeof neoContract>>(
     new RPCLink({ url: base(), headers: bearer(token) }),
   );
@@ -90,7 +153,7 @@ async function prepareFixture(mode: 'server' | 'desktop') {
   function createOrg(name: string, token: string) {
     return authPost('organization/create', org(name), token);
   }
-  return { id, upgrade, start, stop, cleanup, client, raw, signup, createOrg };
+  return { id, upgrade, start, stop, cleanup, client, raw, signup, createOrg, authPost };
 }
 
 test('P1-14 server: first identity owns the deployment, and transfer survives restart', async () => {
@@ -202,5 +265,120 @@ test('P1-14 desktop: the bootstrapped owner keeps Inbox and kernel access', asyn
       (error: unknown) => (error as { code?: string }).code === 'NOT_FOUND');
     assert.equal((await client.extensions.uninstall({ id: fixture.id })).version, '1.0.0');
     console.log('P1-14_DESKTOP PASS bootstrap, Inbox, and extension lifecycle remain available');
+  } finally { await fixture.cleanup(); }
+});
+
+test('P1-14 server: deployment routes work with a workspace viewer role', async () => {
+  const fixture = await prepareFixture('server', true);
+  try {
+    const gateway = await fixture.start();
+    const founder = await fixture.signup('founder@routes.test');
+    const admin = await fixture.signup('admin@routes.test');
+    const owner = await fixture.signup('viewer@routes.test');
+    const response = await fixture.createOrg('WorkspaceRoutes', founder.token);
+    assert.equal(response.status, 200);
+    const workspace = await response.json() as { id: string };
+    for (const [user, role] of [[admin, 'admin'], [owner, 'viewer']] as const) {
+      await gateway.auth.api.addMember({
+        body: { organizationId: workspace.id, userId: user.user.id, role },
+        headers: new Headers(bearer(founder.token)),
+      });
+      assert.equal((await fixture.authPost('organization/set-active', { organizationId: workspace.id }, user.token)).status, 200);
+    }
+    const setup = fixture.client(founder.token);
+    const workspaceAdmin = fixture.client(admin.token);
+    const deployment = fixture.client(owner.token);
+    await setup.system.transferDeploymentOwner({ userId: owner.user.id });
+
+    const notify = { profile: 'scripted', senderId: '15550123456' };
+    const ask = { botId: 'fake', text: 'Fixture request' };
+    const deniedRoutes = [
+      ...getContractProcedurePaths(neoContract.x.channels, 'x.channels'),
+      ...getContractProcedurePaths(neoContract.x['engine-hermes'], 'x.engine-hermes'),
+      ...getContractProcedurePaths(neoContract.inbox.github, 'inbox.github'),
+      ...getContractProcedurePaths(neoContract.inbox.upstream, 'inbox.upstream'),
+      ...['evaluate', 'override', 'import', 'sync', 'rollback', 'assign', 'checks.set', 'autonomy.set',
+        'ceiling.set', 'hub.scan', 'hub.approve', 'hub.install'].map((path) => 'x.skills-registry.' + path),
+    ];
+    for (const route of deniedRoutes) {
+      assert.equal((await fixture.raw('/' + route.replaceAll('.', '/'), admin.token, {})).status, 403, route);
+    }
+    await assert.rejects(deployment.x['engine-hermes'].profiles.list(), notFound);
+    await assert.rejects(workspaceAdmin.inbox.ask({ ...ask, notify }), forbidden);
+    await assert.rejects(deployment.inbox.ask({ ...ask, notify }), notFound);
+
+    for (const id of [fixture.id, 'channels', 'engine-hermes', 'skills-registry']) {
+      assert.equal((await setup.extensions.enable({ id })).status, 'running');
+    }
+
+    const channels = deployment.x.channels;
+    const whatsapp = { profile: notify.profile, platform: 'whatsapp' } as const;
+    assert.deepEqual(await channels.list(notify), { platforms: [] });
+    assert.deepEqual(await channels.status(notify), { platforms: [] });
+    assert.deepEqual(await channels.connect({ ...whatsapp, botId: ask.botId }), { connected: true });
+    assert.deepEqual(await channels.disconnect(whatsapp), { disconnected: true });
+    assert.deepEqual(await channels.senders(whatsapp), { senders: [] });
+    assert.deepEqual(await channels.allow({ ...notify, ...whatsapp, role: 'member' }), { senders: [] });
+    assert.deepEqual(await channels.revoke({ ...notify, ...whatsapp }), { senders: [] });
+    assert.deepEqual(await channels.approve({ ...whatsapp, code: 'ABCDEF23', role: 'member' }),
+      { senderId: notify.senderId, role: 'member' });
+    assert.deepEqual(await channels.notification.resolve({ ...notify, botId: ask.botId }), { channelId: 'scripted-notification' });
+    await assert.rejects(workspaceAdmin.x.channels.list(notify), forbidden);
+    await assert.rejects(workspaceAdmin.inbox.ask({ ...ask, notify }), forbidden);
+    const ordinaryItem = await deployment.inbox.ask({ ...ask, notify });
+    assert.equal(ordinaryItem.workspace, workspace.id);
+    assert.equal(ordinaryItem.notification?.channelId, 'scripted-notification');
+    assert.equal((await workspaceAdmin.inbox.ask(ask)).workspace, workspace.id);
+    await assert.rejects(deployment.inbox.dismiss({ id: ordinaryItem.id }), forbidden);
+    assert.equal((await workspaceAdmin.inbox.dismiss({ id: ordinaryItem.id })).text, 'dismiss:admin');
+    assert.deepEqual(await workspaceAdmin.inbox.acceptMode.set({ mode: 'act-with-approval' }), { mode: 'act-with-approval' });
+    assert.deepEqual(await deployment.inbox.acceptMode.get(), { mode: 'act-with-approval' });
+    await assert.rejects(deployment.inbox.acceptMode.set({ mode: 'observe' }), forbidden);
+
+    const hermes = deployment.x['engine-hermes'];
+    assert.equal((await hermes.profiles.list()).profiles[0]?.name, 'scripted');
+    assert.deepEqual(await hermes.runs.start({ profile: notify.profile, input: 'fixture' }), { run_id: 'scripted-run' });
+    assert.deepEqual(await hermes.cron.list({}), []);
+    assert.deepEqual(await hermes.cron.update({ id: 'scripted-job', name: 'fixture' }), { id: 'scripted-job' });
+    assert.deepEqual(await hermes.kanban.createBoard({ slug: 'scripted-board' }), { slug: 'scripted-board' });
+    assert.deepEqual(await hermes.skills.list(notify), [{ name: 'scripted-skill' }]);
+    assert.equal((await hermes.kanban.boards()).current, 'scripted');
+    const skills = deployment.x['skills-registry'];
+    assert.deepEqual(await skills.evaluate({ name: 'scripted/skill' }), { status: 'passed', version: 1 });
+    assert.deepEqual(await skills.ceiling.set({ engine: 'hermes', targetId: 'scripted', ceiling: 'auto-low' }), { ceiling: 'auto-low' });
+    assert.deepEqual(await workspaceAdmin.x['skills-registry'].list(), []);
+    assert.deepEqual(await workspaceAdmin.x['skills-registry'].ceiling.get({ engine: 'hermes', targetId: 'scripted' }), { ceiling: 'suggest' });
+
+    const github = deployment.inbox.github;
+    assert.deepEqual(await github.configure({ repositories: [] }), { ok: true });
+    assert.equal((await github.status()).mode, 'observe');
+    assert.equal((await github.poll()).created, 1);
+    assert.equal(await github.pullRequest({ repo: 'fixture/repo', branch: 'main', commit: 'a'.repeat(40) }), null);
+    const upstream = deployment.inbox.upstream;
+    assert.deepEqual(await upstream.configure({ botId: null }), { ok: true });
+    assert.equal((await upstream.status()).botId, null);
+    assert.equal((await upstream.check()).drift, 1);
+    await assert.rejects(workspaceAdmin.inbox.github.status(), forbidden);
+    await assert.rejects(workspaceAdmin.inbox.upstream.check(), forbidden);
+    assert.deepEqual((await deployment.inbox.list()).slice(0, 3).map(item => item.id), ['binding', 'upstream', 'github']);
+    assert.equal((await workspaceAdmin.inbox.list()).some(item => item.id === 'github' || item.id === 'upstream'), false);
+
+    const accept = { id: 'upstream' };
+    const approval = { id: 'github', decision: 'approve', reason: 'fixture review' } as const;
+    for (const [inbox, isOwner] of [[workspaceAdmin.inbox, false], [deployment.inbox, true]] as const) {
+      const actions = [
+        () => inbox.accept(accept), () => inbox.dismiss({ id: 'github' }), () => inbox.approval.decide(approval),
+        () => inbox.reply({ id: 'upstream', answer: 'fixture reply' }), () => inbox.retry({ id: 'github' }),
+      ];
+      if (!isOwner) {
+        for (const action of actions) await assert.rejects(action(), notFound);
+      } else {
+        assert.deepEqual(await Promise.all(actions.map(async (action) => (await action()).text)),
+          ['accept:owner', 'dismiss:owner', 'approval/decide:owner', 'reply:', 'retry:']);
+      }
+    }
+    await assert.rejects(workspaceAdmin.inbox.cron.delete({ id: 'system-upstream' }), notFound);
+    assert.deepEqual(await deployment.inbox.cron.delete({ id: 'system-upstream' }), { deleted: true });
+    console.log('P1-14_DEPLOYMENT_ROUTES PASS all groups denied before availability; owner with viewer role can manage shared resources');
   } finally { await fixture.cleanup(); }
 });

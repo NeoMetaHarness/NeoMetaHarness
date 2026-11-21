@@ -15,33 +15,9 @@ export function destructiveToolApproval(tool: string, detail: string): boolean {
     .test(`${tool} ${detail}`);
 }
 
-export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
-  'system.transferDeploymentOwner': 'deployment-owner',
-  'system.backup': 'deployment-owner',
-  'system.restore': 'deployment-owner',
-  'x.metrics.summary': 'admin',
-  'x.coding-workflow.register': 'admin',
-  'x.coding-workflow.switch': 'member',
-  'x.coding-workflow.worktree': 'member',
-  'x.coding-workflow.terminal.open': 'member',
-  'x.coding-workflow.terminal.output': 'viewer',
-  'x.coding-workflow.terminal.run': 'member',
-  'x.coding-workflow.prepare': 'member',
-  'onboarding.get': 'admin',
-  'onboarding.complete': 'admin',
-  // x.engine-t3
-  'x.engine-t3.create': 'member',
-  'x.engine-t3.send': 'member',
-  'x.engine-t3.events': 'viewer',
-  'x.engine-t3.approval': 'member',
-  'x.engine-t3.settle': 'member',
-  'x.engine-t3.stop': 'member',
-  'x.engine-t3.diff': 'viewer',
-  'x.engine-t3.rollback': 'member',
-  'x.engine-t3.providers.list': 'viewer',
-  'x.engine-t3.threads.list': 'viewer',
-
-  // x.engine-hermes
+/** Shared resources require deployment ownership on a server. Keep the original desktop roles. */
+const DEPLOYMENT_PROCEDURE_DESKTOP_POLICY: Readonly<Record<string, PolicyLevel>> = {
+  // Hermes runtime, profiles, and dashboard
   'x.engine-hermes.skills.list': 'viewer',
   'x.engine-hermes.skills.hub': 'viewer',
   'x.engine-hermes.skills.preview': 'viewer',
@@ -72,6 +48,65 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'x.engine-hermes.kanban.assign': 'member',
   'x.engine-hermes.kanban.task': 'viewer',
   'x.engine-hermes.kanban.dispatch': 'member',
+  // Channels and sender allowlists
+  'x.channels.notification.resolve': 'member',
+  'x.channels.list': 'viewer',
+  'x.channels.status': 'viewer',
+  'x.channels.connect': 'admin',
+  'x.channels.disconnect': 'admin',
+  'x.channels.senders': 'admin',
+  'x.channels.allow': 'admin',
+  'x.channels.revoke': 'admin',
+  'x.channels.approve': 'admin',
+  // GitHub source and upstream routine
+  'inbox.upstream.check': 'admin',
+  'inbox.github.pullRequest': 'viewer',
+  'inbox.upstream.configure': 'admin',
+  'inbox.upstream.status': 'viewer',
+  'inbox.github.configure': 'admin',
+  'inbox.github.status': 'viewer',
+  'inbox.github.poll': 'admin',
+  // Shared Skills Registry mutations
+  'x.skills-registry.import': 'member',
+  'x.skills-registry.sync': 'member',
+  'x.skills-registry.rollback': 'member',
+  'x.skills-registry.assign': 'admin',
+  'x.skills-registry.checks.set': 'admin',
+  'x.skills-registry.autonomy.set': 'admin',
+  'x.skills-registry.evaluate': 'admin',
+  'x.skills-registry.override': 'admin',
+  'x.skills-registry.ceiling.set': 'admin',
+  'x.skills-registry.hub.scan': 'member',
+  'x.skills-registry.hub.approve': 'admin',
+  'x.skills-registry.hub.install': 'member',
+};
+
+export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
+  ...Object.fromEntries(Object.keys(DEPLOYMENT_PROCEDURE_DESKTOP_POLICY).map((path) => [path, 'deployment-owner'])),
+  'system.transferDeploymentOwner': 'deployment-owner',
+  'system.backup': 'deployment-owner',
+  'system.restore': 'deployment-owner',
+  'x.metrics.summary': 'admin',
+  'x.coding-workflow.register': 'admin',
+  'x.coding-workflow.switch': 'member',
+  'x.coding-workflow.worktree': 'member',
+  'x.coding-workflow.terminal.open': 'member',
+  'x.coding-workflow.terminal.output': 'viewer',
+  'x.coding-workflow.terminal.run': 'member',
+  'x.coding-workflow.prepare': 'member',
+  'onboarding.get': 'admin',
+  'onboarding.complete': 'admin',
+  // x.engine-t3
+  'x.engine-t3.create': 'member',
+  'x.engine-t3.send': 'member',
+  'x.engine-t3.events': 'viewer',
+  'x.engine-t3.approval': 'member',
+  'x.engine-t3.settle': 'member',
+  'x.engine-t3.stop': 'member',
+  'x.engine-t3.diff': 'viewer',
+  'x.engine-t3.rollback': 'member',
+  'x.engine-t3.providers.list': 'viewer',
+  'x.engine-t3.threads.list': 'viewer',
 
   // x.engine-dsh
   'x.engine-dsh.create': 'member',
@@ -102,34 +137,10 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   // x.skills-registry
   'x.skills-registry.list': 'viewer',
   'x.skills-registry.get': 'viewer',
-  'x.skills-registry.import': 'member',
-  'x.skills-registry.sync': 'member',
   'x.skills-registry.versions': 'viewer',
   'x.skills-registry.diff': 'viewer',
-  'x.skills-registry.rollback': 'member',
-  'x.skills-registry.assign': 'admin',
   'x.skills-registry.assignments': 'viewer',
-  'x.skills-registry.checks.set': 'admin',
-  'x.skills-registry.autonomy.set': 'admin',
-  'x.skills-registry.evaluate': 'admin',
-  'x.skills-registry.override': 'admin',
   'x.skills-registry.ceiling.get': 'viewer',
-  'x.skills-registry.ceiling.set': 'admin',
-  'x.skills-registry.hub.scan': 'member',
-  'x.skills-registry.hub.approve': 'admin',
-  'x.skills-registry.hub.install': 'member',
-
-  // x.channels (channel tokens are workspace config)
-  'x.channels.notification.resolve': 'member',
-  'x.channels.list': 'viewer',
-  'x.channels.status': 'viewer',
-  'x.channels.connect': 'admin',
-  'x.channels.disconnect': 'admin',
-  // WhatsApp sender allowlist: phone numbers are personal data, roles are authority.
-  'x.channels.senders': 'admin',
-  'x.channels.allow': 'admin',
-  'x.channels.revoke': 'admin',
-  'x.channels.approve': 'admin',
 
   // x.models
   'x.models-router-panda.settings.get': 'admin',
@@ -234,13 +245,6 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'inbox.reply': 'member',
   'inbox.approval.decide': 'member',
   'inbox.retry': 'member',
-  'inbox.upstream.check': 'admin',
-  'inbox.github.pullRequest': 'viewer',
-  'inbox.upstream.configure': 'admin',
-  'inbox.upstream.status': 'viewer',
-  'inbox.github.configure': 'admin',
-  'inbox.github.status': 'viewer',
-  'inbox.github.poll': 'admin',
   'inbox.events': 'viewer',
   'inbox.cron.create': 'member',
   'inbox.cron.list': 'viewer',
@@ -285,7 +289,8 @@ export function getPolicy(path: string): PolicyLevel | undefined {
 
 export function authorize(path: string, context?: GatewayAuthContext, { workspaceOnly = false } = {}): void {
   if ((path === 'inbox.list' || path === 'inbox.events' || path === 'inbox.cron.list') && canSeeDeploymentItems(context)) return;
-  const level = getPolicy(path);
+  const level = (context?.deploymentMode === 'desktop' && Object.hasOwn(DEPLOYMENT_PROCEDURE_DESKTOP_POLICY, path))
+    ? DEPLOYMENT_PROCEDURE_DESKTOP_POLICY[path] : getPolicy(path);
   if (!level) {
     throw new ORPCError('INTERNAL_SERVER_ERROR', {
       message: `No authorization policy configured for route: ${path}`,
@@ -327,6 +332,21 @@ export function authorize(path: string, context?: GatewayAuthContext, { workspac
   }
 }
 
+/** Deployment owners may reach the lookup. Workspace items still require the normal role after lookup. */
+export function authorizeInboxAction(
+  path: string, context?: GatewayAuthContext, scope?: 'deployment' | 'workspace',
+): GatewayAuthContext['role'] {
+  if (context?.deploymentMode === 'server') {
+    if (scope === 'deployment') {
+      requireDeploymentOwner(context);
+      return 'owner';
+    }
+    if (!scope && canSeeDeploymentItems(context)) return context.role;
+  }
+  authorize(path, context);
+  return context!.role;
+}
+
 export function canSeeDeploymentItems(context?: GatewayAuthContext): boolean {
   return Boolean(context?.user && context.session && context.isDeploymentOwner?.());
 }
@@ -353,6 +373,11 @@ export function getContractProcedurePaths(contract: any, prefix = ''): string[] 
   return paths;
 }
 
+const INBOX_ITEM_ACTIONS = new Set([
+  'inbox.accept', 'inbox.dismiss', 'inbox.reply', 'inbox.approval.decide', 'inbox.retry',
+  'inbox.cron.delete', 'inbox.cron.fire',
+]);
+
 /**
  * oRPC middleware registered on the implementer, so it runs before input
  * validation (SEC-13): a caller without the required role is refused by policy
@@ -363,6 +388,9 @@ export function policyMiddleware({ context, path, next }: {
   context: GatewayAuthContext; path: readonly string[]; next: () => any;
 }) {
   const procedure = path.join('.');
-  if (procedure in CONTRACT_POLICY) authorize(procedure, context);
+  if (procedure in CONTRACT_POLICY) {
+    if (INBOX_ITEM_ACTIONS.has(procedure)) authorizeInboxAction(procedure, context);
+    else authorize(procedure, context);
+  }
   return next();
 }
