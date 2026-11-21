@@ -9,8 +9,10 @@ import {
 const MAX_AUDIO_BYTES = 8_000_000;
 const MAX_TEXT_REQUEST_BYTES = 64_000;
 const MAX_TRANSCRIPT_BYTES = 128_000;
-const MAX_JSON_AUDIO_BYTES = 1_000_000;
-const MAX_RESPONSE_AUDIO_BYTES = 1_000_000;
+// The 15,000-character TTS input can produce long audio. Allow up to 64 MiB
+// of encoded audio and its full base64 representation plus a JSON envelope.
+const MAX_RESPONSE_AUDIO_BYTES = 64 * 1024 * 1024;
+const MAX_JSON_AUDIO_BYTES = Math.ceil(MAX_RESPONSE_AUDIO_BYTES / 3) * 4 + 64 * 1024;
 const RATE_WINDOW_MS = 60_000;
 const DEFAULT_REQUESTS_PER_MINUTE = 12;
 
@@ -80,10 +82,14 @@ export class XaiVoiceService implements NeoVoiceService {
       ? (async (url: string | URL | Request, init?: RequestInit) =>
         http.request(String(url), init ?? {})) as typeof fetch
       : undefined;
-    this.guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected);
+    this.sttFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected,
+      { maxResponseBytes: MAX_TRANSCRIPT_BYTES });
+    this.ttsFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected,
+      { maxResponseBytes: MAX_JSON_AUDIO_BYTES });
   }
 
-  private readonly guardedFetch: typeof fetch;
+  private readonly sttFetch: typeof fetch;
+  private readonly ttsFetch: typeof fetch;
 
   get configured(): boolean { return this.active && Boolean(this.settings.apiKey?.trim()); }
   dispose(): void {
@@ -125,7 +131,7 @@ export class XaiVoiceService implements NeoVoiceService {
     if (contentType) headers['Content-Type'] = contentType;
     let response: Response;
     try {
-      response = await this.guardedFetch(new URL(path, origin.origin), {
+      response = await (path === '/v1/stt' ? this.sttFetch : this.ttsFetch)(new URL(path, origin.origin), {
         method: 'POST', headers, body, signal: AbortSignal.timeout(30_000), redirect: 'error',
       });
     } catch {

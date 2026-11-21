@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -47,6 +49,50 @@ async function startFake() {
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   return { server, port: address.port, hits };
+}
+
+async function assertNativeMultipartStt(home: string): Promise<void> {
+  const certDir = join(home, 'native-https');
+  await mkdir(certDir);
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+    '-subj', '/CN=127.0.0.1', '-keyout', join(certDir, 'key.pem'),
+    '-out', join(certDir, 'cert.pem')], { stdio: 'ignore' });
+  let nativeHits = 0;
+  const server = createHttpsServer({
+    key: await readFile(join(certDir, 'key.pem')),
+    cert: await readFile(join(certDir, 'cert.pem')),
+  }, async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    const body = Buffer.concat(chunks).toString();
+    assert.equal(req.url, '/v1/stt');
+    assert.equal(req.headers.authorization, `Bearer ${key}`);
+    assert.match(req.headers['content-type'] || '', /multipart\/form-data; boundary=/);
+    assert.match(body, /grok-voice-transcribe-2\.0/);
+    assert.match(body, /audio\.mp3/);
+    assert.match(body, /FAKE_MP3_BYTES/);
+    nativeHits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ text: 'Native transcript' }));
+  });
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const { port } = server.address() as { port: number };
+  const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  try {
+    const native = new XaiVoiceService({ apiKey: key,
+      baseUrl: `https://127.0.0.1:${port}`, allowPrivateNetwork: true });
+    assert.equal((await native.transcribe({
+      audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg',
+    })).text, 'Native transcript');
+    assert.equal(nativeHits, 1);
+    native.dispose();
+  } finally {
+    if (previous === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  }
 }
 
 async function startGateway(home: string, fakePort: number) {
@@ -97,6 +143,7 @@ async function main() {
     const independent = new XaiVoiceService({ apiKey: key }, injected);
     assert.equal((await independent.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' })).text, 'Injected transcript');
     assert.deepEqual(calls, ['/v1/stt']);
+    await assertNativeMultipartStt(home);
     await assert.rejects(independent.synthesize({ text: 'x'.repeat(15_001) }), /too_big|<=15000|15000|maximum|less than or equal/i);
     for (const blockedIp of ['127.0.0.1', '169.254.169.254', '10.0.0.1', '192.168.0.1', '::1']) {
       const host = blockedIp.includes(':') ? `[${blockedIp}]` : blockedIp;
@@ -121,9 +168,26 @@ async function main() {
     const html = new XaiVoiceService({ apiKey: key }, { request: async () =>
       new Response('<html>private body</html>', { headers: { 'content-type': 'text/html' } }) });
     await assert.rejects(html.synthesize({ text: 'hi' }), /invalid audio type/);
+    const longAudio = Buffer.alloc(1_500_000, 7);
+    const largeBinary = new XaiVoiceService({ apiKey: key }, { request: async () =>
+      new Response(longAudio, { headers: { 'content-type': 'audio/mpeg' } }) });
+    assert.equal((await largeBinary.synthesize({ text: 'x'.repeat(15_000) })).audioBase64,
+      longAudio.toString('base64'));
+    const largeJson = new XaiVoiceService({ apiKey: key }, { request: async () =>
+      new Response(JSON.stringify({ audio: longAudio.toString('base64'), content_type: 'audio/mpeg' }),
+        { headers: { 'content-type': 'application/json' } }) });
+    assert.equal((await largeJson.synthesize({ text: 'x'.repeat(15_000) })).audioBase64,
+      longAudio.toString('base64'));
+    const transcriptOverflow = new XaiVoiceService({ apiKey: key }, { request: async () =>
+      new Response(Buffer.alloc(128_001), { headers: { 'content-type': 'application/json' } }) });
+    await assert.rejects(transcriptOverflow.transcribe({
+      audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg',
+    }), /request failed|too large/);
     const oversize = new XaiVoiceService({ apiKey: key }, { request: async () =>
-      new Response(new Uint8Array(8_000_001), { headers: { 'content-type': 'audio/mpeg' } }) });
-    await assert.rejects(oversize.synthesize({ text: 'hi' }), /response too large/);
+      new Response(new Uint8Array(1), { headers: {
+        'content-type': 'audio/mpeg', 'content-length': '100000000',
+      } }) });
+    await assert.rejects(oversize.synthesize({ text: 'hi' }), /request failed|too large/);
     independent.dispose();
     await assert.rejects(independent.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' }), /disabled/);
 
