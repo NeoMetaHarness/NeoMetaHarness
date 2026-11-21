@@ -66,6 +66,9 @@ const DEPLOYMENT_PROCEDURE_DESKTOP_POLICY: Readonly<Record<string, PolicyLevel>>
   'inbox.github.configure': 'admin',
   'inbox.github.status': 'viewer',
   'inbox.github.poll': 'admin',
+  // Extension lifecycle
+  'extensions.enable': 'admin',
+  'extensions.disable': 'admin',
   // Shared Skills Registry mutations
   'x.skills-registry.import': 'member',
   'x.skills-registry.sync': 'member',
@@ -170,8 +173,6 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'extensions.list': 'viewer',
   'extensions.upgrade': 'deployment-owner',
   'extensions.uninstall': 'deployment-owner',
-  'extensions.enable': 'admin',
-  'extensions.disable': 'admin',
 
   // settings
   'settings.get': 'viewer',
@@ -296,9 +297,9 @@ export function authorize(path: string, context?: GatewayAuthContext, { workspac
       message: `No authorization policy configured for route: ${path}`,
     });
   }
-  // Vault scope is checked in the handler. The deployment owner may reach
-  // that check independently of workspace membership.
-  if (!workspaceOnly && context?.deploymentMode === 'server' && path.startsWith('vault.') && canSeeDeploymentItems(context)) return;
+  // The handler checks the settings or vault scope once it has the input.
+  if (!workspaceOnly && context?.deploymentMode === 'server'
+    && (path === 'settings.set' || path.startsWith('vault.')) && canSeeDeploymentItems(context)) return;
 
   switch (level) {
     case 'viewer':
@@ -330,6 +331,20 @@ export function authorize(path: string, context?: GatewayAuthContext, { workspac
       });
     }
   }
+}
+
+// These extensions serve one deployment-wide runtime or registry. Kernel settings
+// secrets use the same extension ID as the engine vault subject.
+const DEPLOYMENT_SCOPED_EXTENSIONS = new Set(['engine-hermes', 'channels', 'engine-superagent', 'skills-registry']);
+
+export function hasDeploymentSettings(extension: string): boolean {
+  return DEPLOYMENT_SCOPED_EXTENSIONS.has(extension);
+}
+
+export function authorizeDeploymentSettingsWrite(extension: string | undefined, context?: GatewayAuthContext): boolean {
+  if (context?.deploymentMode !== 'server' || !extension || !hasDeploymentSettings(extension)) return false;
+  requireDeploymentOwner(context);
+  return true;
 }
 
 /** Deployment owners may reach the lookup. Workspace items still require the normal role after lookup. */

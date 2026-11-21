@@ -60,6 +60,8 @@ import {
   authorize,
   canSeeDeploymentItems,
   authorizeInboxAction,
+  authorizeDeploymentSettingsWrite,
+  hasDeploymentSettings,
   requireDeploymentOwner,
   getPolicy,
   ROUTE_POLICY,
@@ -339,6 +341,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     },
   }, dataDir, process.env.NMH_EXTENSION_PYTHON, {
     fallbackWorkspace: mode === 'desktop' ? desktopWorkspace : null,
+    deploymentSettings: mode === 'server' ? hasDeploymentSettings : undefined,
     // Server mode: pre-P1-13 settings belong to the bootstrap workspace (the first one created, whose owner set
     // the deployment up). With no workspace yet the legacy rows wait; the first access after it appears moves them.
     legacyWorkspace: bootstrapWorkspace,
@@ -352,11 +355,15 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (operation !== 'list' && name === MEMORY_TOKEN) {
       throw new ORPCError('FORBIDDEN', { message: 'Engine memory tokens are managed by the Gateway' });
     }
+    // Settings secrets use a bare extension ID. Profile credentials in the
+    // deployment vault are covered by the instance-scope check below.
+    const deploymentSettingsWrite = operation !== 'list' && scope?.kind === 'engine'
+      && authorizeDeploymentSettingsWrite(scope.subjectId, context);
     // An extension's secret settings live at its engine scope (P1-13). Writing them is changing that extension's
     // settings, so it needs settings.set (admin) in the scope's workspace, whatever vault.put allows elsewhere.
     const settingsSecret = operation !== 'list' && scope?.kind === 'engine' && !!scope.subjectId
       && kernel.hasExtension(scope.subjectId);
-    if (scope?.workspaceId) {
+    if (!deploymentSettingsWrite && scope?.workspaceId) {
       const kysely = auth.kysely;
       const target = await kysely.selectFrom('organization').select('id')
         .where('id', '=', scope.workspaceId).executeTakeFirst();
@@ -1371,13 +1378,16 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         };
       }),
       set: os.settings.set.handler(async ({ input, context }) => {
-        authorize('settings.set', context);
+        const deploymentSettingsWrite = authorizeDeploymentSettingsWrite(input?.extension, context);
+        if (!deploymentSettingsWrite) {
+          authorize('settings.set', context, { workspaceOnly: true });
+        }
         if (!input?.extension) throw new ORPCError('BAD_REQUEST', { message: 'extension required' });
         if (!kernel.hasExtension(input.extension)) {
           throw new ORPCError('NOT_FOUND', { message: `Extension ${input.extension} not found` });
         }
         const workspace = settingsWorkspace(context);
-        if (!workspace) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
+        if (!workspace && !deploymentSettingsWrite) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
         let sanitized: Record<string, unknown>;
         try {
           sanitized = await kernel.saveSettings(input.extension, input.values, workspace);
@@ -1483,7 +1493,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorize('events.subscribe', context);
         // Settings changes are per workspace (P1-13): a server-mode subscriber only hears its own workspace's.
         for await (const event of kernel.events.subscribe(input.since, signal)) {
-          if (event.type === 'settings.change' && mode !== 'desktop' && event.workspaceId !== context.workspaceId) continue;
+          if (event.type === 'settings.change' && mode !== 'desktop') {
+            const visible = hasDeploymentSettings(event.extension)
+              ? canSeeDeploymentItems(context) : event.workspaceId === context.workspaceId;
+            if (!visible) continue;
+          }
           yield event;
         }
       }),

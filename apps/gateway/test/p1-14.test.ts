@@ -25,10 +25,15 @@ async function prepareFixture(mode: 'server' | 'desktop', withDeploymentRoutes =
   const dataDir = join(home, 'data');
   const id = 'engine-superagent';
   const candidate = join(home, 'candidate');
+  const fixtureSettings = {
+    type: 'object',
+    properties: { label: { type: 'string', default: 'initial' }, apiKey: { type: 'string', secret: true } },
+  };
   async function writeExtension(dir: string, version: string) {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'neo.extension.json'), JSON.stringify({
       id, version, displayName: 'Scripted Inbox',
+      ...(withDeploymentRoutes ? { settings: fixtureSettings } : {}),
       runtime: { type: 'cordis', entry: 'index.mjs' },
     }));
     await writeFile(join(dir, 'index.mjs'), `export default { activate(ctx) {
@@ -102,15 +107,19 @@ async function prepareFixture(mode: 'server' | 'desktop', withDeploymentRoutes =
         'list': [], 'ceiling': { ceiling: 'suggest' }, 'ceiling/get': { ceiling: 'suggest' }, 'ceiling/set': { ceiling: 'auto-low' },
         'evaluate': { status: 'passed', version: 1 },
       },
+      'sample-settings': {},
     };
     for (const [extensionId, routes] of Object.entries(scripted)) {
       const dir = join(extensionsDir, extensionId);
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, 'neo.extension.json'), JSON.stringify({
-        id: extensionId, version: '1.0.0', displayName: extensionId, runtime: { type: 'cordis', entry: 'index.mjs' },
+        id: extensionId, version: '1.0.0', displayName: extensionId,
+        runtime: { type: 'cordis', entry: 'index.mjs' }, settings: fixtureSettings,
       }));
       await writeFile(join(dir, 'index.mjs'), `export default { activate(ctx) {
         for (const [path, result] of Object.entries(${JSON.stringify(routes)})) ctx.route(path, () => result);
+        const settings = ctx.inject('settings');
+        ctx.route('settings-label', () => settings.label);
       } };`);
     }
   }
@@ -307,9 +316,48 @@ test('P1-14 server: deployment routes work with a workspace viewer role', async 
     await assert.rejects(workspaceAdmin.inbox.ask({ ...ask, notify }), forbidden);
     await assert.rejects(deployment.inbox.ask({ ...ask, notify }), notFound);
 
-    for (const id of [fixture.id, 'channels', 'engine-hermes', 'skills-registry']) {
-      assert.equal((await setup.extensions.enable({ id })).status, 'running');
+    for (const id of [fixture.id, 'channels', 'engine-hermes', 'skills-registry', 'sample-settings']) {
+      await assert.rejects(workspaceAdmin.extensions.enable({ id }), forbidden);
+      assert.equal((await deployment.extensions.enable({ id })).status, 'running');
+      await assert.rejects(workspaceAdmin.extensions.disable({ id }), forbidden);
     }
+    await assert.rejects(setup.extensions.disable({ id: 'channels' }), forbidden);
+    await assert.rejects(workspaceAdmin.extensions.enable({ id: 'absent-extension' }), forbidden);
+    await assert.rejects(workspaceAdmin.extensions.disable({ id: 'absent-extension' }), forbidden);
+    assert.equal((await deployment.extensions.disable({ id: 'channels' })).status, 'disabled');
+    assert.equal((await deployment.extensions.enable({ id: 'channels' })).status, 'running');
+    console.log('P1-14_LIFECYCLE PASS only the deployment owner can enable or disable server extensions');
+
+    for (const extension of ['channels', 'engine-hermes', 'engine-superagent', 'skills-registry']) {
+      const input = { extension, values: { label: 'deployment fixture', apiKey: 'fixture-setting-secret' } };
+      await assert.rejects(workspaceAdmin.settings.set(input), forbidden);
+      assert.deepEqual((await workspaceAdmin.settings.get({ extension })).values, { label: 'initial', apiKey: { set: false } });
+      assert.deepEqual((await deployment.settings.set(input)).values, { label: 'deployment fixture', apiKey: { set: true } });
+      const scope = { kind: 'engine' as const, workspaceId: 'default', subjectId: extension };
+      assert.equal(await gateway.vault.get(scope, 'SEC_APIKEY'), 'fixture-setting-secret');
+      for (const workspaceId of ['default', workspace.id]) {
+        const selector = { scope: { ...scope, workspaceId }, name: 'SEC_APIKEY' };
+        const secret = { ...selector, value: 'fixture-vault-secret' };
+        await assert.rejects(workspaceAdmin.vault.put(secret), forbidden);
+        await assert.rejects(workspaceAdmin.vault.rotate(secret), forbidden);
+        await assert.rejects(workspaceAdmin.vault.delete(selector), forbidden);
+        const memoryToken = { scope: selector.scope, name: 'NEO_MEMORY_TOKEN' };
+        await assert.rejects(deployment.vault.put({ ...memoryToken, value: 'f'.repeat(64) }), forbidden);
+        await assert.rejects(deployment.vault.rotate({ ...memoryToken, value: 'f'.repeat(64) }), forbidden);
+        await assert.rejects(deployment.vault.delete(memoryToken), forbidden);
+        await deployment.vault.put(secret);
+        await deployment.vault.rotate({ ...secret, value: 'fixture-rotated-secret' });
+        assert.equal(await gateway.vault.get(selector.scope, selector.name), 'fixture-rotated-secret');
+        assert.deepEqual(await deployment.vault.delete(selector), { deleted: true });
+      }
+    }
+    assert.equal(await gateway.kernel.invokeRoute('/x/channels/settings-label', 'GET'), 'deployment fixture');
+    assert.equal(await gateway.kernel.runInWorkspace(workspace.id,
+      () => gateway.kernel.invokeRoute('/x/channels/settings-label', 'GET')), 'deployment fixture');
+    const workspaceSettings = { extension: 'sample-settings', values: { label: 'workspace admin fixture' } };
+    assert.equal((await workspaceAdmin.settings.set(workspaceSettings)).values.label, 'workspace admin fixture');
+    await assert.rejects(deployment.settings.set(workspaceSettings), forbidden);
+    console.log('P1-14_SETTINGS PASS deployment settings and matching vault mutations require deployment ownership');
 
     const channels = deployment.x.channels;
     const whatsapp = { profile: notify.profile, platform: 'whatsapp' } as const;

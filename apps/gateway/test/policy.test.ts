@@ -305,10 +305,14 @@ test('HTTP/oRPC integration: Auth runs before engine calls (disabled extension r
       headers: new Headers({ authorization: `Bearer ${ownerToken}` }),
     });
     const adminClient = makeClient(gateway.port, { authorization: `Bearer ${adminSignup.token}` });
-    assert.equal((await adminClient.extensions.enable({ id: 'test-custom' })).status, 'running');
+    const extension = { id: 'test-custom' };
+    await assert.rejects(adminClient.extensions.enable(extension), (error: any) => error.code === 'FORBIDDEN');
+    await assert.rejects(adminClient.extensions.disable(extension), (error: any) => error.code === 'FORBIDDEN');
     await assert.rejects(adminClient.extensions.upgrade(upgrade), (error: any) => error.code === 'FORBIDDEN');
-    assert.equal((await adminClient.extensions.disable({ id: 'test-custom' })).status, 'disabled');
-    await assert.rejects(adminClient.extensions.uninstall({ id: 'test-custom' }), (error: any) => error.code === 'FORBIDDEN');
+    await assert.rejects(adminClient.extensions.uninstall(extension), (error: any) => error.code === 'FORBIDDEN');
+    const ownerClient = makeClient(gateway.port, { authorization: 'Bearer ' + ownerToken });
+    assert.equal((await ownerClient.extensions.enable(extension)).status, 'running');
+    assert.equal((await ownerClient.extensions.disable(extension)).status, 'disabled');
 
     // 2. Disabled extension check:
     // Extensions (engine-t3, engine-hermes, engine-superagent, skills-registry) are NOT running in this test environment.

@@ -467,7 +467,7 @@ export class NeoKernel {
     // is async, so the route may switch generation again meanwhile: re-resolve it and load for the new one.
     const workspaceId = this.workspaceScope.getStore();
     for (let attempts = 0; workspaceId && workspaceId !== this.fallbackWorkspace && attempts < 8
-      && route.generation.settingsSchema && !route.generation.workspaceSettings.has(workspaceId); attempts++) {
+      && !this.options.deploymentSettings?.(route.generation.id) && route.generation.settingsSchema && !route.generation.workspaceSettings.has(workspaceId); attempts++) {
       await this.generationSettings(route.generation.id, route.generation, workspaceId);
       const current = this.snapshot.routes.get(path);
       if (!current) return undefined;
@@ -500,7 +500,7 @@ export class NeoKernel {
     await this.ensureLegacyMigrated();
     if (workspaceId && workspaceId !== this.fallbackWorkspace) {
       for (const [id, generation] of this.active) {
-        if (generation.settingsSchema && !generation.workspaceSettings.has(workspaceId)) {
+        if (!this.options.deploymentSettings?.(id) && generation.settingsSchema && !generation.workspaceSettings.has(workspaceId)) {
           await this.generationSettings(id, generation, workspaceId);
         }
       }
@@ -508,8 +508,13 @@ export class NeoKernel {
     return this.workspaceScope.run(workspaceId, work);
   }
 
+  private settingsHome(id: string): string | undefined {
+    return this.options.deploymentSettings?.(id) ? 'default' : this.fallbackWorkspace;
+  }
+
   /** A generation's snapshot for the current workspace (synchronous; defaults when none is loaded). */
   private generationValues(generation: ExtensionGeneration): Record<string, unknown> {
+    if (this.options.deploymentSettings?.(generation.id)) return generation.settings;
     const workspaceId = this.currentWorkspace();
     if (workspaceId && workspaceId === this.fallbackWorkspace) return generation.settings;
     return (workspaceId && generation.workspaceSettings.get(workspaceId)) || this.defaultSettings(generation.settingsSchema);
@@ -518,7 +523,7 @@ export class NeoKernel {
   /** A generation's snapshot for one workspace, loaded on first use (a concurrent save's newer copy wins). */
   private async generationSettings(id: string, generation: ExtensionGeneration, workspaceId: string): Promise<Record<string, unknown>> {
     await this.ensureLegacyMigrated();
-    if (workspaceId === this.fallbackWorkspace) return generation.settings;
+    if (this.options.deploymentSettings?.(id) || workspaceId === this.fallbackWorkspace) return generation.settings;
     const loaded = generation.workspaceSettings.get(workspaceId);
     if (loaded) return loaded;
     const values = (await this.readSettings(id, generation.settingsSchema, workspaceId)).values;
@@ -562,6 +567,7 @@ export class NeoKernel {
     schema?: ExtensionSettingsSchema;
   }> {
     await this.ensureLegacyMigrated();
+    if (this.options.deploymentSettings?.(id)) workspaceId = this.settingsHome(id);
     const active = this.active.get(id);
     if (!active) return this.readSettings(id, this.discovered.get(id)?.manifest.settings, workspaceId);
     const schema = structuredClone(active.settingsSchema);
@@ -602,6 +608,7 @@ export class NeoKernel {
    * a draining generation keeps the settings it started with. null clears a value; '' leaves a secret as is.
    */
   private async writeSettings(id: string, incomingValues: Record<string, unknown>, workspaceId: string | undefined): Promise<Record<string, unknown>> {
+    if (this.options.deploymentSettings?.(id)) workspaceId = this.settingsHome(id);
     if (!workspaceId) throw new Error('Settings are saved for a workspace');
     await this.ensureLegacyMigrated();
     const active = this.active.get(id);
@@ -625,7 +632,7 @@ export class NeoKernel {
     }
     const { values, sanitized } = await this.readSettings(id, schema, workspaceId);
     if (active) {
-      const target = workspaceId === this.fallbackWorkspace ? active.settings : active.workspaceSettings.get(workspaceId);
+      const target = workspaceId === this.settingsHome(id) ? active.settings : active.workspaceSettings.get(workspaceId);
       if (target) {
         for (const key of Object.keys(target)) if (!(key in values)) delete target[key];
         Object.assign(target, values);
@@ -655,12 +662,12 @@ export class NeoKernel {
       await this.migrateLegacySettings(target);
       // Snapshots of the target read before the move held defaults; they reload on next use.
       for (const generation of this.active.values()) generation.workspaceSettings.delete(target);
-      if (target === this.fallbackWorkspace) {
-        for (const [id, generation] of this.active) {
-          const values = (await this.readSettings(id, generation.settingsSchema, target)).values;
-          for (const key of Object.keys(generation.settings)) delete generation.settings[key];
-          Object.assign(generation.settings, values);
-        }
+      for (const [id, generation] of this.active) {
+        const home = this.settingsHome(id);
+        if (home !== target && !this.options.deploymentSettings?.(id)) continue;
+        const values = (await this.readSettings(id, generation.settingsSchema, home)).values;
+        for (const key of Object.keys(generation.settings)) delete generation.settings[key];
+        Object.assign(generation.settings, values);
       }
       this.legacyMigrated = true;
     })().finally(() => { this.legacyRun = undefined; });
@@ -669,13 +676,15 @@ export class NeoKernel {
 
   private async migrateLegacySettings(workspaceId: string): Promise<void> {
     for (const legacy of (await this.db.listLegacyExtensionSettings?.()) ?? []) {
-      const current = await this.db.getWorkspaceSettings?.(legacy.id, workspaceId);
-      await this.db.setWorkspaceSettings?.(legacy.id, workspaceId, { ...legacy.values, ...(current ?? {}) });
+      const target = this.options.deploymentSettings?.(legacy.id) ? 'default' : workspaceId;
+      const current = await this.db.getWorkspaceSettings?.(legacy.id, target);
+      await this.db.setWorkspaceSettings?.(legacy.id, target, { ...legacy.values, ...(current ?? {}) });
       await this.db.deleteLegacyExtensionSettings?.(legacy.id);
     }
     const vault = this.vaultService();
     if (!vault || workspaceId === 'default') return;
     for (const [id, { manifest }] of this.discovered) {
+      if (this.options.deploymentSettings?.(id)) continue;
       for (const [key, prop] of Object.entries(manifest.settings?.properties ?? {})) {
         if (!prop.secret) continue;
         const name = secretNameForKey(key);
@@ -697,7 +706,7 @@ export class NeoKernel {
     if (managed && dataDir) await mkdir(dataDir, { recursive: true });
     generation.settingsSchema = structuredClone(manifest.settings);
     // The fallback workspace's snapshot (server mode: none, so defaults only); other workspaces load per request.
-    Object.assign(generation.settings, structuredClone((await this.readSettings(id, manifest.settings, this.fallbackWorkspace)).values));
+    Object.assign(generation.settings, structuredClone((await this.readSettings(id, manifest.settings, this.settingsHome(id))).values));
     // `settings` keeps its plain-object shape for extensions but reads the current workspace's snapshot.
     const settingsView = new Proxy({} as Record<string, unknown>, {
       get: (_target, key) => typeof key === 'string' ? this.generationValues(generation)[key] : undefined,
@@ -810,6 +819,8 @@ export interface KernelOptions {
    * discover; undefined leaves the legacy rows in place (nothing is lost) and a later start retries.
    */
   legacyWorkspace?: () => Promise<string | undefined>;
+  /** Extensions whose settings use the deployment bucket in every request. */
+  deploymentSettings?: (id: string) => boolean;
 }
 
 async function deadline<T>(operation: Promise<T>, ms: number, message: string): Promise<T> {
