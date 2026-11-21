@@ -185,7 +185,9 @@ export class SkillRegistry implements SkillProjection {
   async list(): Promise<SkillRecord[]> {
     const root = join(this.repo, 'skills');
     if (!existsSync(root)) return [];
-    const owners = (await readdir(root)).filter((name) => validName.test(name));
+    const owners = (await readdir(root, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && validName.test(entry.name))
+      .map((entry) => entry.name);
     const names = (await Promise.all(owners.map(async (owner) =>
       (await readdir(join(root, owner), { withFileTypes: true }))
         .filter((entry) => entry.isDirectory() && validName.test(entry.name))

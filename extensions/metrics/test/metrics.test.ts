@@ -1,23 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import type { InboxItem } from '@neometaharness/contracts';
 import { SuccessMetrics } from '../src/metrics.js';
 
 test('seeded finished tickets, traces, skill state and scoped proxy signals', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'nmh-metrics-'));
+  const records = new Map<string, unknown>();
   const put = async (file: string, content: unknown) => {
-    const path = join(root, file);
-    await mkdir(join(path, '..'), { recursive: true });
-    await writeFile(path, typeof content === 'string' ? content : JSON.stringify(content));
+    records.set(file, content);
   };
   const at = Date.parse('2026-11-21T10:00:00Z');
   const item = (id: string, workspace?: string, status = 'ready', extra: Record<string, unknown> = {}) => ({
     id, workspace, text: id, botId: 'bot', mode: 'observe', status, createdAt: at, updatedAt: at,
     episode: { goal: id, steps: [], tools: [], outcome: status, traceId: `trace-${id}` }, ...extra,
   });
-  try {
     await put('engine-superagent/inbox.json', [
       item('a-1', 'a'), item('a-2', 'a', 'ready', { approval: { destructive: false, reason: 'approve', decision: 'approved' } }),
       item('a-3', 'a', 'blocked'), item('b-1', 'b'), item('global'),
@@ -31,7 +26,19 @@ test('seeded finished tickets, traces, skill state and scoped proxy signals', as
     await put('skills-registry/evaluations.json', { 'owner/skill@2': { status: 'passed' } });
     await put('skills-registry/repo/skills/owner/skill/metadata.json', { name: 'owner/skill', version: 2 });
 
-    const metrics = new SuccessMetrics(root);
+    const metrics = new SuccessMetrics({
+      inbox: () => records.get('engine-superagent/inbox.json') as InboxItem[],
+      decisions: async () => (records.get('engine-superagent/traces/decisions.jsonl') as string)
+        .trim().split('\n').map((line) => JSON.parse(line)),
+      qualifiedSkills: async () => {
+        const assigned = new Set((records.get('skills-registry/assignments.json') as { name: string }[])
+          .map((entry) => entry.name));
+        const evaluations = records.get('skills-registry/evaluations.json') as Record<string, { status: string }>;
+        const skill = records.get('skills-registry/repo/skills/owner/skill/metadata.json') as { name: string; version: number };
+        return Number(assigned.has(skill.name) && ['passed', 'overridden'].includes(
+          evaluations[`${skill.name}@${skill.version}`]?.status ?? ''));
+      },
+    });
     const a = await metrics.summary({ workspace: 'a' });
     assert.equal(a.finishedTickets, 3);
     assert.equal(a.completedTickets, 2);
@@ -56,7 +63,4 @@ test('seeded finished tickets, traces, skill state and scoped proxy signals', as
     assert.equal(desktop.firstValue.onboardingToFirstReplyMinutes, 10);
     assert.equal(desktop.firstValue.minutes, null);
     console.log('P7-12_SEEDED PASS scoped tickets, partial signals and unavailable PRD rates');
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
 });

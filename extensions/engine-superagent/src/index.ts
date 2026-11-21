@@ -978,6 +978,11 @@ export default defineExtension({
       propose: (input: DreamProposal) => service.proposeDream(input), isPending: (id: string) => service.dreamPending(id) });
     ctx.provide('dshInboxSink', { report: (input: Parameters<typeof service.reportDsh>[0]) =>
       service.reportDsh(input) });
+    ctx.provide('superagentMetrics', {
+      inbox: (workspace?: string) => service.list().filter((item) =>
+        workspace === undefined || item.workspace === workspace),
+      decisions: (workspace?: string) => service.listDecisions({ workspace, limit: Number.MAX_SAFE_INTEGER }),
+    });
     // Before the first poll (scheduled on a timer by start) so P6-4 installs keep their behaviour.
     service.seedAcceptMode(github.legacyMode);
     ctx.effect(() => async () => {

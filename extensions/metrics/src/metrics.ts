@@ -1,43 +1,22 @@
-import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
 import { inboxItemSchema, type InboxItem } from '@neometaharness/contracts';
 
 type Trace = { ticketId: string; trace_id: string; workspace?: string; chosenAction: string };
-type Assignment = { name: string };
-type Evaluation = { status: string };
-type Skill = { name: string; version: number };
+export type MetricsSources = {
+  inbox: () => Promise<InboxItem[]> | InboxItem[];
+  decisions: (workspace?: string) => Promise<Trace[]>;
+  qualifiedSkills?: () => Promise<number>;
+};
 
-async function readJson(path: string): Promise<unknown | undefined> {
-  try { return JSON.parse(await readFile(path, 'utf8')) as unknown; }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
-  }
-}
-
-async function traces(root: string): Promise<Trace[]> {
-  const dir = join(root, 'engine-superagent', 'traces');
-  const files = await readdir(dir).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') return [] as string[];
-    throw error;
-  });
-  const entries = files.filter((name) => /^decisions\.jsonl(?:\.[1-3])?$/.test(name));
-  const lines = await Promise.all(entries.map((name) => readFile(join(dir, name), 'utf8')));
-  return lines.flatMap((file) => file.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Trace));
-}
-
-/** Existing local records are used directly. Incomplete event histories stay explicitly unavailable. */
+/** Read-only extension services supply current records. Missing event histories stay unavailable. */
 export class SuccessMetrics {
-  constructor(private readonly root: string) {}
+  constructor(private readonly sources: MetricsSources) {}
 
   async summary({ workspace, onboardingCompletedAt }: {
     workspace?: string; onboardingCompletedAt?: string | null;
   } = {}) {
-    const inbox = inboxItemSchema.array().parse(
-      (await readJson(join(this.root, 'engine-superagent', 'inbox.json'))) ?? [],
-    );
+    const inbox = inboxItemSchema.array().parse(await this.sources.inbox());
     const scoped = (item: InboxItem) => workspace === undefined || item.workspace === workspace;
-    const allTraces = await traces(this.root);
+    const allTraces = await this.sources.decisions(workspace);
     const completions = new Set(allTraces.filter((entry) => entry.chosenAction === 'ticket.complete'
       && (workspace === undefined || entry.workspace === workspace)).map((entry) => entry.ticketId));
     const finished = inbox.filter((item) => scoped(item)
@@ -52,26 +31,9 @@ export class SuccessMetrics {
     const onboardingToFirstReplyMinutes = workspace === undefined && Number.isFinite(onboarding)
       ? (delivered.find((at) => at >= onboarding) ?? null) : null;
 
-    // The registry is deployment-wide. In server mode its records cannot be assigned to a workspace.
-    let qualifiedSkills: number | null = null;
-    if (workspace === undefined) {
-      const assignments = ((await readJson(join(this.root, 'skills-registry', 'assignments.json'))) ?? []) as Assignment[];
-      const evaluations = ((await readJson(join(this.root, 'skills-registry', 'evaluations.json'))) ?? {}) as Record<string, Evaluation>;
-      const assigned = new Set(assignments.map((entry) => entry.name));
-      const repo = join(this.root, 'skills-registry', 'repo', 'skills');
-      const owners = await readdir(repo).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === 'ENOENT') return [] as string[];
-        throw error;
-      });
-      const records = await Promise.all(owners.map(async (owner) => {
-        const names = await readdir(join(repo, owner), { withFileTypes: true });
-        return Promise.all(names.filter((entry) => entry.isDirectory()).map(async (entry) =>
-          readJson(join(repo, owner, entry.name, 'metadata.json')) as Promise<Skill | undefined>));
-      }));
-      qualifiedSkills = records.flat().filter((skill): skill is Skill => !!skill)
-        .filter((skill) => assigned.has(skill.name)
-          && ['passed', 'overridden'].includes(evaluations[`${skill.name}@${skill.version}`]?.status ?? '')).length;
-    }
+    // Registry assignments are deployment-wide and cannot be attributed to server workspaces.
+    const qualifiedSkills = workspace === undefined && this.sources.qualifiedSkills
+      ? await this.sources.qualifiedSkills() : null;
 
     return {
       completedTickets,
