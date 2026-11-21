@@ -398,9 +398,9 @@
     },
     "P4-10": {
       "title": "Standing intents: admin-only add/change",
-      "status": "in_progress",
+      "status": "done",
       "owner": "sol-a",
-      "note": "User decision 2026-11-21 (recommended admin-only). P4-9 shipped with any member able to add an intent."
+      "evidence": "PM review 2026-11-22 on main 74d0cb5 + work/sol-a-p410 (15d3baf): test:p4-10 PASS x2 (member create/update/delete 403 with nothing written, admin succeeds, member can list); test:p4-9, gateway, toggle, pnpm check, secret scan PASS; full regression 61/61. Independent cross-review (Sol-B): no findings, incl. memory-local raw routes, neo.intent source and dream acceptance."
     }
   },
   "p3_tasks": {
