@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "typecheck": "tsc --noEmit", "test": "tsx test/search.test.ts" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "tsx test/search.test.ts && tsx test/workspace.test.ts" },
   "dependencies": {
     "@neometaharness/egress": "workspace:*",
     "@neometaharness/kernel": "workspace:*",

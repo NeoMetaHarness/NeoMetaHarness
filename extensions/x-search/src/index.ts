@@ -124,7 +124,6 @@ function parseSearchResponse(data: SearchResponse, apiKey: string): XSearchOutpu
 }
 
 export class XSearchService implements NeoSearchService {
-  private readonly guardedFetch: typeof fetch;
   private readonly userCounters = new Map<string, QuotaCounter>();
   private readonly workspaceCounters = new Map<string, QuotaCounter>();
   private counterDay = -1;
@@ -133,13 +132,8 @@ export class XSearchService implements NeoSearchService {
     private readonly httpClient?: SearchHttpClient,
     private readonly now: () => number = Date.now,
     private readonly quotaFile?: string,
-  ) {
-    const injected = httpClient
-      ? (async (url: string | URL | Request, init?: RequestInit) =>
-        httpClient.request(String(url), init ?? {})) as typeof fetch
-      : undefined;
-    this.guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected);
-  }
+    private readonly settingsFor?: (workspaceId: string) => Promise<SearchSettings>,
+  ) {}
 
   private loadQuotaState(serialized?: string): void {
     this.counterDay = -1;
@@ -186,9 +180,9 @@ export class XSearchService implements NeoSearchService {
     return counter;
   }
 
-  private async charge(requester: SearchRequester): Promise<void> {
+  private async charge(requester: SearchRequester, settings: SearchSettings): Promise<void> {
     if (!this.quotaFile) {
-      this.chargeCurrent(requester);
+      this.chargeCurrent(requester, settings);
       return;
     }
     // SQLite's BEGIN IMMEDIATE serializes charges across processes and staged
@@ -205,7 +199,7 @@ export class XSearchService implements NeoSearchService {
         const initial = row?.value ?? (legacyFile !== this.quotaFile && existsSync(legacyFile)
           ? readFileSync(legacyFile, 'utf8') : undefined);
         this.loadQuotaState(initial);
-        this.chargeCurrent(requester);
+        this.chargeCurrent(requester, settings);
         const state = JSON.stringify({
           day: this.counterDay,
           users: [...this.userCounters],
@@ -222,7 +216,7 @@ export class XSearchService implements NeoSearchService {
     }
   }
 
-  private chargeCurrent(requester: SearchRequester): void {
+  private chargeCurrent(requester: SearchRequester, settings: SearchSettings): void {
     if (!requester?.userId?.trim() || !requester.workspaceId?.trim()) {
       throw new Error('X Search requires requester user and workspace identity');
     }
@@ -237,10 +231,10 @@ export class XSearchService implements NeoSearchService {
     const user = this.counterFor(this.userCounters, requester.userId, minute);
     const workspace = this.counterFor(this.workspaceCounters, requester.workspaceId, minute);
     const checks = [
-      [user.minuteCount, quota(this.settings.requestsPerMinutePerUser, 5, 60), 'user minute'],
-      [workspace.minuteCount, quota(this.settings.requestsPerMinutePerWorkspace, 20, 600), 'workspace minute'],
-      [user.dayCount, quota(this.settings.requestsPerDayPerUser, 100, 10_000), 'user day'],
-      [workspace.dayCount, quota(this.settings.requestsPerDayPerWorkspace, 500, 100_000), 'workspace day'],
+      [user.minuteCount, quota(settings.requestsPerMinutePerUser, 5, 60), 'user minute'],
+      [workspace.minuteCount, quota(settings.requestsPerMinutePerWorkspace, 20, 600), 'workspace minute'],
+      [user.dayCount, quota(settings.requestsPerDayPerUser, 100, 10_000), 'user day'],
+      [workspace.dayCount, quota(settings.requestsPerDayPerWorkspace, 500, 100_000), 'workspace day'],
     ] as const;
     for (const [used, limit, scope] of checks) {
       if (used >= limit) throw new SearchRateLimitError(`X Search rate limit exceeded (${scope})`);
@@ -252,27 +246,36 @@ export class XSearchService implements NeoSearchService {
   }
 
   async search(rawInput: XSearchInput, requester: SearchRequester): Promise<XSearchOutput> {
+    if (!requester?.userId?.trim() || !requester.workspaceId?.trim()) {
+      throw new Error('X Search requires requester user and workspace identity');
+    }
+    const settings = this.settingsFor ? await this.settingsFor(requester.workspaceId) : this.settings;
     const input = xSearchInput.parse(rawInput);
     if (input.fromDate && input.toDate && input.fromDate > input.toDate) {
       throw new Error('Invalid X Search date range');
     }
-    const key = this.settings.apiKey?.trim();
+    const key = settings.apiKey?.trim();
     if (!key) throw new Error('X Search API key is not configured');
-    const endpoint = searchEndpoint(this.settings.baseUrl ?? 'https://api.x.ai');
-    validateEgressUrl(endpoint, this.settings.allowPrivateNetwork === true);
+    const endpoint = searchEndpoint(settings.baseUrl ?? 'https://api.x.ai');
+    validateEgressUrl(endpoint, settings.allowPrivateNetwork === true);
     const tool: Record<string, unknown> = { type: 'x_search' };
     if (input.allowedHandles) tool.allowed_x_handles = input.allowedHandles;
     if (input.excludedHandles) tool.excluded_x_handles = input.excludedHandles;
     if (input.fromDate) tool.from_date = input.fromDate;
     if (input.toDate) tool.to_date = input.toDate;
-    await this.charge(requester);
+    await this.charge(requester, settings);
     let response: Response;
     try {
-      response = await this.guardedFetch(endpoint.href, {
+      const injected = this.httpClient
+        ? (async (url: string | URL | Request, init?: RequestInit) =>
+          this.httpClient!.request(String(url), init ?? {})) as typeof fetch
+        : undefined;
+      const guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected);
+      response = await guardedFetch(endpoint.href, {
         method: 'POST',
         redirect: 'error',
         headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: this.settings.model || 'grok-4.7', input: [{ role: 'user', content: input.query }], tools: [tool], max_turns: 2, store: false }),
+        body: JSON.stringify({ model: settings.model || 'grok-4.7', input: [{ role: 'user', content: input.query }], tools: [tool], max_turns: 2, store: false }),
       });
     } catch {
       throw new Error('X Search request failed');
@@ -289,13 +292,14 @@ export class XSearchService implements NeoSearchService {
 export default defineExtension({
   activate(ctx) {
     const settings = ctx.inject<SearchSettings>('settings') ?? {};
+    const settingsFor = ctx.inject<(workspaceId: string) => Promise<SearchSettings>>('settingsFor');
     const client = ctx.inject<SearchHttpClient>('searchHttpClient');
     const extensionDataRoot = ctx.inject<string>('extensionDataDir');
     const dataDir = ctx.inject<string>('dataDir')
       ?? (extensionDataRoot ? join(extensionDataRoot, 'x-search') : undefined);
     if (!dataDir) throw new Error('X Search needs isolated extension storage for metered quotas');
     mkdirSync(dataDir, { recursive: true });
-    const search = new XSearchService(settings, client, Date.now, join(dataDir, 'quotas.sqlite'));
+    const search = new XSearchService(settings, client, Date.now, join(dataDir, 'quotas.sqlite'), settingsFor);
     ctx.provide('neo.search', search);
     ctx.effect(() => () => search.dispose());
     ctx.contribute('tools', {
@@ -304,7 +308,7 @@ export default defineExtension({
       description: 'Search and cite current X posts through the configured xAI provider',
       route: '/x/x-search/search',
     });
-    ctx.route('status', () => ({ providerId: 'xai', configured: search.configured }));
+    ctx.route('status', () => ({ providerId: 'xai', configured: Boolean(settings.apiKey?.trim()) }));
     ctx.route('search', ({ body }) => {
       if (body && typeof body === 'object' && 'input' in body) {
         const request = body as { input: XSearchInput; requester: SearchRequester };
