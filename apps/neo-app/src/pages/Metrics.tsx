@@ -34,7 +34,7 @@ export default function Metrics() {
     <section aria-label="Success metrics" className="settings-page">
       <h1>Success metrics</h1>
       <p>Local Inbox, decision trace and skills-registry records. Figures reflect your workspace.</p>
-      <Button label="Refresh metrics" onClick={() => void refresh()} disabled={loading}>Refresh</Button>
+      <Button label="Refresh metrics" onClick={() => void refresh()} isDisabled={loading}>Refresh</Button>
       {loading && <p role="status">Loading metrics…</p>}
       {error && <p role="alert">{error}</p>}
       {summary && <>
