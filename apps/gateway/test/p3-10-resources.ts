@@ -103,6 +103,11 @@ try {
     assert.ok(gateway.computers.binding('superagent', profileId, bravo.id));
     assert.equal(gateway.computers.binding('dsh', sessionId, alpha.id), undefined);
     assert.equal(gateway.computers.binding('superagent', profileId, alpha.id), undefined);
+    // A workspace bot may be assigned before superagent creates its first Inbox work item.
+    await rpcB.computers.assign({engine: 'superagent', targetId: botB.id, computerId: computerB.id});
+    await assert.rejects(rpcA.computers.assign({engine: 'superagent', targetId: botB.id, computerId: computerA.id}), denied);
+    assert.ok(gateway.computers.binding('superagent', botB.id, bravo.id));
+    assert.equal(gateway.computers.binding('superagent', botB.id, alpha.id), undefined);
   } finally {await unregister();}
   console.log('P3-10 RESOURCE PASS bot-turn-approval-isolation=true dsh-superagent-assignment-isolation=true');
 } finally {

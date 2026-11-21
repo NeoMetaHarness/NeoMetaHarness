@@ -1490,6 +1490,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           } else if (input.engine === 'superagent') {
             const items = await invokeInbox('list', {}) as InboxItem[];
             owned = items.some((item) => item.botId === input.targetId && item.workspace === workspace);
+            if (!owned) {
+              // A superagent worker also runs for a workspace-owned bot before an Inbox item exists.
+              const normalized = /^neo_[a-f0-9]{32}$/i.test(input.targetId)
+                ? input.targetId.slice(4).replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5')
+                : input.targetId;
+              const bot = await db.agents.getBot(normalized);
+              owned = bot?.workspace_id === workspace;
+            }
           }
           if (!owned) throw new ORPCError('NOT_FOUND', { message: 'Target unavailable in this workspace' });
         }
