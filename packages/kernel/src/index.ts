@@ -137,7 +137,7 @@ export class NeoKernel {
   private order: string[] = [];
 
   constructor(private readonly db: DatabaseProvider, private readonly services: Readonly<Record<string, unknown>> = {},
-    private readonly dataDir?: string, private readonly pythonExecutable?: string, options: KernelOptions = {}) {
+    private readonly dataDir?: string, private readonly pythonExecutable?: string, private readonly options: KernelOptions = {}) {
     this.installs = new ExtensionInstalls(dataDir, pythonExecutable);
     this.fallbackWorkspace = options.fallbackWorkspace === null ? undefined : options.fallbackWorkspace ?? 'default';
   }
@@ -178,7 +178,8 @@ export class NeoKernel {
       }
     }
     this.order = resolveOrder(this.discovered);
-    if (this.fallbackWorkspace) await this.migrateLegacySettings(this.fallbackWorkspace);
+    const legacyTarget = this.fallbackWorkspace ?? await this.options.legacyWorkspace?.();
+    if (legacyTarget) await this.migrateLegacySettings(legacyTarget);
     for (const id of this.order) {
       this.entries.set(id, { desired: await this.db.getEnabled(id), status: 'disabled' });
     }
@@ -758,6 +759,11 @@ export interface KernelOptions {
    * request sees schema defaults and no secrets.
    */
   fallbackWorkspace?: string | null;
+  /**
+   * Where pre-P1-13 workspace-less settings go when there is no fallback workspace (server mode). Resolved at each
+   * discover; undefined leaves the legacy rows in place (nothing is lost) and a later start retries.
+   */
+  legacyWorkspace?: () => Promise<string | undefined>;
 }
 
 async function deadline<T>(operation: Promise<T>, ms: number, message: string): Promise<T> {

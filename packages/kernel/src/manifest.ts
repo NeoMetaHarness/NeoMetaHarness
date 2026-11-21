@@ -147,8 +147,10 @@ export function coerceSettingValues(id: string, schema: ExtensionSettingsSchema 
     throw new SettingsValidationError(`Invalid setting '${key}' for ${id}: ${problem}`);
   };
   for (const [key, raw] of Object.entries(values)) {
-    const property = schema?.properties?.[key];
-    if (!property) fail(key, 'not declared in the settings schema');
+    // Own properties only: 'constructor', '__proto__' and friends are not declared settings.
+    const properties = schema?.properties;
+    const property = properties && Object.hasOwn(properties, key) ? properties[key] : undefined;
+    if (!property || typeof property !== 'object') fail(key, 'not declared in the settings schema');
     if (raw === null) { result[key] = null; continue; }
     if (property!.secret) {
       if (typeof raw !== 'string') fail(key, 'a secret must be a string');

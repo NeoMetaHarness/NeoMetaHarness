@@ -10,6 +10,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
+import { coerceSettingValues, SettingsValidationError } from '@neometaharness/kernel';
 import { startGateway } from '../src/server.js';
 
 const json = (body: unknown, headers: Record<string, string> = {}) => ({
@@ -123,7 +124,45 @@ test('P1-13 server: two workspaces keep their own settings and secrets; wrong ty
     const cleared = await rpc(corpOwner, 'settings/set', { extension: EXT, values: { greeting: null, apiKey: null } });
     assert.deepEqual([cleared.body.values.greeting, cleared.body.values.apiKey], ['Hello', { set: false }], 'null restores the default and removes a secret');
     assert.equal((await hello(financeOwner)).apiKey, 'finance-key', 'clearing Corp leaves Finance alone');
-    console.log('P1-13_VALIDATION PASS "false", non-numbers, out-of-range and unknown keys are refused; null clears');
+    // Inherited Object properties are not declared settings (review finding 4).
+    // (The RPC layer already drops a '__proto__' key, so the kernel check is also run directly below.)
+    for (const key of ['constructor', 'toString', 'hasOwnProperty', 'valueOf']) {
+      const response = await fetch(`${base}/settings/set`, { method: 'POST', headers: { 'content-type': 'application/json', ...as(corpOwner) },
+        body: `{"json":{"extension":"${EXT}","values":{"${key}":"x"}}}` });
+      assert.equal(response.status, 400, key);
+    }
+    const schema = gateway.kernel.getSettingsSchema(EXT);
+    for (const raw of ['{"__proto__":"x"}', '{"constructor":"x"}', '{"toString":"x"}']) {
+      assert.throws(() => coerceSettingValues(EXT, schema, JSON.parse(raw)), SettingsValidationError, raw);
+    }
+    assert.deepEqual(Object.keys((await rpc(corpOwner, 'settings/get', { extension: EXT })).body.values).sort(),
+      ['apiKey', 'enabled', 'greeting', 'retries'], 'nothing inherited was stored');
+    console.log('P1-13_VALIDATION PASS "false", non-numbers, out-of-range, unknown and inherited keys are refused; null clears');
+
+    // Review finding 1: an extension's secret scope is admin-only to write, like settings.set, in every workspace.
+    const member = await signUp('member@corp.test');
+    const memberInvite = await (await fetch(`${base}/auth/organization/invite-member`,
+      json({ organizationId: corp.id, email: 'member@corp.test', role: 'member' }, as(corpOwner)))).json() as { id: string };
+    assert.equal((await fetch(`${base}/auth/organization/accept-invitation`, json({ invitationId: memberInvite.id }, as(member)))).status, 200);
+    assert.equal((await fetch(`${base}/auth/organization/set-active`, json({ organizationId: corp.id }, as(member)))).status, 200);
+    const secretScope = (workspaceId: string) => ({ kind: 'engine', workspaceId, subjectId: EXT });
+    for (const [path, input] of [
+      ['vault/put', { scope: secretScope(corp.id), name: SECRET_NAME, value: 'member-key' }],
+      ['vault/rotate', { scope: secretScope(corp.id), name: SECRET_NAME, value: 'member-key' }],
+      ['vault/put', { scope: secretScope(corp.id), name: 'SEC_OTHER', value: 'member-key' }],
+      ['vault/put', { scope: secretScope(finance.id), name: SECRET_NAME, value: 'member-key' }],
+      ['settings/set', { extension: EXT, values: { apiKey: 'member-key' } }],
+    ] as const) {
+      assert.equal((await rpc(member, path, input)).status, 403, `member ${path} ${input.scope?.workspaceId ?? ''}`);
+    }
+    assert.equal((await hello(member)).apiKey, null, 'the cleared Corp secret was not replaced by a member');
+    assert.equal(await gateway.vault.get(secretScope(finance.id) as any, SECRET_NAME), 'finance-key');
+    // Members keep their ordinary vault rights; admins may write the extension scope of their own workspace only.
+    assert.equal((await rpc(member, 'vault/put', { scope: { kind: 'workspace', workspaceId: corp.id }, name: 'MEMBER_NOTE', value: 'ok' })).status, 200);
+    assert.equal((await rpc(financeOwner, 'vault/put', { scope: secretScope(finance.id), name: SECRET_NAME, value: 'finance-key-2' })).status, 200);
+    assert.equal((await rpc(financeOwner, 'vault/put', { scope: secretScope(corp.id), name: SECRET_NAME, value: 'x' })).status, 403,
+      'a Finance admin cannot write Corp extension secrets');
+    console.log('P1-13_SECRET_SCOPE PASS extension secret scopes are admin-only writes in their own workspace');
   } finally {
     await gateway.close();
     await rm(root, { recursive: true, force: true, maxRetries: 5 });
@@ -174,6 +213,56 @@ test('P1-13 desktop: pre-P1-13 settings move into the desktop workspace without 
       await again.close();
     }
     console.log('P1-13_DESKTOP PASS legacy settings and secrets migrate once into the desktop workspace; desktop reads are unchanged');
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('P1-13 server: pre-P1-13 settings move into the bootstrap workspace (kept until one exists)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'nmh-p113-server-legacy-'));
+  const extensionsDir = await fixture(root);
+  const options = { databaseFile: join(root, 'state/gateway.db'), dataDir: join(root, 'data'), extensionsDir,
+    mode: 'server' as const, signup: 'open' as const };
+  try {
+    // An upgraded deployment: workspace-less rows in the legacy table and the 'default' vault scope.
+    const seeded = await startGateway(options);
+    await (seeded.db as any).setExtensionSettings(EXT, { greeting: 'Legacy hello', retries: 4 });
+    await seeded.vault.put({ kind: 'engine', workspaceId: 'default', subjectId: EXT }, SECRET_NAME, 'legacy-key');
+    await seeded.close();
+
+    // No workspace exists yet: nothing is lost, the rows wait.
+    const first = await startGateway(options);
+    let corp: { id: string }; let finance: { id: string }; let owner: string;
+    try {
+      assert.equal((await (first.db as any).listLegacyExtensionSettings()).length, 1, 'legacy rows kept without a workspace');
+      const base = `http://127.0.0.1:${first.port}`;
+      const response = await fetch(`${base}/auth/sign-up/email`, json({ email: 'owner@corp.test', password: 'Member!Pass123', name: 'x' }));
+      owner = (await response.json() as { token: string }).token;
+      corp = await (await fetch(`${base}/auth/organization/create`, json({ name: 'Corp', slug: 'corp' }, { authorization: `Bearer ${owner}` }))).json() as { id: string };
+      finance = await (await fetch(`${base}/auth/organization/create`,
+        json({ name: 'Finance', slug: 'finance', keepCurrentActiveOrganization: true }, { authorization: `Bearer ${owner}` }))).json() as { id: string };
+    } finally {
+      await first.close();
+    }
+
+    const gateway = await startGateway(options);
+    try {
+      const bootstrap = (await (gateway.auth as any).kysely.selectFrom('organization').select('id').orderBy('createdAt').executeTakeFirst()).id;
+      assert.equal(bootstrap, corp.id, 'Corp is the bootstrap workspace');
+      assert.deepEqual(await (gateway.db as any).listLegacyExtensionSettings(), [], 'the legacy rows were moved');
+      assert.deepEqual(await gateway.kernel.getSettings(EXT, corp.id).then((r) => r.sanitized),
+        { greeting: 'Legacy hello', enabled: true, retries: 4, apiKey: { set: true } }, 'legacy values and secret survive in Corp');
+      assert.equal(await gateway.vault.get({ kind: 'engine', workspaceId: corp.id, subjectId: EXT }, SECRET_NAME), 'legacy-key');
+      assert.equal(await gateway.vault.get({ kind: 'engine', workspaceId: 'default', subjectId: EXT }, SECRET_NAME), undefined);
+      assert.deepEqual(await gateway.kernel.getSettings(EXT, finance.id).then((r) => r.sanitized),
+        { greeting: 'Hello', enabled: true, retries: 3, apiKey: { set: false } }, 'other workspaces do not inherit them');
+      // Reachable through the API by the bootstrap workspace's owner.
+      const got = await fetch(`http://127.0.0.1:${gateway.port}/settings/get`, json({ json: { extension: EXT } }, { authorization: `Bearer ${owner}` }));
+      assert.equal((await got.json() as any).json.values.greeting, 'Legacy hello');
+    } finally {
+      await gateway.close();
+    }
+    console.log('P1-13_SERVER_MIGRATION PASS legacy settings wait for, then move into, the bootstrap workspace');
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 5 });
   }

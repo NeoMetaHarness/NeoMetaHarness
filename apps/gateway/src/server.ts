@@ -324,11 +324,21 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     skillsBridge,
     extensionDataDir,
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
-  }, dataDir, process.env.NMH_EXTENSION_PYTHON, { fallbackWorkspace: mode === 'desktop' ? desktopWorkspace : null });
+  }, dataDir, process.env.NMH_EXTENSION_PYTHON, {
+    fallbackWorkspace: mode === 'desktop' ? desktopWorkspace : null,
+    // Server mode: pre-P1-13 settings belong to the bootstrap workspace (the first one created, whose owner set
+    // the deployment up). With no workspace yet the legacy rows stay put until a later start.
+    legacyWorkspace: async () => (await auth.kysely?.selectFrom('organization').select('id')
+      .orderBy('createdAt').executeTakeFirst() as { id: string } | undefined)?.id,
+  });
 
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
     const procedure = `vault.${operation}`;
     authorize(procedure, context);
+    // An extension's secret settings live at its engine scope (P1-13). Writing them is changing that extension's
+    // settings, so it needs settings.set (admin) in the scope's workspace, whatever vault.put allows elsewhere.
+    const settingsSecret = operation !== 'list' && scope?.kind === 'engine' && !!scope.subjectId
+      && kernel.hasExtension(scope.subjectId);
     if (scope?.workspaceId) {
       const kysely = auth.kysely;
       const target = await kysely.selectFrom('organization').select('id')
@@ -337,6 +347,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         requireDeploymentOwner(context);
       } else {
         authorize(procedure, context, { workspaceOnly: true });
+        if (settingsSecret) authorize('settings.set', context, { workspaceOnly: true });
       }
       if (scope.workspaceId !== context?.workspaceId && (target || mode === 'desktop')) {
         const userId = context?.user?.id;
@@ -353,6 +364,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }
         if (!held) throw new ORPCError('FORBIDDEN', { message: 'Cross-workspace vault access forbidden' });
         authorize(procedure, { ...context!, workspaceId: scope.workspaceId, role: held as GatewayAuthContext['role'] }, { workspaceOnly: true });
+        if (settingsSecret) authorize('settings.set', { ...context!, workspaceId: scope.workspaceId, role: held as GatewayAuthContext['role'] }, { workspaceOnly: true });
       }
     }
     if (options.authorizeVault && (await options.authorizeVault(operation, scope)) !== true) {
