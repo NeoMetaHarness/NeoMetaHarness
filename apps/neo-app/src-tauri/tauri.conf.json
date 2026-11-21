@@ -4,7 +4,8 @@
   "identifier": "com.neometaharness.app",
   "build": {
     "frontendDist": "../dist",
-    "beforeBuildCommand": "pnpm build"
+    "beforeBuildCommand": "pnpm build",
+    "beforeBundleCommand": "node ../../scripts/installer-check.mjs"
   },
   "app": {
     "windows": [],

@@ -48,6 +48,30 @@ fn validate_updater_endpoint(endpoint: &str, is_debug: bool) -> Result<(), Strin
     Ok(())
 }
 
+fn validate_update_download_url(
+    download_url: &url::Url,
+    allowed_endpoint_urls: &[url::Url],
+    is_debug: bool,
+) -> Result<(), String> {
+    if !is_debug && download_url.scheme() != "https" {
+        return Err(format!("Update download URL must use HTTPS in release builds: {download_url}"));
+    }
+    let download_host = download_url
+        .host_str()
+        .ok_or_else(|| format!("Update download URL has no valid host: {download_url}"))?;
+
+    let matches_endpoint_host = allowed_endpoint_urls.iter().any(|ep| {
+        ep.host_str() == Some(download_host)
+    });
+
+    if !matches_endpoint_host {
+        return Err(format!(
+            "Update download URL host '{download_host}' does not match any configured updater endpoint host"
+        ));
+    }
+    Ok(())
+}
+
 fn get_updater_overrides() -> (Option<String>, Option<String>) {
     #[cfg(debug_assertions)]
     {
@@ -61,38 +85,66 @@ fn get_updater_overrides() -> (Option<String>, Option<String>) {
     }
 }
 
-fn configure_updater_builder(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::UpdaterBuilder, String> {
+fn configure_updater_builder(
+    app: &tauri::AppHandle,
+) -> Result<(tauri_plugin_updater::UpdaterBuilder, Vec<url::Url>), String> {
     #[allow(unused_mut)]
     let mut builder = app.updater_builder();
     let (override_endpoint, override_pubkey) = get_updater_overrides();
+    let mut effective_endpoints = Vec::new();
 
     if let Some(endpoint) = override_endpoint {
         validate_updater_endpoint(&endpoint, cfg!(debug_assertions))?;
-        let url = endpoint.trim().parse().map_err(|error| format!("Invalid updater URL: {error}"))?;
-        builder = builder.endpoints(vec![url]).map_err(|error| error.to_string())?;
-    }
-    if let Some(public_key) = override_pubkey {
-        builder = builder.pubkey(public_key.trim());
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
+        let url: url::Url = endpoint.trim().parse().map_err(|error| format!("Invalid updater URL: {error}"))?;
+        builder = builder.endpoints(vec![url.clone()]).map_err(|error| error.to_string())?;
+        effective_endpoints.push(url);
+    } else {
         if let Some(endpoints) = app.config().plugins.0.get("updater").and_then(|val| val.get("endpoints")).and_then(|val| val.as_array()) {
             for ep in endpoints {
                 if let Some(s) = ep.as_str() {
-                    validate_updater_endpoint(s, false)?;
+                    validate_updater_endpoint(s, cfg!(debug_assertions))?;
+                    if let Ok(url) = s.trim().parse::<url::Url>() {
+                        effective_endpoints.push(url);
+                    }
                 }
             }
         }
     }
 
-    Ok(builder)
+    if let Some(public_key) = override_pubkey {
+        builder = builder.pubkey(public_key.trim());
+    }
+
+    // Set Reqwest redirect policy: only HTTPS and same host
+    builder = builder.configure_client(|client_builder| {
+        client_builder.redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let next = attempt.url();
+            if !cfg!(debug_assertions) && next.scheme() != "https" {
+                return attempt.error("Updater redirects must use HTTPS in release builds");
+            }
+            if let Some(initial) = attempt.previous().first() {
+                if next.host_str() != initial.host_str() {
+                    return attempt.error("Updater redirect to a different host is forbidden");
+                }
+            }
+            if attempt.previous().len() >= 5 {
+                attempt.error("Too many updater redirects")
+            } else {
+                attempt.follow()
+            }
+        }))
+    });
+
+    Ok((builder, effective_endpoints))
 }
 
 async fn check_for_updates_internal(app: &tauri::AppHandle) -> Result<Option<String>, String> {
-    let builder = configure_updater_builder(app)?;
+    let (builder, allowed_endpoints) = configure_updater_builder(app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
     let update = updater.check().await.map_err(|error| error.to_string())?;
+    if let Some(ref update) = update {
+        validate_update_download_url(&update.download_url, &allowed_endpoints, cfg!(debug_assertions))?;
+    }
     let version = update.map(|candidate| candidate.version);
     if let Some(state) = app.try_state::<UpdateCandidate>() {
         *state.0.lock().unwrap() = version.clone();
@@ -117,12 +169,13 @@ async fn install_update(app: tauri::AppHandle, window: tauri::Window) -> Result<
         .and_then(|state| state.0.lock().unwrap().clone())
         .ok_or_else(|| "No update candidate available. Check for updates first.".to_string())?;
 
-    let builder = configure_updater_builder(&app)?;
+    let (builder, allowed_endpoints) = configure_updater_builder(&app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
     if let Some(update) = updater.check().await.map_err(|error| error.to_string())? {
         if update.version != candidate {
             return Err(format!("Available update version ({}) does not match expected candidate ({candidate})", update.version));
         }
+        validate_update_download_url(&update.download_url, &allowed_endpoints, cfg!(debug_assertions))?;
         update.download_and_install(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
         app.restart();
     }
@@ -342,6 +395,29 @@ mod tests {
         assert!(validate_updater_endpoint("https://secure.example.com/latest.json", false).is_ok());
         assert!(validate_updater_endpoint("http://127.0.0.1:8080/latest.json", true).is_ok());
         assert!(validate_updater_endpoint("", false).is_err());
+    }
+
+    #[test]
+    fn test_download_url_validation() {
+        let endpoints = vec![url::Url::parse("https://updates.neometaharness.com/desktop/latest.json").unwrap()];
+
+        // Disallowed scheme in release
+        let http_url = url::Url::parse("http://updates.neometaharness.com/desktop/neo-0.2.0.msi").unwrap();
+        assert!(validate_update_download_url(&http_url, &endpoints, false).is_err());
+        assert!(validate_update_download_url(&http_url, &endpoints, true).is_ok());
+
+        // Mismatched host (compromised manifest pointing to attacker server)
+        let attacker_url = url::Url::parse("https://attacker.com/desktop/neo-0.2.0.msi").unwrap();
+        assert!(validate_update_download_url(&attacker_url, &endpoints, false).is_err());
+        assert!(validate_update_download_url(&attacker_url, &endpoints, true).is_err());
+
+        // Private address pointing to SSRF/internal network
+        let internal_url = url::Url::parse("https://192.168.1.1/desktop/neo-0.2.0.msi").unwrap();
+        assert!(validate_update_download_url(&internal_url, &endpoints, false).is_err());
+
+        // Valid matching HTTPS URL
+        let valid_url = url::Url::parse("https://updates.neometaharness.com/desktop/neo-0.2.0.msi").unwrap();
+        assert!(validate_update_download_url(&valid_url, &endpoints, false).is_ok());
     }
 
     #[test]

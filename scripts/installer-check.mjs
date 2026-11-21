@@ -17,6 +17,7 @@ export function runInstallerCheck(options = {}) {
   assert.equal(config.bundle.externalBin, undefined, 'default build requires no staged sidecar');
   assert.equal(config.bundle.resources, undefined, 'default build requires no staged runtime');
   assert.doesNotMatch(config.build.beforeBuildCommand ?? '', /installer:prepare/, 'development build does not stage payload');
+  assert.match(config.build.beforeBundleCommand ?? '', /installer-check/, 'tauri.conf.json runs installer-check before packaging bundles');
   assert.deepEqual(config.plugins?.['deep-link']?.desktop?.schemes, ['neo'], 'desktop deep link survives config merge');
   assert.equal(bundle.active, true, 'installer override enables bundling');
   for (const target of ['nsis', 'msi', 'dmg', 'appimage', 'deb']) {
@@ -25,6 +26,7 @@ export function runInstallerCheck(options = {}) {
   assert.deepEqual(bundle.externalBin, ['binaries/neo-gateway'], 'gateway executable is bundled');
   assert.equal(bundle.resources['installer-payload/'], 'gateway/', 'runtime resources are bundled');
   assert.match(installerConfig.build.beforeBuildCommand, /installer:prepare/, 'installer stages runtime before packaging');
+  assert.match(installerConfig.build.beforeBundleCommand, /installer-check/, 'installer runs installer-check before packaging bundles');
   assert.ok(existsSync(resolve(root, 'scripts/installer-prepare.mjs')), 'runtime preparation script');
   const launcher = load('apps/neo-app/src-tauri/src/lib.rs');
   assert.ok(launcher.includes('apps/gateway/src/main.ts'), 'preserves repository-relative gateway paths');
@@ -43,20 +45,13 @@ export function runInstallerCheck(options = {}) {
   const updater = config.plugins?.updater;
   assert.ok(updater, 'updater config is present');
   const pubkey = (updater.pubkey ?? '').trim();
-  const allowPlaceholder = options.allowPlaceholder ?? (process.env.NMH_ALLOW_PLACEHOLDER_KEY === 'true' || process.argv.includes('--allow-placeholder'));
 
-  if (!allowPlaceholder) {
-    assert.ok(
-      pubkey !== '' && pubkey !== 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY',
-      'release installer builds require a valid owner minisign public key, not a placeholder or empty string'
-    );
-    assert.match(pubkey, /^[A-Za-z0-9+/=\s]{40,}$/, 'valid base64 minisign public key required for release installer');
-  } else {
-    assert.ok(
-      pubkey === 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY' || /^[A-Za-z0-9+/=\s]{40,}$/.test(pubkey),
-      'public key or explicit placeholder required'
-    );
-  }
+  // Enforce check inside release build path with no bypass
+  assert.ok(
+    pubkey !== '' && pubkey !== 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY',
+    'release installer packaging requires a valid owner minisign public key, not a placeholder or empty string'
+  );
+  assert.match(pubkey, /^[A-Za-z0-9+/=\s]{40,}$/, 'valid base64 minisign public key required for release installer');
 
   assert.ok(Array.isArray(updater.endpoints) && updater.endpoints.length > 0, 'updater endpoint required');
   for (const endpoint of updater.endpoints) {
@@ -76,7 +71,7 @@ export function runInstallerCheck(options = {}) {
   assert.match(load('.gitignore'), /apps\/neo-app\/src-tauri\/installer-payload/, 'generated runtime ignored');
   assert.match(load('.gitignore'), /apps\/neo-app\/src-tauri\/binaries\/neo-gateway-/, 'generated node sidecar ignored');
 
-  console.log(`PASS installer:check — identifiers, five installer targets, gateway sidecar, CSP, updater endpoints, and secret hygiene${updater.pubkey.startsWith('REPLACE_') ? ' (public key placeholder)' : ''}`);
+  console.log(`PASS installer:check — identifiers, five installer targets, gateway sidecar, CSP, updater endpoints, beforeBundleCommand enforcement, and secret hygiene`);
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));

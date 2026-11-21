@@ -90,17 +90,35 @@ execFileSync(process.execPath, [join(appDir, 'node_modules/vite/bin/vite.js'), '
 
 console.log('Running installer-check unit checks (verifying rejection of placeholder key and acceptance of valid test key)...');
 const { runInstallerCheck } = await import('../../../scripts/installer-check.mjs');
-assert.throws(
-  () => runInstallerCheck({ allowPlaceholder: false }),
-  /release installer builds require a valid owner minisign public key/,
-  'installer-check must reject the placeholder public key in release mode'
-);
-// Verify placeholder passes when explicitly allowed (development/test mode)
-runInstallerCheck({ allowPlaceholder: true });
-
-// Verify well-formed dummy test key fixture is accepted without allowPlaceholder
-const dummyTestKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldUTVBERFVMWVNZTkRFUkZBS0VLRVkxMjM0NTY3ODkwMTI=';
 const baseTauriConf = JSON.parse(await readFile(join(appDir, 'src-tauri/tauri.conf.json'), 'utf8'));
+
+// Verify that default config with placeholder key strictly fails installer-check (no bypass)
+assert.throws(
+  () => runInstallerCheck(),
+  /release installer packaging requires a valid owner minisign public key, not a placeholder or empty string/,
+  'installer-check must reject the placeholder public key with no bypass'
+);
+
+// Verify that an empty pubkey fails installer-check
+assert.throws(
+  () => runInstallerCheck({
+    configOverride: {
+      ...baseTauriConf,
+      plugins: {
+        ...baseTauriConf.plugins,
+        updater: {
+          ...baseTauriConf.plugins?.updater,
+          pubkey: '',
+        },
+      },
+    },
+  }),
+  /release installer packaging requires a valid owner minisign public key/,
+  'installer-check must reject an empty public key'
+);
+
+// Verify well-formed dummy test key fixture is accepted
+const dummyTestKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldUTVBERFVMWVNZTkRFUkZBS0VLRVkxMjM0NTY3ODkwMTI=';
 const dummyConfig = {
   ...baseTauriConf,
   plugins: {
@@ -111,7 +129,7 @@ const dummyConfig = {
     },
   },
 };
-runInstallerCheck({ configOverride: dummyConfig, allowPlaceholder: false });
+runInstallerCheck({ configOverride: dummyConfig });
 console.log('Installer check verification passed (placeholder rejected, test key accepted).');
 
 console.log('Running cargo unit tests (verifying updater overrides and endpoint HTTPS enforcement)...');

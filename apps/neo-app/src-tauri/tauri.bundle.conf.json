@@ -1,6 +1,7 @@
 {
   "build": {
-    "beforeBuildCommand": "pnpm build && pnpm --config.strict-dep-builds=false --config.verifyDepsBeforeRun=false --dir ../.. installer:prepare"
+    "beforeBuildCommand": "pnpm build && pnpm --config.strict-dep-builds=false --config.verifyDepsBeforeRun=false --dir ../.. installer:prepare",
+    "beforeBundleCommand": "node ../../scripts/installer-check.mjs"
   },
   "bundle": {
     "active": true,
