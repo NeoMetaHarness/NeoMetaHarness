@@ -333,12 +333,12 @@ export const registrySkillSchema = z.object({
 export type RegistrySkill = z.infer<typeof registrySkillSchema>;
 const skillTarget = z.object({ name: skillId, engine: z.enum(['hermes', 'dsh', 'superagent']), targetId: z.string().min(1) });
 export const metricsSummarySchema = z.object({
-  completedTickets: z.number().int().nonnegative(),
-  finishedTickets: z.number().int().nonnegative(),
+  completedTickets: z.number().int().nonnegative().nullable(),
+  finishedTickets: z.number().int().nonnegative().nullable(),
   attention: z.object({
     share: z.number().min(0).max(1).nullable(),
     observedWithoutFinalApprovalShare: z.number().min(0).max(1).nullable(),
-    withRecordedApproval: z.number().int().nonnegative(),
+    withRecordedApproval: z.number().int().nonnegative().nullable(),
     reason: z.string(),
   }),
   learning: z.object({

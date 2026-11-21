@@ -979,7 +979,7 @@ export default defineExtension({
     ctx.provide('dshInboxSink', { report: (input: Parameters<typeof service.reportDsh>[0]) =>
       service.reportDsh(input) });
     ctx.provide('superagentMetrics', {
-      inbox: (workspace?: string) => service.list().filter((item) =>
+      inbox: (workspace: string | undefined) => service.list().filter((item) =>
         workspace === undefined || item.workspace === workspace),
       decisions: (workspace?: string) => service.listDecisions({ workspace, limit: Number.MAX_SAFE_INTEGER }),
     });

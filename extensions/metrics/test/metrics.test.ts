@@ -3,6 +3,26 @@ import assert from 'node:assert/strict';
 import type { InboxItem } from '@neometaharness/contracts';
 import { SuccessMetrics } from '../src/metrics.js';
 
+test('missing superagent stays unavailable while an empty healthy workspace reports zero', async () => {
+  const withoutSuperagent = await new SuccessMetrics({ qualifiedSkills: async () => 2 })
+    .summary({ workspace: 'empty' });
+  assert.equal(withoutSuperagent.finishedTickets, null);
+  assert.equal(withoutSuperagent.completedTickets, null);
+  assert.equal(withoutSuperagent.attention.withRecordedApproval, null);
+  assert.equal(withoutSuperagent.attention.observedWithoutFinalApprovalShare, null);
+  assert.equal(withoutSuperagent.firstValue.onboardingToFirstReplyMinutes, null);
+  assert.match(withoutSuperagent.attention.reason, /engine-superagent is missing or disabled/i);
+
+  const emptyWorkspace = await new SuccessMetrics({
+    inbox: () => [],
+    decisions: async () => [],
+  }).summary({ workspace: 'empty' });
+  assert.equal(emptyWorkspace.finishedTickets, 0);
+  assert.equal(emptyWorkspace.completedTickets, 0);
+  assert.equal(emptyWorkspace.attention.withRecordedApproval, 0);
+  console.log('P7-12_UNAVAILABLE PASS missing source and real empty workspace');
+});
+
 test('seeded finished tickets, traces, skill state and scoped proxy signals', async () => {
   const records = new Map<string, unknown>();
   const put = async (file: string, content: unknown) => {

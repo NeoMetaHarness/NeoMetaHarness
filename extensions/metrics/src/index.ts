@@ -9,11 +9,11 @@ type RegistryMetrics = {
 export default defineExtension({
   activate(ctx) {
     ctx.route('summary', ({ body }) => {
-      const superagent = ctx.inject<Pick<MetricsSources, 'inbox' | 'decisions'>>('superagentMetrics');
+      const superagent = ctx.inject<Required<Pick<MetricsSources, 'inbox' | 'decisions'>>>('superagentMetrics');
       const registry = ctx.inject<RegistryMetrics>('skillRegistry');
       const service = new SuccessMetrics({
-        inbox: () => superagent?.inbox() ?? [],
-        decisions: (workspace) => superagent?.decisions(workspace) ?? Promise.resolve([]),
+        inbox: superagent ? (workspace) => superagent.inbox(workspace) : undefined,
+        decisions: superagent ? (workspace) => superagent.decisions(workspace) : undefined,
         qualifiedSkills: registry ? async () => {
           const assigned = new Set(registry.listAssignments().map((entry) => entry.name));
           const skills = await registry.list();

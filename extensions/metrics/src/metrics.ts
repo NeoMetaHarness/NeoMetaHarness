@@ -2,8 +2,8 @@ import { inboxItemSchema, type InboxItem } from '@neometaharness/contracts';
 
 type Trace = { ticketId: string; trace_id: string; workspace?: string; chosenAction: string };
 export type MetricsSources = {
-  inbox: () => Promise<InboxItem[]> | InboxItem[];
-  decisions: (workspace?: string) => Promise<Trace[]>;
+  inbox?: (workspace: string | undefined) => Promise<InboxItem[]> | InboxItem[];
+  decisions?: (workspace?: string) => Promise<Trace[]>;
   qualifiedSkills?: () => Promise<number>;
 };
 
@@ -14,17 +14,18 @@ export class SuccessMetrics {
   async summary({ workspace, onboardingCompletedAt }: {
     workspace?: string; onboardingCompletedAt?: string | null;
   } = {}) {
-    const inbox = inboxItemSchema.array().parse(await this.sources.inbox());
+    const inbox = this.sources.inbox ? inboxItemSchema.array().parse(await this.sources.inbox(workspace)) : null;
     const scoped = (item: InboxItem) => workspace === undefined || item.workspace === workspace;
-    const allTraces = await this.sources.decisions(workspace);
-    const completions = new Set(allTraces.filter((entry) => entry.chosenAction === 'ticket.complete'
+    const allTraces = this.sources.decisions ? await this.sources.decisions(workspace) : null;
+    const superagentAvailable = inbox !== null && allTraces !== null;
+    const completions = new Set((allTraces ?? []).filter((entry) => entry.chosenAction === 'ticket.complete'
       && (workspace === undefined || entry.workspace === workspace)).map((entry) => entry.ticketId));
-    const finished = inbox.filter((item) => scoped(item)
+    const finished = (inbox ?? []).filter((item) => scoped(item)
       && ['ready', 'blocked'].includes(item.status)
       && (item.episode?.traceId || completions.has(item.id)));
     const completedTickets = finished.filter((item) => item.status === 'ready').length;
     const withRecordedApproval = finished.filter((item) => !!item.approval?.decision).length;
-    const delivered = inbox.filter((item) => scoped(item) && item.source === 'neo/channel'
+    const delivered = (inbox ?? []).filter((item) => scoped(item) && item.source === 'neo/channel'
       && item.notification?.deliveredAt !== undefined)
       .map((item) => item.notification!.deliveredAt!).sort((a, b) => a - b);
     const onboarding = onboardingCompletedAt ? Date.parse(onboardingCompletedAt) : NaN;
@@ -36,14 +37,16 @@ export class SuccessMetrics {
       ? await this.sources.qualifiedSkills() : null;
 
     return {
-      completedTickets,
-      finishedTickets: finished.length,
+      completedTickets: superagentAvailable ? completedTickets : null,
+      finishedTickets: superagentAvailable ? finished.length : null,
       attention: {
         share: null,
-        observedWithoutFinalApprovalShare: finished.length
+        observedWithoutFinalApprovalShare: superagentAvailable && finished.length
           ? (finished.length - withRecordedApproval) / finished.length : null,
-        withRecordedApproval,
-        reason: 'Only the latest approval is stored. Human question replies and repeated approvals have no durable event history.',
+        withRecordedApproval: superagentAvailable ? withRecordedApproval : null,
+        reason: superagentAvailable
+          ? 'Only the latest approval is stored. Human question replies and repeated approvals have no durable event history.'
+          : 'Engine-superagent is missing or disabled. Ticket counts and attention proxy are unavailable.',
       },
       learning: {
         promotedPer20: null,
@@ -55,9 +58,11 @@ export class SuccessMetrics {
       },
       firstValue: {
         minutes: null,
-        onboardingToFirstReplyMinutes: onboardingToFirstReplyMinutes === null
+        onboardingToFirstReplyMinutes: !superagentAvailable || onboardingToFirstReplyMinutes === null
           ? null : (onboardingToFirstReplyMinutes - onboarding) / 60_000,
-        reason: 'Install time and all channel first-answer events are not persisted. Onboarding to Inbox channel delivery is a partial proxy.',
+        reason: superagentAvailable
+          ? 'Install time and all channel first-answer events are not persisted. Onboarding to Inbox channel delivery is a partial proxy.'
+          : 'Engine-superagent is missing or disabled. Channel delivery proxy is unavailable.',
       },
     };
   }

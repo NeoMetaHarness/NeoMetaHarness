@@ -41,7 +41,7 @@ export default function Metrics() {
         <section aria-label="Attention">
           <h2>Attention</h2>
           <p>Tickets finished with at most one approval — <strong>{percent(summary.attention.share)}</strong></p>
-          <p>{summary.finishedTickets} finished Tickets, {summary.attention.withRecordedApproval} with a recorded final approval.</p>
+          <p>{summary.finishedTickets ?? 'Unavailable'} finished Tickets, {summary.attention.withRecordedApproval ?? 'Unavailable'} with a recorded final approval.</p>
           <p>Proxy: finished with no recorded approval — {percent(summary.attention.observedWithoutFinalApprovalShare)}.</p>
           <p>{summary.attention.reason}</p>
         </section>
@@ -49,7 +49,7 @@ export default function Metrics() {
           <h2>Learning</h2>
           <p>Promoted skills per 20 completed Tickets — <strong>{summary.learning.promotedPer20 ?? 'Unavailable'}</strong></p>
           <p>Promoted-skill rollback rate — <strong>{percent(summary.learning.rollbackRate)}</strong></p>
-          <p>{summary.completedTickets} completed Tickets. Qualified current skills — {summary.learning.qualifiedSkills ?? 'Unavailable'}.</p>
+          <p>{summary.completedTickets ?? 'Unavailable'} completed Tickets. Qualified current skills — {summary.learning.qualifiedSkills ?? 'Unavailable'}.</p>
           <p>{summary.learning.reason}</p>
         </section>
         <section aria-label="Time to first value">

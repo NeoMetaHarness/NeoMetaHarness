@@ -134,6 +134,14 @@ test('P7-12 metrics route is authenticated, workspace-isolated and toggle-safe',
     assert.equal((await summary(ownerA, `?workspace=${orgB}`)).value.completedTickets, 2,
       'query strings cannot supply or change the caller workspace');
 
+    assert.equal((await post('extensions/disable', { id: 'fake-superagent' }, ownerA)).status, 200);
+    const unavailable = await summary(ownerA);
+    assert.equal(unavailable.status, 200);
+    assert.equal(unavailable.value.finishedTickets, null);
+    assert.equal(unavailable.value.completedTickets, null);
+    assert.equal(unavailable.value.attention.withRecordedApproval, null);
+    assert.match(unavailable.value.attention.reason, /engine-superagent is missing or disabled/i);
+
     assert.equal((await post('extensions/disable', { id: 'metrics' }, ownerA)).status, 200);
     assert.equal((await summary(ownerA)).status, 404);
     assert.deepEqual(await gateway.kernel.invokeRoute('/x/healthy/ping', 'RPC', {}), { ok: true });
