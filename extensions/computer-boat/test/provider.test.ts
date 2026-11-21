@@ -3,14 +3,15 @@ import { BoatComputerProvider } from '../src/provider.js';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jCj8AAAAASUVORK5CYII=', 'base64');
 let failure: 'exit' | 'xdotool' | 'abort' | undefined;
+let cleanupFailure: 'stop' | 'delete' | undefined;
 let signalCommandStarted: (() => void) | undefined;
-const calls: { path: string; body: Record<string, unknown> }[] = [];
+const calls: { path: string; method: string; body: Record<string, unknown> }[] = [];
 
 const fakeHttp: typeof fetch = async (url, init) => {
   assert.equal(init?.redirect, 'error');
   const path = new URL(String(url)).pathname;
   const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-  calls.push({ path, body });
+  calls.push({ path, method: init?.method ?? 'GET', body });
   let response: unknown;
   if (path === '/api/v1/sandboxes') {
     response = { sandbox: { id: 'bx_23456789' } };
@@ -36,6 +37,16 @@ const fakeHttp: typeof fetch = async (url, init) => {
   } else if (path.endsWith('/snapshots/latest')) {
     response = { id: 'snap-1' };
   } else if (path.endsWith('/stop')) {
+    if (cleanupFailure === 'stop') {
+      cleanupFailure = undefined;
+      return new Response('{"error":"stop failed"}', { status: 503 });
+    }
+    response = { success: true };
+  } else if (init?.method === 'DELETE' && path.startsWith('/api/v1/sandboxes/')) {
+    if (cleanupFailure === 'delete') {
+      cleanupFailure = undefined;
+      return new Response('{"error":"delete failed"}', { status: 503 });
+    }
     response = { success: true };
   } else {
     throw new Error(`Unexpected fake Boat request: ${path}`);
@@ -92,7 +103,21 @@ try {
   await assert.rejects(pending, /abort/i);
   computer.resumeInput?.();
   assert.equal((await computer.capture()).width, 1);
-  console.log('Boat provider PASS workspace+snapshot=true lease+screen=true failed-command+xdotool+abort=true');
+  cleanupFailure = 'stop';
+  const stopsBefore = calls.filter(call => call.path.endsWith('/stop')).length;
+  await assert.rejects(provider.release(id), /503/);
+  await assert.rejects(Promise.resolve(computer.capture()), /stopping/);
+  await assert.rejects(screen({ workspaceId: 'workspace-A', holder: 'agent', principalId: 'agent-one' }), /lease holder/);
+  await provider.release(id);
+  assert.equal(calls.filter(call => call.path.endsWith('/stop')).length, stopsBefore + 2,
+    'failed stop remains tracked for retry');
+  cleanupFailure = 'delete';
+  const deletesBefore = calls.filter(call => call.method === 'DELETE').length;
+  await assert.rejects(provider.terminate('neo-333333333333333333333333'), /503/);
+  await provider.terminate('neo-333333333333333333333333');
+  assert.equal(calls.filter(call => call.method === 'DELETE').length, deletesBefore + 2,
+    'failed delete remains tracked for retry');
+  console.log('Boat provider PASS workspace+snapshot=true lease+screen=true failed-command+xdotool+abort=true cleanup-retry=true');
 } finally {
   await provider.close();
 }

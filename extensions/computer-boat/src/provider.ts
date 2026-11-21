@@ -11,6 +11,9 @@ type Instance = {
   url: string;
   key: string;
   blocked: boolean;
+  stopping?: boolean;
+  killRequested?: boolean;
+  cleanupPromise?: Promise<void>;
   holder: LeaseHolder;
   leasePrincipalId?: string;
   leaseVersion: number;
@@ -92,7 +95,7 @@ export class BoatComputerProvider implements ComputerProvider {
       options.ttlSeconds = spec.ttlSeconds;
     }
     const source = typeof spec.forkOf === 'string' ? this.instances.get(spec.forkOf) : undefined;
-    if (spec.forkOf !== undefined && (!source || source.workspaceId !== context.workspaceId || source.url !== instance.url)) {
+    if (spec.forkOf !== undefined && (!source || source.stopping || source.workspaceId !== context.workspaceId || source.url !== instance.url)) {
       throw new Error('Boat fork source must be a managed computer in the same workspace and API');
     }
     const path = source ? `/sandboxes/${source.sandboxId}/fork` : '/sandboxes';
@@ -108,6 +111,7 @@ export class BoatComputerProvider implements ComputerProvider {
   private computer(instance: Instance): Computer {
     const path = `/sandboxes/${instance.sandboxId}`;
     const command = async (value: string, signal?: AbortSignal): Promise<string> => {
+      if (instance.stopping) throw new Error('Boat computer is stopping');
       const result = await this.request<{ success: boolean; exitCode: number | null; stdout: string; stderr?: string; stdoutTruncated?: boolean }>(
         instance, 'POST', `${path}/commands`, { command: value, timeoutSeconds: 30 }, signal,
       );
@@ -118,7 +122,7 @@ export class BoatComputerProvider implements ComputerProvider {
       screen: async (access?: ScreenAccess) => {
         // Both principal IDs must come from authenticated registry state, never a client-supplied identity.
         const leaseVersion = instance.leaseVersion;
-        const authorized = () => !this.disposed && instance.leaseVersion === leaseVersion &&
+        const authorized = () => !this.disposed && !instance.stopping && instance.leaseVersion === leaseVersion &&
           !!access?.principalId && access.workspaceId === instance.workspaceId &&
           access.holder === instance.holder && access.principalId === instance.leasePrincipalId;
         if (!authorized()) {
@@ -156,7 +160,7 @@ export class BoatComputerProvider implements ComputerProvider {
         return { png: png.toString('base64'), width, height };
       },
       snapshot: (access?: ComputerAttachContext) => {
-        if (this.disposed || !access?.workspaceId || access.workspaceId !== instance.workspaceId) {
+        if (this.disposed || instance.stopping || !access?.workspaceId || access.workspaceId !== instance.workspaceId) {
           throw new Error('Unknown Boat computer in workspace');
         }
         return this.request(instance, 'GET', `${path}/snapshots/latest`);
@@ -166,21 +170,30 @@ export class BoatComputerProvider implements ComputerProvider {
 
   async saveSnapshot(id: string, workspaceId: string): Promise<unknown> {
     const instance = this.instances.get(id);
-    if (!workspaceId || !instance || instance.workspaceId !== workspaceId || this.disposed) {
+    if (!workspaceId || !instance || instance.stopping || instance.workspaceId !== workspaceId || this.disposed) {
       throw new Error('Unknown Boat computer in workspace');
     }
     const name = `neo-${randomUUID()}`;
     return this.request(instance, 'POST', '/saved-snapshots', { sandboxId: instance.sandboxId, name });
   }
 
-  private async cleanup(id: string, force: boolean): Promise<void> {
+  private cleanup(id: string, force: boolean): Promise<void> {
     const instance = this.instances.get(id);
-    if (!instance) return;
+    if (!instance) return Promise.resolve();
+    instance.stopping = true;
     instance.blocked = true;
     instance.current?.abort();
-    this.instances.delete(id);
-    // Stop saves a snapshot for an affordable handover. Kill permanently deletes the sandbox.
-    await this.request(instance, force ? 'DELETE' : 'POST', `/sandboxes/${instance.sandboxId}${force ? '' : '/stop'}`);
+    if (force) instance.killRequested = true;
+    if (instance.cleanupPromise) return instance.cleanupPromise;
+    instance.cleanupPromise = (async () => {
+      const path = `/sandboxes/${instance.sandboxId}`;
+      // Stop saves a snapshot for handover. Kill permanently deletes the sandbox.
+      if (!instance.killRequested) await this.request(instance, 'POST', `${path}/stop`);
+      // A kill arriving while stop is pending must still delete the sandbox.
+      if (instance.killRequested) await this.request(instance, 'DELETE', path);
+      this.instances.delete(id);
+    })().finally(() => { instance.cleanupPromise = undefined; });
+    return instance.cleanupPromise;
   }
   release(id: string): Promise<void> { return this.cleanup(id, false); }
   terminate(id: string): Promise<void> { return this.cleanup(id, true); }
