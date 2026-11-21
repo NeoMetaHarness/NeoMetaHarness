@@ -30,7 +30,7 @@ export class PresetWorkerHost implements WorkerHost {
   private active = new Set<{ dispose(): Promise<void> }>();
   private next = 0;
   private home = '';
-  private readonly computerProfiles = new Set<string>();
+  private readonly computerProfiles = new Map<string, string>();
 
   async start(home: string, gatewayUrl: string, tokenFile?: string): Promise<void> {
     this.home = home;
@@ -65,8 +65,8 @@ export class PresetWorkerHost implements WorkerHost {
     const binding = await this.models('worker', { botId, text, workspace });
     const { adapter, provider, model } = binding;
     const computerProfile = botId;
-    this.computerProfiles.add(computerProfile);
-    const computerMcp = await this.computers?.ready('superagent', computerProfile, join(this.home, createHash('sha256').update(computerProfile).digest('hex')));
+    this.computerProfiles.set(`${workspace ?? 'default'}:${computerProfile}`, workspace ?? 'default');
+    const computerMcp = await this.computers?.ready('superagent', computerProfile, join(this.home, createHash('sha256').update(`${workspace ?? 'default'}:${computerProfile}`).digest('hex')), workspace ?? 'default');
     // Every worker has its own model adapter, allowing concurrent assignments.
     const unregister = this.context.llm.registerAdapter([provider], adapter);
     let worker: Awaited<ReturnType<typeof this.context.agents.create>> | undefined;
@@ -121,7 +121,9 @@ export class PresetWorkerHost implements WorkerHost {
 
   async close(): Promise<void> {
     await Promise.allSettled([...this.active].map((worker) => worker.dispose()));
-    for (const profile of this.computerProfiles) await this.computers?.forget('superagent', profile);
+    for (const [key, workspace] of this.computerProfiles) {
+      await this.computers?.forget('superagent', key.slice(workspace.length + 1), workspace);
+    }
     this.computerProfiles.clear();
     this.skills?.forgetDsh('superagent');
     await this.registration?.dispose();

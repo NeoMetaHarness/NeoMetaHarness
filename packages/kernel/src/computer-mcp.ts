@@ -3,7 +3,7 @@ export type ComputerEngine = 'hermes' | 'dsh' | 'superagent';
 export interface ComputerMcpConfig { transport: 'stdio'; serverName: string; command: string; args: string[]; env: Record<string, string> }
 export interface ComputerMcpProjection {
   ready(engine: ComputerEngine, profile: string, home: string, workspace: string): Promise<ComputerMcpConfig>;
-  forget(engine: ComputerEngine, profile: string): Promise<void>;
+  forget(engine: ComputerEngine, profile: string, workspace?: string): Promise<void>;
   removeAll(): Promise<void>;
 }
 export class ComputerMcpBridge {
@@ -19,14 +19,18 @@ export class ComputerMcpBridge {
     if (this.projection !== projection) return;
     this.projection = undefined; await projection.removeAll();
   }
-  async ready(engine: ComputerEngine, profile: string, home: string, workspace = 'default'): Promise<ComputerMcpConfig | undefined> {
-    this.consumers.set(JSON.stringify([engine, profile]), { engine, profile, home, workspace });
+  async ready(engine: ComputerEngine, profile: string, home: string, workspace: string): Promise<ComputerMcpConfig | undefined> {
+    this.consumers.set(JSON.stringify([engine, profile, workspace]), { engine, profile, home, workspace });
     return this.projection?.ready(engine, profile, home, workspace);
   }
   async forgetEngine(engine: ComputerEngine) {
-    for (const value of [...this.consumers.values()]) if (value.engine === engine) await this.forget(engine, value.profile);
+    for (const value of [...this.consumers.values()]) if (value.engine === engine) await this.forget(engine, value.profile, value.workspace);
   }
-  async forget(engine: ComputerEngine, profile: string) {
-    this.consumers.delete(JSON.stringify([engine, profile])); await this.projection?.forget(engine, profile);
+  async forget(engine: ComputerEngine, profile: string, workspace?: string) {
+    for (const [key, value] of [...this.consumers]) {
+      if (value.engine !== engine || value.profile !== profile || (workspace && value.workspace !== workspace)) continue;
+      this.consumers.delete(key);
+      await this.projection?.forget(engine, profile, value.workspace);
+    }
   }
 }

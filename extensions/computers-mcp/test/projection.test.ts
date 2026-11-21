@@ -32,7 +32,7 @@ try {
     const profile = engine === 'hermes' ? 'default' : 'test-profile';
     const engineHome = join(home, engine);
     await registry.attach('fake', engine); registry.assign(engine, profile, engine);
-    const config = await bridge.ready(engine, profile, engineHome); assert.ok(config);
+    const config = await bridge.ready(engine, profile, engineHome, 'default'); assert.ok(config);
     const binding = JSON.parse(await readFile(config.env.NEO_COMPUTER_MCP_BINDING, 'utf8'));
     tokens.push(binding.token); assert.match(binding.token, /^[a-f0-9]{64}$/);
     assert.ok(!JSON.stringify(config).includes(binding.token));
