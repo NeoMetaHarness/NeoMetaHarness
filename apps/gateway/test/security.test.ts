@@ -308,6 +308,7 @@ test('SEC-11: the superagent bridge key expires, is swept after a crash, and nev
 
 test('SEC-13: authorization runs before input validation on core routes, over HTTP and WebSocket', async () => {
   await withGateway('server', async (gateway, base) => {
+    assert.equal((await signUp(base, 'owner@corp.test')).status, 200);
     const roleless = await signUp(base, 'roleless@evil.test');
     const as = { authorization: `Bearer ${roleless.token}` };
     // Malformed input from a caller with no role must be refused by policy, not described by the validator.
