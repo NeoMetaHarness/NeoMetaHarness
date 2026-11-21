@@ -303,7 +303,7 @@ function ExtensionSchemaForm({
   );
 }
 
-export default function Settings({ onOpen }: { onOpen: (path: '/settings/channels' | '/settings/models' | '/onboarding') => void }) {
+export default function Settings({ onOpen }: { onOpen: (path: '/settings/channels' | '/settings/models' | '/settings/metrics' | '/onboarding') => void }) {
   const [extensions, setExtensions] = useState<ExtensionStatus[]>([]);
   const latest = useRef(0);
   const [updateStatus, setUpdateStatus] = useState('');
@@ -407,6 +407,12 @@ export default function Settings({ onOpen }: { onOpen: (path: '/settings/channel
       <p>Providers, roles and bot overrides.</p>
       <Button label="Manage models" data-testid="settings-models-open" onClick={() => onOpen('/settings/models')}>
         Manage models
+      </Button>
+
+      <h2>Success metrics</h2>
+      <p>Review attention, learning and time-to-first-value measures from recorded activity.</p>
+      <Button label="View success metrics" data-testid="settings-metrics-open" onClick={() => onOpen('/settings/metrics')}>
+        View metrics
       </Button>
 
       {native && (

@@ -18,6 +18,7 @@ const Memory = lazy(() => import('./pages/Memory'));
 const Computers = lazy(() => import('./pages/Computers'));
 const Coding = lazy(() => import('./pages/Coding'));
 const Models = lazy(() => import('./pages/Models'));
+const Metrics = lazy(() => import('./pages/Metrics'));
 const Channels = lazy(() => import('./pages/Channels'));
 const Routines = lazy(() => import('./pages/Routines'));
 const Tasks = lazy(() => import('./pages/Tasks'));
@@ -153,7 +154,7 @@ function NeoApp() {
           <SetupReminder onResume={() => navigate('/onboarding')} />
         </Suspense>}
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
-          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/onboarding' ? <Onboarding onOpen={navigate} onSkip={skipSetup} onCompleted={completeSetup} /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings' ? <Settings onOpen={navigate} /> : <Placeholder name={current.label} />}
+          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/onboarding' ? <Onboarding onOpen={navigate} onSkip={skipSetup} onCompleted={completeSetup} /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings/metrics' ? <Metrics /> : path === '/settings' ? <Settings onOpen={navigate} /> : <Placeholder name={current.label} />}
         </Suspense>
       </div>
     </AppShell>
