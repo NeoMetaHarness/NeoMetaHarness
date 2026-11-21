@@ -54,8 +54,8 @@ packages/
   agents/       adopted bot-hq domain (bots, rooms, routines, tasks, library, approvals, voice)
   auth/         Better Auth integration, session management, workspace access
   computers/    computer abstraction layer, safety policies, provider interfaces
-  db/           Kysely database schema, migrations, SQLite/Postgres dialect
-  egress/       network egress controls and domain allowlists
+  db/           Kysely database schema, migrations, SQLite dialect (Postgres planned)
+  egress/       outbound HTTPS guard: URL validation, private-network blocking, DNS-checked sockets, response caps
   vault/        secrets encryption, key management, scoped projections
 extensions/     official extensions, each independently toggleable
   Built: backup, channels (includes WhatsApp plugin), coding-workflow, computer-docker, computer-fake,
