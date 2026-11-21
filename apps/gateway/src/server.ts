@@ -305,6 +305,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     options.vaultKeyFile ?? join(dirname(resolve(options.databaseFile)), 'vault-keys', 'master.key'));
   // Channel platforms publish into, and the Inbox subscribes to, this one bus.
   const channelBus = new ChannelBus();
+  /** The first workspace created (whose owner set the deployment up); undefined before any exists. */
+  const bootstrapWorkspace = async () => (await auth.kysely?.selectFrom('organization').select('id')
+    .orderBy('createdAt').executeTakeFirst() as { id: string } | undefined)?.id;
   const kernel = new NeoKernel(db, {
     // Read-only deployment mode, for extensions whose background work differs per mode (memory-honcho's nightly pass).
     deploymentMode: mode,
@@ -324,12 +327,17 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     skillsBridge,
     extensionDataDir,
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
+    // P1-13: where an extension keeps a workspace's own configuration (Model Hub, Panda). Desktop has one
+    // ('default', unchanged); server mode keeps each workspace apart, and 'default' is the deployment's.
+    workspaceDirectory: {
+      key: (workspace?: string) => mode === 'desktop' ? 'default' : workspace ?? 'default',
+      bootstrap: async () => mode === 'desktop' ? undefined : bootstrapWorkspace(),
+    },
   }, dataDir, process.env.NMH_EXTENSION_PYTHON, {
     fallbackWorkspace: mode === 'desktop' ? desktopWorkspace : null,
     // Server mode: pre-P1-13 settings belong to the bootstrap workspace (the first one created, whose owner set
-    // the deployment up). With no workspace yet the legacy rows stay put until a later start.
-    legacyWorkspace: async () => (await auth.kysely?.selectFrom('organization').select('id')
-      .orderBy('createdAt').executeTakeFirst() as { id: string } | undefined)?.id,
+    // the deployment up). With no workspace yet the legacy rows wait; the first access after it appears moves them.
+    legacyWorkspace: bootstrapWorkspace,
   });
 
   const authorizeVault = async (operation: VaultOperation, scope: VaultScope, context?: GatewayAuthContext) => {
@@ -528,6 +536,12 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     const path = `/x/models/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Model Hub extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
+  };
+  /** Model Hub and Panda configuration is the caller's workspace's (P1-13); desktop has its one. */
+  const modelsWorkspace = (context: GatewayAuthContext): string | undefined => {
+    if (mode === 'desktop') return undefined;
+    if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
+    return context.workspaceId;
   };
   const invokePanda = async (route: string, body: unknown) => {
     const path = `/x/models-router-panda/${route}`;
@@ -760,55 +774,55 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         settings: {
           get: os.x['models-router-panda'].settings.get.handler(async ({ context }) => {
             requireAdminOrOwner(context);
-            return invokePanda('settings/get', {}) as Promise<import('@neometaharness/contracts').PandaSettings | null>;
+            return invokePanda('settings/get', { workspace: modelsWorkspace(context) }) as Promise<import('@neometaharness/contracts').PandaSettings | null>;
           }),
           set: os.x['models-router-panda'].settings.set.handler(async ({ input, context }) => {
             requireAdminOrOwner(context);
-            return invokePanda('settings/set', input) as Promise<import('@neometaharness/contracts').PandaSettings>;
+            return invokePanda('settings/set', { ...input, workspace: modelsWorkspace(context) }) as Promise<import('@neometaharness/contracts').PandaSettings>;
           }),
         },
         health: os.x['models-router-panda'].health.handler(async ({ context }) => {
           requireViewer(context);
-          return invokePanda('health', {}) as Promise<{ ok: boolean; configured: boolean }>;
+          return invokePanda('health', { workspace: modelsWorkspace(context) }) as Promise<{ ok: boolean; configured: boolean }>;
         }),
       },
       models: {
         providers: {
           list: os.x.models.providers.list.handler(async ({ context }) => {
             requireViewer(context);
-            return invokeModels('providers/list', {}) as Promise<ModelProviderRecord[]>;
+            return invokeModels('providers/list', { workspace: modelsWorkspace(context) }) as Promise<ModelProviderRecord[]>;
           }),
           put: os.x.models.providers.put.handler(async ({ input, context }) => {
             requireAdminOrOwner(context);
-            return invokeModels('providers/put', input) as Promise<ModelProviderRecord>;
+            return invokeModels('providers/put', { ...input, workspace: modelsWorkspace(context) }) as Promise<ModelProviderRecord>;
           }),
           delete: os.x.models.providers.delete.handler(async ({ input, context }) => {
             requireAdminOrOwner(context);
-            return invokeModels('providers/delete', input) as Promise<{ deleted: boolean }>;
+            return invokeModels('providers/delete', { ...input, workspace: modelsWorkspace(context) }) as Promise<{ deleted: boolean }>;
           }),
           test: os.x.models.providers.test.handler(async ({ input, context }) => {
             requireAdminOrOwner(context);
-            return invokeModels('providers/test', input) as Promise<{ ok: boolean; models: number; status: number }>;
+            return invokeModels('providers/test', { ...input, workspace: modelsWorkspace(context) }) as Promise<{ ok: boolean; models: number; status: number }>;
           }),
         },
         roles: {
           get: os.x.models.roles.get.handler(async ({ context }) => {
             requireViewer(context);
-            return invokeModels('roles/get', {}) as Promise<ModelRolesRecord>;
+            return invokeModels('roles/get', { workspace: modelsWorkspace(context) }) as Promise<ModelRolesRecord>;
           }),
           set: os.x.models.roles.set.handler(async ({ input, context }) => {
             requireAdminOrOwner(context);
-            return invokeModels('roles/set', input) as Promise<{ role: ModelRoleName; selection: ModelSelectionRecord }>;
+            return invokeModels('roles/set', { ...input, workspace: modelsWorkspace(context) }) as Promise<{ role: ModelRoleName; selection: ModelSelectionRecord }>;
           }),
         },
         override: {
           get: os.x.models.override.get.handler(async ({ input, context }) => {
             requireViewer(context);
-            return invokeModels('override/get', input) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;
+            return invokeModels('override/get', { ...input, workspace: modelsWorkspace(context) }) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;
           }),
           set: os.x.models.override.set.handler(async ({ input, context }) => {
             requireAdminOrOwner(context);
-            return invokeModels('override/set', input) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;
+            return invokeModels('override/set', { ...input, workspace: modelsWorkspace(context) }) as Promise<{ profile: string; selection: ModelSelectionRecord | null }>;
           }),
         },
       },
@@ -1027,7 +1041,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       'engine-dsh': {
         create: os.x['engine-dsh'].create.handler(async ({ input, context }) => {
           authorize('x.engine-dsh.create', context);
-          return invokeDsh('create', input) as Promise<{ sessionId: string; pid: number }>;
+          // Server mode: the session belongs to the caller's workspace (its vault scope and model keys), never
+          // to one the caller names.
+          return invokeDsh('create', mode === 'desktop' ? input : { ...input, workspaceId: inboxWorkspace(context) }) as Promise<{ sessionId: string; pid: number }>;
         }),
         prompt: os.x['engine-dsh'].prompt.handler(async ({ input, context }) => {
           authorize('x.engine-dsh.prompt', context);

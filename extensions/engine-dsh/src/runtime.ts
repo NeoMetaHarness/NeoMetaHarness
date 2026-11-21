@@ -17,7 +17,7 @@ const modelKeys = ['NEO_MODEL_BASE_URL', 'NEO_MODEL_NAME', 'NEO_MODEL_API_KEY'] 
 type ModelRole = 'default' | 'fast' | 'reasoning' | 'coding' | 'eval';
 export interface ModelResolver {
   active: boolean;
-  resolve(role: ModelRole, profile?: string): Promise<{ model: string; baseUrl: string; apiKey?: string }>;
+  resolve(role: ModelRole, profile?: string, task?: unknown, workspace?: string): Promise<{ model: string; baseUrl: string; apiKey?: string }>;
 }
 export interface DshInboxSink {
   report(input: { sessionId: string; workspaceId: string; profile: string;
@@ -239,7 +239,8 @@ export class DshAgentRuntime {
     const hub = this.modelHub?.();
     if (hub?.active) {
       try {
-        const resolved = await hub.resolve(input.role ?? 'coding', input.profile);
+        // The session's workspace picks the Model Hub bindings and keys (P1-13).
+        const resolved = await hub.resolve(input.role ?? 'coding', input.profile, undefined, input.workspaceId);
         model = resolved.model;
         secrets.set('NEO_MODEL_BASE_URL', resolved.baseUrl);
         secrets.set('NEO_MODEL_NAME', resolved.model);

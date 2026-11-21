@@ -32,7 +32,7 @@ const direct = { providerId: 'direct', model: 'fallback' };
 const vault = { get: async () => secret } as unknown as VaultService;
 const router = new PandaRouter(vault, home);
 try {
-  await router.load(); assert.equal(router.settings(), null);
+  await router.load(); assert.equal(await router.settings(), null);
   assert.deepEqual(await router.health(), { ok: false, configured: false });
   await router.configure(config);
   for (const role of MODEL_ROLES) assert.deepEqual(await router.select(role, direct), { providerId: 'chosen', model: role });
@@ -44,7 +44,7 @@ try {
   await assert.rejects(router.configure({ ...config, roles: { coding: [config.roles.coding![0], config.roles.coding![0]] } }));
   assert.equal((await readFile(join(home, 'settings.json'), 'utf8')).includes(secret), false);
   const reloaded = new PandaRouter(vault, home); await reloaded.load();
-  assert.deepEqual(reloaded.settings(), config); await reloaded.close();
+  assert.deepEqual(await reloaded.settings(), config); await reloaded.close();
   const missing = new PandaRouter({ get: async () => undefined } as unknown as VaultService, join(home, 'missing'));
   await missing.configure(config); assert.equal(await missing.select('coding', direct), undefined); await missing.close();
   mode = 'hang';

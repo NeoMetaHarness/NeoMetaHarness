@@ -13,10 +13,11 @@ export interface ModelBinding {
     execute: (binding: ModelBinding, signal: AbortSignal) => Promise<T>,
     onAttempt: (entry: RouteAttempt) => Promise<void>): Promise<T>;
 }
-export type ModelFactory = (role: ModelRole, input: { botId: string; text: string; mode?: string }) => Promise<ModelBinding>;
+/** workspace: whose Model Hub bindings and keys serve this work (P1-13); absent = the deployment's. */
+export type ModelFactory = (role: ModelRole, input: { botId: string; text: string; mode?: string; workspace?: string }) => Promise<ModelBinding>;
 export interface ModelHubResolver {
   active: boolean;
-  resolve(role: 'eval' | 'coding', profile?: string): Promise<{ baseUrl: string; model: string; apiKey?: string }>;
+  resolve(role: 'eval' | 'coding', profile?: string, task?: unknown, workspace?: string): Promise<{ baseUrl: string; model: string; apiKey?: string }>;
   runRoutedTurn?<T>(role: 'eval' | 'coding', profile: string | undefined, task: RoutedTask,
     execute: (binding: ResolvedModel, context: { attempt: number; tier: HubRole; signal: AbortSignal }) => Promise<T>,
     onAttempt?: (entry: RouteAttempt) => Promise<void>): Promise<T>;
@@ -91,7 +92,7 @@ export function modelHubFactory(getHub: () => ModelHubResolver | undefined): Mod
   return async (role, input) => {
     const hub = getHub();
     if (!hub?.active) throw new Error('Superagent requires the enabled Model Hub extension');
-    const selection = await hub.resolve(role === 'eval' ? 'eval' : 'coding', input.botId);
+    const selection = await hub.resolve(role === 'eval' ? 'eval' : 'coding', input.botId, undefined, input.workspace);
     const create = (chosen: { baseUrl: string; apiKey?: string; model: string }): ModelBinding => {
       const url = new URL(chosen.baseUrl);
       if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Superagent model endpoint requires HTTP(S)');

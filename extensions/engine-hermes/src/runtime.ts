@@ -113,6 +113,7 @@ export class VaultCredentials implements CredentialSource {
   constructor(private readonly vault: VaultService, home: string) {
     this.files = new ProfileFileCredentials(home);
   }
+  /** Hermes profiles are deployment-level runtime bindings (P1-13), so their credentials use the deployment scope. */
   private scope(profile: string): VaultScope {
     return { kind: 'engine', workspaceId: 'default', subjectId: `engine-hermes/${profileName(profile)}` };
   }

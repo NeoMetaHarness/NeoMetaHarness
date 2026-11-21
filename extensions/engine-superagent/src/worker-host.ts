@@ -17,7 +17,7 @@ import { bridgeEnv } from './bridge-key.js';
 export interface WorkerHost {
   /** tokenFile holds the bridge API key; the MCP child re-reads it on every call. */
   start(home: string, gatewayUrl: string, tokenFile?: string): Promise<void>;
-  delegate(botId: string, text: string): Promise<{ summary: string; tests: string[]; risks: string[];
+  delegate(botId: string, text: string, workspace?: string): Promise<{ summary: string; tests: string[]; risks: string[];
     kind?: 'question' | 'approval'; question?: string; destructive?: boolean }>;
   close(): Promise<void>;
 }
@@ -60,9 +60,9 @@ export class PresetWorkerHost implements WorkerHost {
     });
   }
 
-  async delegate(botId: string, text: string): Promise<{ summary: string; tests: string[]; risks: string[];
+  async delegate(botId: string, text: string, workspace?: string): Promise<{ summary: string; tests: string[]; risks: string[];
     kind?: 'question' | 'approval'; question?: string; destructive?: boolean }> {
-    const binding = await this.models('worker', { botId, text });
+    const binding = await this.models('worker', { botId, text, workspace });
     const { adapter, provider, model } = binding;
     const computerProfile = botId;
     this.computerProfiles.add(computerProfile);

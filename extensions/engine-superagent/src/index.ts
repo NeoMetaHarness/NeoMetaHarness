@@ -859,7 +859,7 @@ class SuperagentService {
       if (!resume) this.engine.assignmentStarted(ticketId, assignmentId);
       this.workerReady ??= this.worker.start(this.workerHome, this.gatewayUrl(), this.token);
       await this.workerReady;
-      const result = await this.worker.delegate(item.botId, text ?? item.text);
+      const result = await this.worker.delegate(item.botId, text ?? item.text, item.workspace);
       if (this.closed) return;
       if (result.kind === 'question' || result.kind === 'approval') {
         outcome = result.kind;

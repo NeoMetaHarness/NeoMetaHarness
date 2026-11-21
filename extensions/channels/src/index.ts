@@ -57,6 +57,11 @@ function canonical(profile: string): string {
   return name;
 }
 
+/**
+ * Channel credentials belong to a Hermes profile, and Hermes profiles are deployment-level (one Hermes runtime per
+ * deployment), so they live in the deployment ('default') scope, not a workspace's (P1-13). P1-14's deployment
+ * owner manages them in server mode.
+ */
 function scope(profile: string): VaultScope {
   return { kind: 'engine', workspaceId: 'default', subjectId: `engine-hermes/${canonical(profile)}` };
 }

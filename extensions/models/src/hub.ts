@@ -16,7 +16,8 @@ export interface ModelProvider {
   hasKey: boolean;
 }
 export interface ModelSelection { providerId: string; model: string }
-export interface RoutedTask { text: string; ticketId?: string; source?: string }
+/** workspace: whose provider keys, roles and router settings serve the task (P1-13); absent = deployment. */
+export interface RoutedTask { text: string; ticketId?: string; source?: string; workspace?: string }
 export interface RouteAttempt {
   task: RoutedTask;
   role: ModelRole;
@@ -32,7 +33,7 @@ export class ModelRouteRejected extends Error {}
 /** Optional routing policy; credentials and endpoints remain owned by Model Hub. */
 export interface ModelRouter {
   select(role: ModelRole, direct: ModelSelection, task?: RoutedTask): Promise<ModelSelection | undefined>;
-  escalationLimits?(): EscalationLimits;
+  escalationLimits?(workspace?: string): EscalationLimits | Promise<EscalationLimits>;
   recordAttempt?(entry: RouteAttempt): Promise<void>;
 }
 export interface ResolvedModel extends ModelSelection { baseUrl: string; apiKey?: string }
@@ -46,7 +47,32 @@ type HubSettings = {
 
 const emptySettings = (): HubSettings => ({ providers: [], roles: {}, overrides: {}, revision: 0 });
 const providerId = /^[a-z][a-z0-9-]{0,47}$/;
-const scope = { kind: 'workspace' as const, workspaceId: 'default' };
+
+/** Gateway service: which storage a caller's workspace maps to (desktop: always the one 'default'). */
+export interface WorkspaceDirectory {
+  key(workspace?: string): string;
+  /** Server mode: the first workspace, which inherits configuration stored before P1-13. */
+  bootstrap(): Promise<string | undefined>;
+}
+const DEPLOYMENT = 'default';
+const workspaceKeyPattern = /^[A-Za-z0-9_-]{1,128}$/;
+/**
+ * Per-workspace storage (P1-13). 'default' is the deployment's: desktop's only one, and in server mode the
+ * configuration of deployment-level work (Hermes profiles, registry evaluation). Each server workspace has its own.
+ */
+export class WorkspaceStorage {
+  constructor(private readonly directory?: WorkspaceDirectory) {}
+  key(workspace?: string): string {
+    const key = this.directory ? this.directory.key(workspace) : workspace ?? DEPLOYMENT;
+    if (!workspaceKeyPattern.test(key)) throw new Error('Invalid workspace');
+    return key;
+  }
+  /** True when this workspace should start from the deployment's pre-P1-13 configuration. */
+  async inheritsDeployment(key: string): Promise<boolean> {
+    return key !== DEPLOYMENT && (await this.directory?.bootstrap()) === key;
+  }
+  scope(key: string) { return { kind: 'workspace' as const, workspaceId: key }; }
+}
 const credentialName = (id: string) => `NEO_MODEL_${id.toUpperCase().replace(/-/g, '_')}_KEY`;
 const hermesProfile = (name: string) => {
   const profile = name.trim().toLowerCase();
@@ -60,15 +86,55 @@ const hermesProfile = (name: string) => {
 export class ModelHub {
   active = false;
   private router?: ModelRouter;
-  private settings: HubSettings;
+  private readonly workspaces = new Map<string, HubSettings>();
+  private readonly loading = new Map<string, Promise<HubSettings>>();
   private pending: Promise<void> = Promise.resolve();
   private readonly projections = new Map<string, string>();
   private readonly filename: string;
+  private readonly storage: WorkspaceStorage;
 
-  constructor(private readonly vault: VaultService, dataDir: string) {
+  constructor(private readonly vault: VaultService, private readonly dataDir: string, directory?: WorkspaceDirectory) {
     this.filename = join(dataDir, 'models', 'settings.json');
-    this.settings = existsSync(this.filename)
-      ? JSON.parse(readFileSync(this.filename, 'utf8')) as HubSettings : emptySettings();
+    this.storage = new WorkspaceStorage(directory);
+    this.workspaces.set(DEPLOYMENT, existsSync(this.filename)
+      ? JSON.parse(readFileSync(this.filename, 'utf8')) as HubSettings : emptySettings());
+  }
+
+  private file(key: string): string {
+    return key === DEPLOYMENT ? this.filename : join(this.dataDir, 'models', 'workspaces', key, 'settings.json');
+  }
+
+  /** One workspace's providers, roles and overrides; the bootstrap workspace starts from the deployment's. */
+  private async settingsOf(workspace?: string): Promise<{ key: string; settings: HubSettings }> {
+    const key = this.storage.key(workspace);
+    const loaded = this.workspaces.get(key);
+    if (loaded) return { key, settings: loaded };
+    let load = this.loading.get(key);
+    if (!load) {
+      load = (async () => {
+        const raw = await readFile(this.file(key), 'utf8').catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return undefined;
+          throw error;
+        });
+        if (raw !== undefined) return JSON.parse(raw) as HubSettings;
+        if (!(await this.storage.inheritsDeployment(key))) return emptySettings();
+        const inherited = structuredClone(this.workspaces.get(DEPLOYMENT)!);
+        for (const provider of inherited.providers) {
+          const secret = await this.vault.get(this.storage.scope(DEPLOYMENT), credentialName(provider.id));
+          if (secret !== undefined) await this.vault.put(this.storage.scope(key), credentialName(provider.id), secret);
+        }
+        inherited.revision = 0;
+        return inherited;
+      })();
+      this.loading.set(key, load);
+    }
+    try {
+      const settings = await load;
+      if (!this.workspaces.has(key)) this.workspaces.set(key, settings);
+      return { key, settings: this.workspaces.get(key)! };
+    } finally {
+      this.loading.delete(key);
+    }
   }
 
   setActive(value: boolean): void { this.active = value; }
@@ -79,12 +145,13 @@ export class ModelHub {
     return () => { if (this.router === router) this.router = undefined; };
   }
 
-  state() {
+  async state(workspace?: string) {
+    const { settings } = await this.settingsOf(workspace);
     return {
       active: this.active,
-      providers: this.settings.providers.map(({ id, name, baseUrl, hasKey }) => ({ id, kind: 'openai-compatible' as const, name, baseUrl, hasKey: !!hasKey })),
-      roles: this.settings.roles,
-      overrides: this.settings.overrides,
+      providers: settings.providers.map(({ id, name, baseUrl, hasKey }) => ({ id, kind: 'openai-compatible' as const, name, baseUrl, hasKey: !!hasKey })),
+      roles: settings.roles,
+      overrides: settings.overrides,
     };
   }
 
@@ -107,45 +174,50 @@ export class ModelHub {
     return [...matches].map((match) => ({ id: match[1] ?? match[3]!, name: match[2] ?? match[4]! }));
   }
 
-  private async persist(): Promise<void> {
-    this.settings.revision++;
-    const copy = JSON.stringify(this.settings, null, 2) + '\n';
+  private async persist(key: string): Promise<void> {
+    const settings = this.workspaces.get(key)!;
+    settings.revision++;
+    const copy = JSON.stringify(settings, null, 2) + '\n';
+    const filename = this.file(key);
     this.pending = this.pending.catch(() => {}).then(async () => {
-      await mkdir(dirname(this.filename), { recursive: true });
-      const temp = `${this.filename}.${randomUUID()}.tmp`;
-      try { await writeFile(temp, copy, { mode: 0o600 }); await rename(temp, this.filename); }
+      await mkdir(dirname(filename), { recursive: true });
+      const temp = `${filename}.${randomUUID()}.tmp`;
+      try { await writeFile(temp, copy, { mode: 0o600 }); await rename(temp, filename); }
       finally { await unlink(temp).catch(() => {}); }
     });
     await this.pending;
   }
 
-  async saveProvider(input: { id: string; kind: 'openai-compatible'; name?: string; baseUrl: string; apiKey?: string }): Promise<ModelProvider> {
+  async saveProvider(input: { id: string; kind: 'openai-compatible'; name?: string; baseUrl: string; apiKey?: string }, workspace?: string): Promise<ModelProvider> {
     if (!providerId.test(input.id)) throw new Error('Invalid provider ID');
     if (input.kind !== 'openai-compatible') throw new Error('Unsupported model provider kind');
     const url = new URL(input.baseUrl);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid model endpoint URL');
-    const previous = this.settings.providers.find((item) => item.id === input.id);
-    if (input.apiKey) await this.vault.put(scope, credentialName(input.id), input.apiKey);
+    const { key, settings } = await this.settingsOf(workspace);
+    const previous = settings.providers.find((item) => item.id === input.id);
+    if (input.apiKey) await this.vault.put(this.storage.scope(key), credentialName(input.id), input.apiKey);
     const record = { id: input.id, kind: 'openai-compatible' as const, name: input.name?.trim() || previous?.name || input.id, baseUrl: url.href.replace(/\/$/, ''), hasKey: Boolean(input.apiKey || previous?.hasKey) };
-    this.settings.providers = [...this.settings.providers.filter((item) => item.id !== input.id), record];
-    await this.persist();
+    settings.providers = [...settings.providers.filter((item) => item.id !== input.id), record];
+    await this.persist(key);
     return record;
   }
 
-  async deleteProvider(id: string): Promise<{ deleted: boolean }> {
-    if (!this.settings.providers.some((item) => item.id === id)) return { deleted: false };
-    this.settings.providers = this.settings.providers.filter((item) => item.id !== id);
-    for (const role of MODEL_ROLES) if (this.settings.roles[role]?.providerId === id) delete this.settings.roles[role];
-    for (const [bot, binding] of Object.entries(this.settings.overrides)) if (binding.providerId === id) delete this.settings.overrides[bot];
-    await this.vault.delete(scope, credentialName(id));
-    await this.persist();
+  async deleteProvider(id: string, workspace?: string): Promise<{ deleted: boolean }> {
+    const { key, settings } = await this.settingsOf(workspace);
+    if (!settings.providers.some((item) => item.id === id)) return { deleted: false };
+    settings.providers = settings.providers.filter((item) => item.id !== id);
+    for (const role of MODEL_ROLES) if (settings.roles[role]?.providerId === id) delete settings.roles[role];
+    for (const [bot, binding] of Object.entries(settings.overrides)) if (binding.providerId === id) delete settings.overrides[bot];
+    await this.vault.delete(this.storage.scope(key), credentialName(id));
+    await this.persist(key);
     return { deleted: true };
   }
 
-  async testProvider(id: string): Promise<{ ok: boolean; models: number; status: number }> {
-    const provider = this.settings.providers.find((item) => item.id === id);
+  async testProvider(id: string, workspace?: string): Promise<{ ok: boolean; models: number; status: number }> {
+    const { key: storageKey, settings } = await this.settingsOf(workspace);
+    const provider = settings.providers.find((item) => item.id === id);
     if (!provider) throw new Error('Unknown provider');
-    const key = await this.vault.get(scope, credentialName(id));
+    const key = await this.vault.get(this.storage.scope(storageKey), credentialName(id));
     const response = await fetch(provider.baseUrl + '/models', {
       headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(8000),
     });
@@ -153,47 +225,51 @@ export class ModelHub {
     return { ok: response.ok, models: Array.isArray(body?.data) ? body.data.length : 0, status: response.status };
   }
 
-  async setRole(input: { role: ModelRole; providerId: string; model: string }): Promise<{ role: ModelRole; selection: ModelSelection }> {
+  async setRole(input: { role: ModelRole; providerId: string; model: string }, workspace?: string): Promise<{ role: ModelRole; selection: ModelSelection }> {
     if (!MODEL_ROLES.includes(input.role)) throw new Error('Unknown model role');
-    const selection = this.validateSelection(input);
-    this.settings.roles[input.role] = selection;
-    await this.persist();
+    const { key, settings } = await this.settingsOf(workspace);
+    const selection = this.validateSelection(settings, input);
+    settings.roles[input.role] = selection;
+    await this.persist(key);
     return { role: input.role, selection };
   }
 
-  async setOverride(input: { profile: string; providerId?: string; model?: string }): Promise<{ profile: string; selection: ModelSelection | null }> {
+  async setOverride(input: { profile: string; providerId?: string; model?: string }, workspace?: string): Promise<{ profile: string; selection: ModelSelection | null }> {
     const key = hermesProfile(input.profile);
-    if (input.providerId && input.model) this.settings.overrides[key] = this.validateSelection({ providerId: input.providerId, model: input.model });
-    else delete this.settings.overrides[key];
-    await this.persist();
-    return { profile: key, selection: this.settings.overrides[key] ?? null };
+    const { key: storageKey, settings } = await this.settingsOf(workspace);
+    if (input.providerId && input.model) settings.overrides[key] = this.validateSelection(settings, { providerId: input.providerId, model: input.model });
+    else delete settings.overrides[key];
+    await this.persist(storageKey);
+    return { profile: key, selection: settings.overrides[key] ?? null };
   }
 
-  private validateSelection(input: ModelSelection): ModelSelection {
-    if (!this.settings.providers.some((item) => item.id === input.providerId) || !input.model.trim()) {
+  private validateSelection(settings: HubSettings, input: ModelSelection): ModelSelection {
+    if (!settings.providers.some((item) => item.id === input.providerId) || !input.model.trim()) {
       throw new Error('Model provider and model are required');
     }
     return { providerId: input.providerId, model: input.model.trim() };
   }
 
-  async resolve(role: ModelRole, profile?: string, task?: RoutedTask): Promise<ResolvedModel> {
+  /** workspace (or task.workspace) picks whose bindings and keys serve; absent = the deployment's. */
+  async resolve(role: ModelRole, profile?: string, task?: RoutedTask, workspace = task?.workspace): Promise<ResolvedModel> {
     if (!this.active) throw new Error('Model Hub extension is disabled');
-    const override = profile ? this.settings.overrides[hermesProfile(profile)] : undefined;
-    let selection = override ?? this.settings.roles[role];
+    const { key, settings } = await this.settingsOf(workspace);
+    const override = profile ? settings.overrides[hermesProfile(profile)] : undefined;
+    let selection = override ?? settings.roles[role];
     if (!selection) throw new Error(`Model role ${role} is unconfigured`);
     // Explicit profile overrides bypass automatic routing. Router failure preserves direct service.
     if (!override && this.router) {
       const router = this.router;
       try {
-        const routed = await router.select(role, { ...selection }, task);
+        const routed = await router.select(role, { ...selection }, { text: '', ...task, workspace });
         if (this.active && this.router === router && routed?.model.trim()
-          && this.settings.providers.some((item) => item.id === routed.providerId)) selection = routed;
+          && settings.providers.some((item) => item.id === routed.providerId)) selection = routed;
       } catch { /* Direct binding is the fallback; never expose upstream errors or secrets. */ }
     }
     if (!this.active) throw new Error('Model Hub extension is disabled');
-    const provider = this.settings.providers.find((item) => item.id === selection.providerId);
+    const provider = settings.providers.find((item) => item.id === selection.providerId);
     if (!provider) throw new Error(`Model provider ${selection.providerId} is unavailable`);
-    const apiKey = await this.vault.get(scope, credentialName(provider.id));
+    const apiKey = await this.vault.get(this.storage.scope(key), credentialName(provider.id));
     return { ...selection, baseUrl: provider.baseUrl, ...(apiKey ? { apiKey } : {}) };
   }
 
@@ -202,8 +278,9 @@ export class ModelHub {
     execute: (binding: ResolvedModel, context: { attempt: number; tier: ModelRole; signal: AbortSignal }) => Promise<T>,
     onAttempt?: (entry: RouteAttempt) => Promise<void>): Promise<T> {
     const router = this.router;
-    const override = profile ? this.settings.overrides[hermesProfile(profile)] : undefined;
-    const limits = override ? undefined : router?.escalationLimits?.();
+    const { settings } = await this.settingsOf(task.workspace);
+    const override = profile ? settings.overrides[hermesProfile(profile)] : undefined;
+    const limits = override ? undefined : await router?.escalationLimits?.(task.workspace);
     const tiers: Record<ModelRole, ModelRole[]> = {
       fast: ['fast', 'default', 'reasoning'], default: ['default', 'reasoning'],
       reasoning: ['reasoning'], coding: ['coding', 'reasoning'], eval: ['eval', 'reasoning'],
@@ -213,7 +290,7 @@ export class ModelHub {
     let failure: unknown;
     let previous: ModelSelection | undefined;
     for (let index = 0; index < maxAttempts; index++) {
-      if (index > 0 && (this.router !== router || !this.settings.roles[tiers[role][index]])) break;
+      if (index > 0 && (this.router !== router || !settings.roles[tiers[role][index]])) break;
       const remaining = limits?.enabled ? limits.maxTotalMs - (Date.now() - started) : undefined;
       if (remaining !== undefined && remaining <= 0) break;
       const tier = tiers[role][index];
@@ -244,12 +321,14 @@ export class ModelHub {
   }
 
   /** Project only Hermes' model keys and its Neo-managed .env block into an isolated profile. */
+  /** Hermes profiles are deployment-level (one Hermes runtime per deployment), so they use the deployment's models. */
   async projectHermes(profile: string, home: string): Promise<string | undefined> {
     if (!this.active) return undefined;
     const canonical = hermesProfile(profile);
-    const selection = this.settings.overrides[canonical] ?? this.settings.roles.default;
+    const deployment = this.workspaces.get(DEPLOYMENT)!;
+    const selection = deployment.overrides[canonical] ?? deployment.roles.default;
     if (!selection) return undefined;
-    const binding = await this.resolve('default', canonical);
+    const binding = await this.resolve('default', canonical, undefined, DEPLOYMENT);
     await mkdir(home, { recursive: true });
     const configFile = join(home, 'config.yaml');
     const original = await readFile(configFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
@@ -270,7 +349,7 @@ export class ModelHub {
     await new HermesProjector(resolve(home), ['NEO_MODEL_API_KEY']).project(new Map([
       ['NEO_MODEL_API_KEY', binding.apiKey ?? 'local-no-key'],
     ]));
-    const version = `${binding.providerId}/${binding.model}/${binding.baseUrl}/${this.settings.revision}`;
+    const version = `${binding.providerId}/${binding.model}/${binding.baseUrl}/${deployment.revision}`;
     this.projections.set(canonical, version);
     return version;
   }

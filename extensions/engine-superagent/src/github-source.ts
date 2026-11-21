@@ -20,6 +20,7 @@ export interface GitHubSource {
   stop(): void;
 }
 
+/** The GitHub source is deployment-level (its Inbox items carry no workspace, P6-10), so its token is too (P1-13). */
 const scope = { kind: 'workspace' as const, workspaceId: 'default' };
 const credential = 'NMH_SUPERAGENT_GITHUB_TOKEN';
 const validRepo = /^[\w.-]+\/[\w.-]+$/;

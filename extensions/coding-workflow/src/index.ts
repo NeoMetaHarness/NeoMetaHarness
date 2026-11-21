@@ -76,9 +76,9 @@ export default defineExtension({
     ctx.health(() => ({ ok: !!ctx.inject('codingControlPlane') }));
     ctx.route('register', async ({ body }) => {
       if (!ctx.inject('dshAgentRuntime')) throw new Error('DSH extension is disabled');
-      const models = ctx.inject<{ active: boolean; resolve(role: string): Promise<unknown> }>('modelHub');
+      const models = ctx.inject<{ active: boolean; resolve(role: string, profile?: string, task?: unknown, workspace?: string): Promise<unknown> }>('modelHub');
       if (!models?.active) throw new Error('Configure a coding model in the Models hub first');
-      await models.resolve('coding');
+      await models.resolve('coding', undefined, undefined, (body as { workspaceId?: string }).workspaceId);
       const catalog = await t3().listThreads();
       for (const path of [...catalog.projects.map(p => p.workspaceRoot), ...catalog.threads.map(t => t.worktreePath)]) {
         if (!path) continue;
