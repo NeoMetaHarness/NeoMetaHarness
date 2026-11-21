@@ -18,7 +18,7 @@ try {
   const runtime = new DshAgentRuntime({} as any, '', computers);
   const seed = (sessionId: string, workspaceId: string) => {
     (runtime as any).sessions.set(sessionId, { stop: async () => {} });
-    (runtime as any).sessionWorkspaces.set(sessionId, workspaceId);
+    (runtime as any).owners.set(sessionId, workspaceId);
   };
 
   seed('cancelled', 'alpha');
