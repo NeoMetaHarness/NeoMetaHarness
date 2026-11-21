@@ -588,9 +588,10 @@
     },
     "P7-13": {
       "title": "Docs that disagree with the code (sweep 2026-11-21)",
-      "status": "in_progress",
+      "status": "done",
       "owner": "antigravity",
-      "note": "User decision 2026-11-21: fix the 20 mismatches from the docs sweep; code is the source of truth."
+      "note": "User decision 2026-11-21: fix the 20 mismatches from the docs sweep; code is the source of truth.",
+      "evidence": "PM review 2026-11-22 on main a43b9d0 + work/gemini-p713 (2d750dd; 8 docs files) + PM fix 40c2a91 (06-org-structure: db is SQLite-only, Postgres planned; egress is an HTTPS-only guard with private-network/DNS-at-connect blocking, no domain allowlist; both verified against packages/db and packages/egress). Docs-only change, no code touched. docs:build x2 (clean tree), docs:check, pnpm check, secret scan PASS. Cross-reviews: Sol-B x1, Opus x2; all findings fixed."
     }
   },
   "p6_tasks": {
