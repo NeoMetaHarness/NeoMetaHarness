@@ -227,10 +227,9 @@
     },
     "P1-13": {
       "title": "Per-workspace extension settings and secrets in the kernel (settings/vault currently scoped to workspace \"default\")",
-      "status": "in_progress",
-      "note": "Found 2026-11-20 by x-search security review: any extension key/settings are shared across workspaces in server mode (packages/kernel/src/index.ts settings use workspaceId \"default\").",
+      "status": "done",
       "owner": "opus",
-      "code_check_2026_11_21": "Code ahead of readiness: work/opus-p113 is 11 commits ahead of main (per-workspace settings table + schema validation), unmerged. Main still uses workspaceId \"default\" (packages/kernel/src/index.ts:287,316)."
+      "evidence": "PM review 2026-11-22 on main 00c52a9 + work/opus-p113 (947ca06, 7 commits): per-workspace kernel settings table + manifest-schema validation (own-property keys); extension-secret vault scopes admin-only; Model Hub and Panda settings/keys per workspace via gateway workspaceDirectory (desktop keeps 'default'); deployment-level channels/Hermes/GitHub source documented and behind P1-14 deployment owner; deployment Model Hub/Panda config via deployment-owner routes; lazy server-mode legacy migration; route re-resolve after settings load across generation switch; DSH sessions workspace-owned; NEO_MEMORY_TOKEN gateway-only. settings-workspace test x2, kernel tests, test:p1-10, test:p1-14, models-workspace, engine-dsh, app tsc, gateway, toggle, pnpm check, secret scan PASS; full regression 62/63 (test:p2-5 timed out under load, PASS 2/2 solo). Cross-reviews: Sol-A x2, Sol61, Sol-B; all findings fixed."
     },
     "P1-14": {
       "title": "Deployment-level owner role, separate from the per-org owner",
