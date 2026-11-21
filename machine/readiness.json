@@ -211,7 +211,7 @@
       "title": "Blue/green extension upgrade in the kernel",
       "status": "review",
       "owner": "sol61",
-      "evidence": "Review fixes at e94d334: test:p1-10, standalone kernel tests, Gateway tests, test:toggle and test:p6-9 each passed twice on Windows. Coverage includes owner-only verified copies, escaping symlink rejection, missing-copy fallback, stale selection removal, activation and health timeouts, persistence failure cleanup, dependent restart, upgrade events and process drain cancellation. P6-9 replacement startup was 13.4 and 12.8 seconds. Earlier at a0ef5da: P6-9, P4-3 and P1-5 each passed 3 consecutive runs, and a forced P6-9 deadline exited 1."
+      "evidence": "Round 3 at fa2c020: test:p1-10, standalone kernel tests, Gateway tests, test:toggle and test:p6-9 each passed twice on Windows. Coverage includes interpreter and path restrictions, Cordis import confinement, mode-independent integrity, read-only generations, multi-file Python restart, process route deadlines, retained disabled upgrades, owner-only uninstall and standalone managed restore. The focused GitHub poll expiry regression passed. P6-9 replacement startup was 15.3 and 11.9 seconds with clean SQLite cleanup. Earlier at a0ef5da: P6-9, P4-3 and P1-5 each passed 3 consecutive runs, and a forced P6-9 deadline exited 1."
     },
     "P1-11": {
       "title": "Desktop auto-updater (Tauri updater): real signing key and update flow",
