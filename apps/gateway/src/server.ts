@@ -39,7 +39,9 @@ import {
   createNeoAuth,
   migrateAuthSchema,
   bootstrapDesktopAuth,
+  deploymentOwnerLookup,
   resolveAuthContext,
+  transferDeploymentOwner,
   type NeoAuth,
 } from '@neometaharness/auth';
 import { toNodeHandler } from 'better-auth/node';
@@ -56,6 +58,7 @@ import {
 } from './rbac.js';
 import {
   authorize,
+  canSeeDeploymentItems,
   getPolicy,
   ROUTE_POLICY,
   CONTRACT_POLICY,
@@ -81,8 +84,6 @@ export {
 
 export interface GatewayOptions {
   databaseFile: string;
-  /** Test seam: who may see deployment-level Inbox items in server mode (default: nobody; see canSeeDeploymentItems). */
-  canSeeDeploymentItems?: (context: GatewayAuthContext, role: GatewayAuthContext['role']) => boolean;
   dataDir?: string;
   extensionsDir?: string;
   port?: number;
@@ -176,6 +177,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   const kyselyDb = db.kysely as any;
   const auth = createNeoAuth({
     db: db.kysely,
+    mode,
     baseURL: 'http://127.0.0.1:0',
     secret: authSecret,
     signUpGate: mode === 'server' && signupMode === 'invite' ? async ({ email, headers }) => {
@@ -205,10 +207,22 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   }
 
   let desktopToken: string | undefined;
+  let desktopOwnerId: string | undefined;
   if (mode === 'desktop') {
     const desktop = await bootstrapDesktopAuth(auth, { dataDir });
     desktopToken = desktop.token;
+    desktopOwnerId = desktop.user.id;
   }
+  const isServerDeploymentOwner = deploymentOwnerLookup(db.sqlite);
+  const resolveGatewayAuth = async (headers: Parameters<typeof resolveAuthContext>[1]): Promise<GatewayAuthContext> => {
+    const context = await resolveAuthContext(auth, headers);
+    const userId = context.session && context.user?.id;
+    return {
+      ...context,
+      deploymentMode: mode,
+      isDeploymentOwner: () => Boolean(userId && (mode === 'desktop' ? userId === desktopOwnerId : isServerDeploymentOwner(userId))),
+    };
+  };
 
   const onboardingFile = join(dataDir, 'onboarding.json');
   const readOnboardingCompletion = (): string | null => {
@@ -408,28 +422,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
    */
   const acceptModeWorkspace = (context: GatewayAuthContext): string => mode === 'desktop' ? 'default' : memoryWorkspace(undefined, context);
   /**
-   * P6-10 Inbox isolation. In server mode an item belongs to the workspace stamped on it, and a caller sees and
-   * acts only on their own workspace's items; an item with no workspace (a channel/Hermes binding, GitHub,
-   * upstream) is not shown to any workspace. Desktop is a single tenant and sees every item, as before.
+   * P6-10 Inbox isolation. Stamped items belong to the caller's workspace.
+   * Unstamped channel/Hermes bindings, GitHub and upstream items belong to the deployment.
    */
   const inboxWorkspace = (context: GatewayAuthContext): string | undefined => {
     if (mode === 'desktop') return undefined;
     if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
     return context.workspaceId;
   };
-  /**
-   * Who may see and act on deployment-level Inbox items and schedules (no workspace: GitHub, upstream bumps,
-   * the system upstream schedule) in server mode. Nobody, for now: "owner" is a per-workspace role and any
-   * admin can create a workspace and own it, so it cannot stand for the deployment. A deployment-owner concept
-   * (pending the owner's decision) replaces this one function.
-   */
-  const canSeeDeploymentItems = options.canSeeDeploymentItems ?? ((_context: GatewayAuthContext, _role: GatewayAuthContext['role']) => false);
-  const inboxVisible = (item: { workspace?: string; source?: string }, context: GatewayAuthContext, role = context.role) => {
+  const inboxVisible = (item: { workspace?: string }, context: GatewayAuthContext, role = context.role) => {
     if (mode === 'desktop') return true;
-    if (item.workspace) return item.workspace === inboxWorkspace(context);
-    // Channel/Hermes bindings carry other people's conversations: never deployment-visible.
-    if (item.source === 'neo/channel') return false;
-    return canSeeDeploymentItems(context, role);
+    if (item.workspace) return Boolean(role && item.workspace === context.workspaceId);
+    return canSeeDeploymentItems(context);
   };
   const ROLE_RANK = { viewer: 0, member: 1, admin: 2, owner: 3 } as const;
   /**
@@ -510,6 +514,17 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
 
   const router = {
     system: {
+      transferDeploymentOwner: os.system.transferDeploymentOwner.handler(async ({ input, context }) => {
+        authorize('system.transferDeploymentOwner', context);
+        if (mode !== 'server') throw new ORPCError('NOT_FOUND');
+        const ownerId = context.user!.id;
+        if (input.userId === ownerId) throw new ORPCError('BAD_REQUEST', { message: 'Choose a different user' });
+        if (!(await transferDeploymentOwner(kyselyDb, ownerId, input.userId))) {
+          authorize('system.transferDeploymentOwner', context);
+          throw new ORPCError('NOT_FOUND', { message: 'User not found' });
+        }
+        return { userId: input.userId };
+      }),
       restore: os.system.restore.handler(async ({ input, context }) => {
         authorize('system.restore', context);
         if (!kernel.hasRoute('/x/backup/restore')) throw new ORPCError('NOT_FOUND', { message: 'Backup extension is disabled' });
@@ -657,7 +672,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         let checkedAt = Date.now();
         for await (const event of stream) {
           if (Date.now() - checkedAt >= 5_000) { role = await currentInboxRole(context); checkedAt = Date.now(); }
-          if (!role) return;
+          if (!role && !canSeeDeploymentItems(context)) return;
           if (inboxVisible(event.item, context, role)) yield event;
         }
       }),
@@ -1526,7 +1541,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           res.writeHead(405).end();
           return;
         }
-        const context = await resolveAuthContext(auth, req);
+        const context = await resolveGatewayAuth(req);
         if (!context?.user) {
           res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }));
           return;
@@ -1548,11 +1563,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Sign-up is disabled in desktop mode' }));
           return;
         }
+        if (mode === 'server' && req.method === 'POST' && path.replace(/\/+$/, '') === '/auth/organization/create') {
+          authorize('/auth/organization/create', await resolveGatewayAuth(req));
+        }
         await authNodeHandler(req, res);
         return;
       }
 
-      const context = await resolveAuthContext(auth, req);
+      const context = await resolveGatewayAuth(req);
       if (!context?.user) {
         res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Unauthorized' }));
         return;
@@ -1641,7 +1659,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     const bearerProto = subprotocols.find((p) => p.startsWith('bearer.'));
     if (bearerProto) {
       const token = bearerProto.slice(7);
-      context = (await resolveAuthContext(auth, {
+      context = (await resolveGatewayAuth({
         headers: { authorization: `Bearer ${token}` },
       })) as GatewayAuthContext;
       if (context?.user) {

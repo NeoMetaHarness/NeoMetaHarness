@@ -118,9 +118,8 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
       ['finance-suggestion', finance.id, 'suggestion'], ['finance-approval', finance.id, 'approval'],
       ['corp-question', corp.id, 'question'], ['corp-failed', corp.id, 'failed'],
       ['corp-destructive', corp.id, 'approval', { approval: { destructive: true, reason: 'deletes memory' } }],
-      // A Hermes channel binding reaches the Inbox with no workspace: hidden from every workspace, owners included.
+      // An unstamped Hermes channel binding belongs to the deployment.
       ['hermes-binding', undefined, 'suggestion', { source: 'neo/channel' }],
-      // An upstream bump is deployment-level: hidden until a deployment-owner concept exists.
       ['upstream-bump', undefined, 'suggestion', { source: 'neo/upstream' }],
     ] });
     const ids = async (token: string) => ((await call(token, 'inbox/list', {})).body as { id: string }[]).map((item) => item.id).sort();
@@ -130,7 +129,7 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
     assert.deepEqual(await ids(alice), corpItems);
     assert.deepEqual(await ids(carol), corpItems, 'a viewer still reads their workspace');
     assert.deepEqual(await ids(bob), ['finance-approval', 'finance-suggestion']);
-    assert.deepEqual(await ids(owner), corpItems, 'a workspace owner does not see deployment-level items');
+    assert.deepEqual(await ids(owner), [...corpItems, 'hermes-binding', 'upstream-bump'], 'the deployment owner sees both scopes');
 
     // accept / dismiss / decide on another workspace's item (or the binding) is 404 and never reaches the superagent.
     for (const [path, input] of [
@@ -156,13 +155,12 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
     assert.equal((await call(bob, 'inbox/accept', { id: 'finance-suggestion' })).status, 200);
     assert.equal((await call(alice, 'inbox/reply', { id: 'corp-question', answer: 'Fridays' })).status, 200);
     assert.equal((await call(alice, 'inbox/retry', { id: 'corp-failed' })).status, 200);
-    // Nobody reaches deployment-level items in server mode for now, not even a workspace owner.
     for (const id of ['hermes-binding', 'upstream-bump']) {
       assert.equal((await call(alice, 'inbox/accept', { id })).status, 404);
-      assert.equal((await call(owner, 'inbox/accept', { id })).status, 404);
+      assert.equal((await call(owner, 'inbox/accept', { id })).status, 200);
     }
     assert.deepEqual(await fixture('test/actions'), ['accept:corp-suggestion', 'dismiss:corp-dismiss', 'decide:corp-approval',
-      'accept:finance-suggestion', 'reply:corp-question', 'retry:corp-failed']);
+      'accept:finance-suggestion', 'reply:corp-question', 'retry:corp-failed', 'accept:hermes-binding', 'accept:upstream-bump']);
 
     // New items are stamped with the caller's workspace by the Gateway, whatever the caller sends.
     const asked = await call(bob, 'inbox/ask', { text: 'Close the books', botId: 'bot', workspace: corp.id });
@@ -170,7 +168,7 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
     assert.equal(asked.body.workspace, finance.id);
     assert.ok((await ids(bob)).includes(asked.body.id));
     assert.ok(!(await ids(alice)).includes(asked.body.id));
-    console.log('P6-10_INBOX PASS list/accept/dismiss/decide stay in the caller workspace; deployment-level items are hidden');
+    console.log('P6-10_INBOX PASS workspace isolation and deployment-owner visibility');
 
     // The accept mode is per workspace too (owner's active workspace is Corp).
     assert.equal((await call(owner, 'inbox/acceptMode/set', { mode: 'act' })).status, 200);
@@ -197,8 +195,7 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
     assert.deepEqual(await jobs(alice), [corpJob.body.id]);
     assert.deepEqual(await jobs(carol), [corpJob.body.id], 'viewers list their workspace\'s schedules');
     assert.deepEqual(await jobs(bob), [financeJob.body.id]);
-    assert.deepEqual(await jobs(owner), [corpJob.body.id], 'the system upstream schedule is deployment-level');
-    assert.equal((await call(owner, 'inbox/cron/delete', { id: 'system-upstream' })).status, 404);
+    assert.deepEqual(await jobs(owner), [corpJob.body.id, 'system-upstream'].sort(), 'the system upstream schedule is deployment-level');
     assert.equal((await call(bob, 'inbox/cron/delete', { id: corpJob.body.id })).status, 404);
     assert.equal((await call(alice, 'inbox/cron/delete', { id: 'system-upstream' })).status, 404);
     // A fired schedule's item carries the schedule's workspace (the superagent's cronAsk), end to end.
@@ -237,7 +234,7 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
     await settle();
     assert.deepEqual(aliceEvents.heard, ['corp-suggestion']);
     assert.deepEqual(bobEvents.heard, ['finance-suggestion']);
-    assert.deepEqual(ownerEvents.heard, ['corp-suggestion']);
+    assert.deepEqual(ownerEvents.heard, ['corp-suggestion', 'hermes-binding', 'upstream-bump']);
     // Bob leaves Finance: after the next membership re-check his stream stops delivering and ends.
     const removed = await fetch(`${base}/auth/organization/remove-member`, json({ memberIdOrEmail: 'bob@finance.test', organizationId: finance.id }, as(owner)));
     assert.equal(removed.status, 200);
@@ -255,7 +252,7 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
   }
 });
 
-test('P6-10: deployment visibility is re-checked; a demoted owner stops seeing deployment items', async () => {
+test('P6-10: a transferred deployment owner loses visibility on an existing stream', async () => {
   const root = await mkdtemp(join(tmpdir(), 'nmh-p610-deploy-'));
   const extensions = join(root, 'extensions');
   await mkdir(join(extensions, 'engine-superagent', 'src'), { recursive: true });
@@ -263,9 +260,8 @@ test('P6-10: deployment visibility is re-checked; a demoted owner stops seeing d
   await writeFile(join(extensions, 'engine-superagent', 'neo.extension.json'), JSON.stringify({ id: 'engine-superagent',
     version: '0.1.0', displayName: 'Inbox fixture', kind: ['engine'], runtime: { type: 'cordis', entry: './src/index.mjs' } }));
   await writeFile(join(extensions, 'engine-superagent', 'src', 'index.mjs'), FIXTURE);
-  // Stand-in for a future deployment-owner rule; the shipped rule is "nobody".
   const gateway = await startGateway({ databaseFile: join(root, 'state/gateway.db'), extensionsDir: extensions,
-    mode: 'server', signup: 'open', canSeeDeploymentItems: (_context, role) => role === 'owner' });
+    mode: 'server', signup: 'open' });
   const base = `http://127.0.0.1:${gateway.port}`;
   try {
     const signUp = async (email: string) => (await (await fetch(`${base}/auth/sign-up/email`,
@@ -283,8 +279,8 @@ test('P6-10: deployment visibility is re-checked; a demoted owner stops seeing d
       ['hermes-binding', undefined, 'suggestion', { source: 'neo/channel' }]] });
     const ids = async (token: string) => ((await (await fetch(`${base}/inbox/list`, json({ json: {} }, as(token)))).json() as { json: { id: string }[] })
       .json.map((item) => item.id).sort());
-    assert.deepEqual(await ids(dave), ['upstream-bump'], 'an owner (under this rule) sees deployment items, never bindings');
-    const client = createORPCClient<ContractRouterClient<typeof neoContract>>(new RPCLink({ url: base, headers: () => as(dave) }));
+    assert.deepEqual(await ids(dave), [], 'workspace ownership does not expose deployment items');
+    const client = createORPCClient<ContractRouterClient<typeof neoContract>>(new RPCLink({ url: base, headers: () => as(founder) }));
     const controller = new AbortController();
     const heard: string[] = [];
     const done = (async () => {
@@ -295,20 +291,17 @@ test('P6-10: deployment visibility is re-checked; a demoted owner stops seeing d
     await fixture('test/emit', { id: 'upstream-bump' });
     await fixture('test/emit', { id: 'hermes-binding' });
     await new Promise((resolve) => setTimeout(resolve, 300));
-    assert.deepEqual(heard, ['upstream-bump']);
-    // Dave is demoted to member: listing changes at once, and the open stream after its next re-check.
-    const full = await (await fetch(`${base}/auth/organization/get-full-organization?organizationId=${corp.id}`, { headers: as(founder) })).json() as
-      { members: { id: string; user: { email: string } }[] };
-    const memberId = full.members.find((member) => member.user.email === 'dave@corp.test')!.id;
-    assert.equal((await fetch(`${base}/auth/organization/update-member-role`, json({ memberId, role: 'member', organizationId: corp.id }, as(founder)))).status, 200);
-    assert.deepEqual(await ids(dave), [], 'a demoted owner no longer lists deployment items');
-    await new Promise((resolve) => setTimeout(resolve, 5_200));
+    assert.deepEqual(heard, ['upstream-bump', 'hermes-binding']);
+    const daveUser = await gateway.auth.kysely.selectFrom('user').select('id').where('email', '=', 'dave@corp.test').executeTakeFirstOrThrow();
+    await client.system.transferDeploymentOwner({ userId: daveUser.id });
+    assert.deepEqual(await ids(founder), [], 'the former deployment owner retains only workspace visibility');
+    assert.deepEqual(await ids(dave), ['hermes-binding', 'upstream-bump']);
     await fixture('test/emit', { id: 'upstream-bump' });
     await new Promise((resolve) => setTimeout(resolve, 300));
-    assert.deepEqual(heard, ['upstream-bump'], 'nor hears them on a stream opened while owner');
+    assert.deepEqual(heard, ['upstream-bump', 'hermes-binding'], 'an open stream loses deployment visibility immediately');
     controller.abort();
     await Promise.race([done, new Promise((wait) => setTimeout(wait, 1_000))]);
-    console.log('P6-10_DEPLOYMENT PASS deployment visibility sits behind one rule; demotion is re-checked on open streams');
+    console.log('P6-10_DEPLOYMENT PASS open streams re-check deployment ownership after transfer');
   } finally {
     await gateway.close();
     await rm(root, { recursive: true, force: true, maxRetries: 5 });

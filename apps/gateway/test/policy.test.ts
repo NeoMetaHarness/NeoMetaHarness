@@ -71,7 +71,7 @@ test('Contract coverage: 1:1 bi-directional mapping between neoContract and poli
   for (const path of contractPaths) {
     const level = ROUTE_POLICY[path];
     assert.ok(
-      level === 'viewer' || level === 'member' || level === 'admin' || level === 'owner' || level === 'internal',
+      level === 'viewer' || level === 'member' || level === 'admin' || level === 'owner' || level === 'deployment-owner' || level === 'internal',
       `Route ${path} must have a valid PolicyLevel in ROUTE_POLICY, found: ${level}`
     );
   }
@@ -183,13 +183,13 @@ test('Behaviour test across all contract procedures: 401 for unauth, 403 for non
       );
 
       // 3. Viewer session -> 403 FORBIDDEN if policy > viewer
-      if (level === 'member' || level === 'admin' || level === 'owner' || level === 'internal') {
+      if (level !== 'viewer') {
         await assert.rejects(
           callHandler(handler, undefined, viewerContext),
           (err: any) => err.code === 'FORBIDDEN',
           `Viewer session call to ${path} (level=${level}) must throw FORBIDDEN (403)`
         );
-      } else if (level === 'viewer') {
+      } else {
         // If policy is viewer, authorize must pass and NOT reject with UNAUTHORIZED or FORBIDDEN
         try {
           await callHandler(handler, undefined, viewerContext);

@@ -10,6 +10,8 @@ import { apiKey } from '@better-auth/api-key';
 import { getMigrations } from 'better-auth/db/migration';
 import { createNodeSqliteKysely } from '@neometaharness/db';
 import crypto from 'node:crypto';
+import { deploymentOwnerId, migrateDeploymentOwner } from './deployment-owner.js';
+export { deploymentOwnerLookup, transferDeploymentOwner } from './deployment-owner.js';
 
 export type NeoAuth = any;
 
@@ -36,6 +38,7 @@ export const viewerRole = defaultAc.newRole({
 });
 
 export interface CreateNeoAuthOptions {
+  mode?: 'server' | 'desktop';
   db?: Kysely<any>;
   sqlite?: DatabaseSync;
   baseURL?: string;
@@ -97,11 +100,8 @@ export function createNeoAuth(options: CreateNeoAuthOptions = {}): any {
           ...defaultRoles,
           viewer: viewerRole,
         },
-        // Workspace ownership confers gateway-wide authority (extensions,
-        // engines, computers), so only the instance bootstrap (no workspace
-        // exists yet) or an existing owner/admin may create a workspace.
-        // Without this any self-registered account could make itself owner.
         allowUserToCreateOrganization: async (user: { id: string }) => {
+          if (options.mode !== 'desktop') return (await deploymentOwnerId(kysely!)) === user.id;
           const anyWorkspace = await kysely!.selectFrom('organization').select('id').executeTakeFirst();
           if (!anyWorkspace) return true;
           const privileged = await kysely!.selectFrom('member').select('id')
@@ -129,6 +129,7 @@ export function createNeoAuth(options: CreateNeoAuthOptions = {}): any {
 export async function migrateAuthSchema(auth: any): Promise<void> {
   const mig = await getMigrations(auth.options);
   await mig.runMigrations();
+  await migrateDeploymentOwner(auth.kysely);
 }
 
 export interface BootstrapResult {

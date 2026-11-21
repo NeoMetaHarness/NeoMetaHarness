@@ -189,10 +189,18 @@ test('SEC-07: owning one workspace grants no vault access to another workspace o
       json({ name: 'Finance', slug: 'finance', keepCurrentActiveOrganization: true }, { authorization: `Bearer ${owner.token}` }))).json() as { id: string };
     const admin = await signUp(base, 'admin@corp.test');
     await joinWorkspace(base, owner.token!, corp.id, admin, 'admin@corp.test', 'admin');
-    // The Corp admin creates a side workspace and becomes its owner (allowed after SEC-02).
+    // The deployment owner creates the side workspace and grants the Corp admin its owner role.
     const side = await fetch(`${base}/auth/organization/create`,
-      json({ name: 'Side', slug: 'side' }, { authorization: `Bearer ${admin.token}` }));
+      json({ name: 'Side', slug: 'side', keepCurrentActiveOrganization: true }, { authorization: `Bearer ${owner.token}` }));
     assert.equal(side.status, 200);
+    const sideWorkspace = await side.json() as { id: string };
+    const invite = await fetch(`${base}/auth/organization/invite-member`, json({
+      organizationId: sideWorkspace.id, email: 'admin@corp.test', role: 'owner',
+    }, { authorization: `Bearer ${owner.token}` }));
+    assert.equal(invite.status, 200);
+    assert.equal((await fetch(`${base}/auth/organization/accept-invitation`, json({
+      invitationId: (await invite.json() as { id: string }).id,
+    }, { authorization: `Bearer ${admin.token}` }))).status, 200);
     const financeScope = { kind: 'workspace', workspaceId: finance.id };
     assert.equal((await vaultCall(base, 'put', { scope: financeScope, name: 'BANK_KEY', value: 'secret' }, owner.token!)).status, 200,
       'Finance owner may write Finance secrets');

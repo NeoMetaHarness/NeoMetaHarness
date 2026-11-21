@@ -5,16 +5,46 @@ import {
   createNeoAuth,
   migrateAuthSchema,
   bootstrapDesktopAuth,
+  deploymentOwnerLookup,
   resolveAuthContext,
   requireViewer,
   requireMember,
   requireAdminOrOwner,
   requireOwner,
+  transferDeploymentOwner,
   NeoRole,
   NeoAuthContext,
 } from '../src/index.js';
 
 const TEST_SECRET = 'test-secret-at-least-32-chars-long-0123456789';
+
+test('deployment owner migration backfills the first account and preserves an atomic transfer', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  try {
+    const auth = createNeoAuth({ sqlite, secret: TEST_SECRET, mode: 'server' });
+    await migrateAuthSchema(auth);
+    const signup = (name: string) => auth.api.signUpEmail({
+      body: { email: `${name}@deployment.test`, password: 'DeploymentFixture!123', name },
+    });
+    const first = await signup('first');
+    const second = await signup('second');
+    const third = await signup('third');
+    assert.ok(deploymentOwnerLookup(sqlite)(first.user.id));
+    sqlite.exec('DROP TRIGGER neo_assign_first_deployment_owner; DROP TABLE neo_deployment_owner');
+    await migrateAuthSchema(auth);
+    const owns = deploymentOwnerLookup(sqlite);
+    assert.ok(owns(first.user.id), 'existing deployments promote their earliest account');
+    const results = await Promise.all([
+      transferDeploymentOwner(auth.kysely, first.user.id, second.user.id),
+      transferDeploymentOwner(auth.kysely, first.user.id, third.user.id),
+    ]);
+    assert.equal(results.filter(Boolean).length, 1);
+    await migrateAuthSchema(auth);
+    assert.equal(owns(first.user.id), false);
+    assert.equal(owns(second.user.id), results[0]);
+    assert.equal(owns(third.user.id), results[1]);
+  } finally { sqlite.close(); }
+});
 
 test('createNeoAuth throws when options.secret is missing', () => {
   assert.throws(() => createNeoAuth({}), (err: any) => err.message.includes('options.secret is required'));

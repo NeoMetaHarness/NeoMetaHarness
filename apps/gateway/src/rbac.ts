@@ -1,7 +1,10 @@
 import { ORPCError } from '@orpc/server';
 import type { NeoAuthContext, NeoRole } from '@neometaharness/auth';
 
-export interface GatewayAuthContext extends NeoAuthContext {}
+export interface GatewayAuthContext extends NeoAuthContext {
+  deploymentMode?: 'server' | 'desktop';
+  isDeploymentOwner?: () => boolean;
+}
 
 export function requireViewer(context?: GatewayAuthContext): void {
   if (!context?.user) {

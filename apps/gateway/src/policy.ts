@@ -7,7 +7,7 @@ import {
   type GatewayAuthContext,
 } from './rbac.js';
 
-export type PolicyLevel = 'viewer' | 'member' | 'admin' | 'owner' | 'internal';
+export type PolicyLevel = 'viewer' | 'member' | 'admin' | 'owner' | 'deployment-owner' | 'internal';
 
 /** Approval metadata identifies tool calls that can erase or replace user data. */
 export function destructiveToolApproval(tool: string, detail: string): boolean {
@@ -16,6 +16,7 @@ export function destructiveToolApproval(tool: string, detail: string): boolean {
 }
 
 export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
+  'system.transferDeploymentOwner': 'deployment-owner',
   'system.backup': 'owner',
   'system.restore': 'owner',
   'x.coding-workflow.register': 'admin',
@@ -144,8 +145,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
 
   // extensions
   'extensions.list': 'viewer',
-  'extensions.upgrade': 'owner',
-  'extensions.uninstall': 'owner',
+  'extensions.upgrade': 'deployment-owner',
+  'extensions.uninstall': 'deployment-owner',
   'extensions.enable': 'admin',
   'extensions.disable': 'admin',
 
@@ -245,6 +246,7 @@ export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
   '/internal/computers/action': 'internal',
   '/x/computer-local/consent': 'owner',
   '/auth/ws-ticket': 'viewer',
+  '/auth/organization/create': 'deployment-owner',
   '/auth/*': 'internal',
   '/x/*': 'viewer',
 };
@@ -268,7 +270,7 @@ export function getPolicy(path: string): PolicyLevel | undefined {
 }
 
 export function authorize(path: string, context?: GatewayAuthContext): void {
-  if (path === 'extensions.upgrade' || path === 'extensions.uninstall') return authorizeExtensionInstallChange(context);
+  if ((path === 'inbox.list' || path === 'inbox.events' || path === 'inbox.cron.list') && canSeeDeploymentItems(context)) return;
   const level = getPolicy(path);
   if (!level) {
     throw new ORPCError('INTERNAL_SERVER_ERROR', {
@@ -289,6 +291,12 @@ export function authorize(path: string, context?: GatewayAuthContext): void {
     case 'owner':
       requireOwner(context);
       break;
+    case 'deployment-owner':
+      // Desktop keeps existing workspace-owner authorization for kernel changes.
+      if (context?.deploymentMode === 'desktop' && (path === 'extensions.upgrade' || path === 'extensions.uninstall')) {
+        requireOwner(context);
+      } else requireDeploymentOwner(context);
+      break;
     case 'internal':
       throw new ORPCError('FORBIDDEN', {
         message: `Route ${path} is internal and cannot be invoked via user RPC`,
@@ -302,8 +310,13 @@ export function authorize(path: string, context?: GatewayAuthContext): void {
   }
 }
 
-function authorizeExtensionInstallChange(context?: GatewayAuthContext): void {
-  requireOwner(context);
+export function canSeeDeploymentItems(context?: GatewayAuthContext): boolean {
+  return Boolean(context?.user && context.session && context.isDeploymentOwner?.());
+}
+
+function requireDeploymentOwner(context?: GatewayAuthContext): void {
+  if (!context?.user) throw new ORPCError('UNAUTHORIZED', { message: 'Authentication required' });
+  if (!canSeeDeploymentItems(context)) throw new ORPCError('FORBIDDEN', { message: 'Deployment owner required' });
 }
 
 export function getContractProcedurePaths(contract: any, prefix = ''): string[] {
