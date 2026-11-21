@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 
 import { spawn } from 'node:child_process';
 
@@ -64,7 +64,7 @@ export default { async activate(ctx) {
 
   const bridge=ctx.inject('computerMcpBridge'); const home=join(ctx.inject('extensionDataDir'),'fake-${engine}');
 
-  const config=await bridge.ready('${engine}','profile-${engine}',home);
+  const config=await bridge.ready('${engine}','profile-${engine}',home,'default');
 
   await mkdir(home,{recursive:true}); await writeFile(join(home,'config.json'),JSON.stringify(config));
 
@@ -235,4 +235,5 @@ try {
   await rm(home, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
 
 }
+
 
