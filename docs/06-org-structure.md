@@ -45,9 +45,11 @@ apps/
   neo-app/      Neo App (React 19 + Astryx web + PWA) and Tauri 2 desktop shell (src-tauri)
   gateway/      Neo Gateway server (kernel + Neo API)
   docs/         Documentation site (Astryx + Vite static site)
+  cli/          `neo` CLI (planned)
 packages/
   kernel/       extension host (Cordis), manifests, lifecycle, permissions, vault, event bus
   contracts/    Neo API schema (typed RPC + events)
+  sdk/          TS extension SDK (planned)          · sdk-python/  Python extension SDK (planned)
   ui/           @neometaharness/ui: Astryx + Neo patterns + slot runtime
   agents/       adopted bot-hq domain (bots, rooms, routines, tasks, library, approvals, voice)
   auth/         Better Auth integration, session management, workspace access
@@ -56,10 +58,12 @@ packages/
   egress/       network egress controls and domain allowlists
   vault/        secrets encryption, key management, scoped projections
 extensions/     official extensions, each independently toggleable
-  backup  channels  coding-workflow  computer-docker  computer-fake  computer-headless-chrome
-  computer-hermes-screen  computer-local-sandbox  computer-local  computer-vnc  computers-mcp
-  engine-dsh  engine-hermes  engine-superagent  engine-t3  memory-honcho  memory-local
-  models-router-panda  models  sample-py  sample-ts  skills-registry
+  Built: backup, channels, coding-workflow, computer-docker, computer-fake, computer-headless-chrome,
+    computer-hermes-screen, computer-local-sandbox, computer-local, computer-vnc, computers-mcp,
+    engine-dsh, engine-hermes, engine-superagent, engine-t3, memory-honcho, memory-local,
+    models-router-panda, models, sample-py, sample-ts, skills-registry
+  Planned: computer-orgo (task P3-10), skills-fabric, soul, voice-xai, apps-composio, x-search,
+    dsh-plugins/ (neo-dsh-memory, -soul, -report, -skills, -honcho), hermes-plugins/ (neo_local_memory, neo_soul, neo_bridge…)
 upstream/       registry.yaml · upstream.lock.json · sources/ (pinned checkouts, gitignored)
 apps/gateway/test/ and tests/  one suite per engine seam
 deploy/         installers (win/mac/linux), docker compose, systemd

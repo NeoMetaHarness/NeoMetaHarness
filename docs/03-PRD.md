@@ -55,7 +55,7 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 | SA-6 | **Learns:** ticket post-mortem → candidate skills / playbooks → eval → promote | P0 |
 | SA-7 | Router model from the Model Hub; every decision logged with its outcome | P0 |
 | SA-9 | Report / assessment contracts across all executors; Inbox lanes from ticket stages | P0 |
-| SA-10 | Accept modes `observe` / `act-with-approval` / `act` per workspace; Suggestions lane | P0 |
+| SA-10 | Accept modes `observe` / `act-with-approval` / `act` (workspace-level today; per-source or per-project planned); Suggestions lane | P0 |
 | SA-11 | Sources: `@neo` code comments, failing checks | P1 |
 | SA-8 | Small local router model (shadow → canary → primary) | P2 (post-v1) |
 
@@ -121,10 +121,10 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 | ID | Requirement | P |
 |---|---|---|
 | PL-1 | Extension system per [05](05-extension-system.md): manifest, lifecycle, toggle, permissions, health | P0 |
-| PL-2 | TS and Python sample extensions + extension templates | P1 |
+| PL-2 | TS and Python extension SDKs + `neo ext new` templates (planned; sample extensions and templates provided today) | P1 |
 | PL-3 | Workspaces, members, roles; SQLite default, Postgres option | P0 |
-| PL-4 | Topologies: all-in-one, hybrid, server; installer check and `pnpm neo:backup / restore` | P0 |
-| PL-5 | Upstream registry + local `pnpm upstream:check` + contract tests (no GitHub Actions) | P0 |
+| PL-4 | Topologies: all-in-one, hybrid, server; `neo install / doctor / backup` (unified CLI planned; installer checks and `pnpm neo:backup / restore` today) | P0 |
+| PL-5 | Upstream registry + local `pnpm upstream:check` / `neo upstream bump` + contract tests (no GitHub Actions) | P0 |
 | PL-6 | Opt-in telemetry (OpenTelemetry); health page | P1 |
 
 ### Non-goals for v1

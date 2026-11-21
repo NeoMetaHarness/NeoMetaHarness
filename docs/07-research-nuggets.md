@@ -25,7 +25,7 @@ It returns a `choice`, a ranking and an **escalation ladder** in about 10–25 m
 Training cost almost nothing: $1.67 on Modal for v4.
 
 **Use in Neo:**
-- `models-router-panda` extension (cordis in-process, oRPC/MCP): the **default model picker** for every turn. Pools come from the Model Hub, and cards are extended with the user's subscriptions and local models.
+- `models-router-panda` extension (cordis in-process, oRPC): the **default model picker** for every turn. Pools come from the Model Hub, and cards are extended with the user's subscriptions and local models.
 - **Route → run → verify → record outcome → escalate on failure** becomes Neo's standard execution loop. Verification sources:
   - turn checks (tests, typecheck);
   - the report contract (§3);
