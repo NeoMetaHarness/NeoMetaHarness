@@ -110,7 +110,7 @@ discover → install → verify → (review permissions) → enable → running 
 
 ## 9. Adding a route
 
-Every route exposed by Neo, whether an oRPC contract procedure in `@neometaharness/contracts` or a plain HTTP extension route, must have an explicit policy in [the centralized policy table](../apps/gateway/src/policy.ts). Policy levels are `viewer`, `member`, `admin`, `owner`, and `internal`.
+Every route exposed by Neo, whether an oRPC contract procedure in `@neometaharness/contracts` or a plain HTTP extension route, must have an explicit policy in [the centralized policy table](../apps/gateway/src/policy.ts). Policy levels are `viewer`, `member`, `admin`, `owner`, `deployment-owner`, and `internal`. Server-mode kernel upgrades and uninstalls require the deployment owner.
 
 1. **Contract routes:** When adding a new leaf procedure to `neoContract` (for example, `x.new-engine.action` or `agents.features.do`), add a corresponding entry in `CONTRACT_POLICY`:
 
