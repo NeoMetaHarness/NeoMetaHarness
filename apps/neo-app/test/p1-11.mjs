@@ -164,6 +164,54 @@ execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['test'], {
   cwd: join(appDir, 'src-tauri'), stdio: 'pipe',
 });
 
+console.log('Testing release build fail-closed validation in build.rs...');
+const cargoBin = join(process.env.USERPROFILE, '.cargo/bin/cargo.exe');
+const srcTauriDir = join(appDir, 'src-tauri');
+
+// 1. Verify cargo check --release FAILS when TAURI_CONFIG has invalid/unresolvable JSON
+assert.throws(
+  () => execFileSync(cargoBin, ['check', '--release'], {
+    cwd: srcTauriDir,
+    stdio: 'pipe',
+    env: { ...process.env, TAURI_CONFIG: 'invalid-non-json' },
+  }),
+  /failed to run custom build command|Release build failed closed|exit code/i,
+  'release cargo check must fail closed when TAURI_CONFIG is unresolvable JSON'
+);
+
+// 2. Verify cargo check --release FAILS when config has missing/empty pubkey
+assert.throws(
+  () => execFileSync(cargoBin, ['check', '--release'], {
+    cwd: srcTauriDir,
+    stdio: 'pipe',
+    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: '' } } }) },
+  }),
+  /failed to run custom build command|Release build failed closed|exit code/i,
+  'release cargo check must fail closed when updater pubkey is empty'
+);
+
+// 3. Verify cargo check --release FAILS with default placeholder key (no config override provided)
+assert.throws(
+  () => execFileSync(cargoBin, ['check', '--release'], {
+    cwd: srcTauriDir,
+    stdio: 'pipe',
+    env: { ...process.env, TAURI_CONFIG: undefined, TAURI_ENV_CONFIG: undefined },
+  }),
+  /failed to run custom build command|Release build failed closed|exit code/i,
+  'release cargo check must fail closed when building with placeholder key'
+);
+
+// 4. Verify cargo check --release SUCCEEDS when valid test key is supplied via TAURI_CONFIG
+execFileSync(cargoBin, ['check', '--release'], {
+  cwd: srcTauriDir,
+  stdio: 'pipe',
+  env: {
+    ...process.env,
+    TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: dummyTestKey } } }),
+  },
+});
+console.log('PASS build.rs release fail-closed verification (unresolvable config and placeholder fail, valid test config passes)');
+
 console.log('Building desktop binary with Cargo (debug)...');
 execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['build'], {
   cwd: join(appDir, 'src-tauri'), stdio: 'pipe',

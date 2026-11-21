@@ -129,6 +129,29 @@ fn get_updater_overrides() -> (Option<String>, Option<String>) {
     }
 }
 
+pub fn evaluate_redirect_attempt(
+    next_url: &url::Url,
+    previous_count: usize,
+    allowed_hosts: &[String],
+    is_debug: bool,
+) -> Result<(), String> {
+    if !is_debug && next_url.scheme() != "https" {
+        return Err(format!("Updater redirects must use HTTPS in release builds: {next_url}"));
+    }
+    if previous_count >= 5 {
+        return Err("Too many updater redirects".to_string());
+    }
+    let next_host = next_url
+        .host_str()
+        .ok_or_else(|| format!("Updater redirect target has no host: {next_url}"))?;
+
+    let is_allowed = allowed_hosts.iter().any(|h| h.eq_ignore_ascii_case(next_host));
+    if !is_allowed {
+        return Err(format!("Updater redirect to untrusted host '{next_host}' is forbidden"));
+    }
+    Ok(())
+}
+
 fn configure_updater_builder(
     app: &tauri::AppHandle,
 ) -> Result<(tauri_plugin_updater::UpdaterBuilder, Vec<String>), String> {
@@ -178,22 +201,14 @@ fn configure_updater_builder(
     builder = builder.configure_client(move |client_builder| {
         let hosts = redirect_hosts.clone();
         client_builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            let next = attempt.url();
-            if !cfg!(debug_assertions) && next.scheme() != "https" {
-                return attempt.error("Updater redirects must use HTTPS in release builds");
-            }
-            if let Some(next_host) = next.host_str() {
-                let is_allowed = hosts.iter().any(|h| h.eq_ignore_ascii_case(next_host));
-                if !is_allowed {
-                    return attempt.error("Updater redirect to an untrusted host is forbidden");
-                }
-            } else {
-                return attempt.error("Updater redirect target has no host");
-            }
-            if attempt.previous().len() >= 5 {
-                attempt.error("Too many updater redirects")
-            } else {
-                attempt.follow()
+            match evaluate_redirect_attempt(
+                attempt.url(),
+                attempt.previous().len(),
+                &hosts,
+                cfg!(debug_assertions),
+            ) {
+                Ok(()) => attempt.follow(),
+                Err(err) => attempt.error(err),
             }
         }))
     });
@@ -495,6 +510,69 @@ mod tests {
         let attacker_url = url::Url::parse("https://attacker.com/asset.msi.zip").unwrap();
         assert!(validate_update_download_url(&attacker_url, &allowed_hosts, false).is_err());
         assert!(validate_update_download_url(&attacker_url, &allowed_hosts, true).is_err());
+    }
+
+    #[test]
+    fn test_redirect_policy_allowed_host_chain() {
+        let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
+        let allowed_hosts = resolve_allowed_hosts(&ep, &[]);
+
+        // Initial request host: github.com
+        let url0 = url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/app.zip").unwrap();
+        assert!(evaluate_redirect_attempt(&url0, 0, &allowed_hosts, false).is_ok());
+
+        // Redirect 1: objects.githubusercontent.com
+        let url1 = url::Url::parse("https://objects.githubusercontent.com/github-production-release-asset-2e6506/12345").unwrap();
+        assert!(evaluate_redirect_attempt(&url1, 1, &allowed_hosts, false).is_ok());
+
+        // Redirect 2: release-assets.githubusercontent.com
+        let url2 = url::Url::parse("https://release-assets.githubusercontent.com/asset-download-url").unwrap();
+        assert!(evaluate_redirect_attempt(&url2, 2, &allowed_hosts, false).is_ok());
+
+        // Further hops within allowed hosts below limit
+        assert!(evaluate_redirect_attempt(&url1, 3, &allowed_hosts, false).is_ok());
+        assert!(evaluate_redirect_attempt(&url2, 4, &allowed_hosts, false).is_ok());
+    }
+
+    #[test]
+    fn test_redirect_policy_untrusted_host() {
+        let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
+        let allowed_hosts = resolve_allowed_hosts(&ep, &[]);
+
+        // External attacker host
+        let untrusted1 = url::Url::parse("https://attacker.com/fake-release.zip").unwrap();
+        assert!(evaluate_redirect_attempt(&untrusted1, 1, &allowed_hosts, false).is_err());
+        assert!(evaluate_redirect_attempt(&untrusted1, 1, &allowed_hosts, true).is_err());
+
+        // Subdomain attack on github.com
+        let untrusted_subdomain = url::Url::parse("https://github.com.attacker.com/fake.zip").unwrap();
+        assert!(evaluate_redirect_attempt(&untrusted_subdomain, 1, &allowed_hosts, false).is_err());
+    }
+
+    #[test]
+    fn test_redirect_policy_http_enforcement() {
+        let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
+        let allowed_hosts = resolve_allowed_hosts(&ep, &[]);
+
+        let http_url = url::Url::parse("http://objects.githubusercontent.com/asset.zip").unwrap();
+        // In release builds, HTTP redirect must be rejected
+        assert!(evaluate_redirect_attempt(&http_url, 1, &allowed_hosts, false).is_err());
+        // In debug/test builds, HTTP is allowed for local test fixtures
+        assert!(evaluate_redirect_attempt(&http_url, 1, &allowed_hosts, true).is_ok());
+    }
+
+    #[test]
+    fn test_redirect_policy_more_than_5_hops() {
+        let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
+        let allowed_hosts = resolve_allowed_hosts(&ep, &[]);
+        let valid_url = url::Url::parse("https://objects.githubusercontent.com/asset.zip").unwrap();
+
+        // 4 previous redirects (attempting 5th request) -> OK
+        assert!(evaluate_redirect_attempt(&valid_url, 4, &allowed_hosts, false).is_ok());
+
+        // 5 previous redirects (attempting 6th request) -> Error (> 5 hops)
+        assert!(evaluate_redirect_attempt(&valid_url, 5, &allowed_hosts, false).is_err());
+        assert!(evaluate_redirect_attempt(&valid_url, 6, &allowed_hosts, false).is_err());
     }
 
     #[test]
