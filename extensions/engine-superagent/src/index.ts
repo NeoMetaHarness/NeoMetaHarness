@@ -619,11 +619,11 @@ class SuperagentService {
     if (!item) throw new Error('Suggestion not found');
     if (item.status !== 'suggestion') throw new Error(`Cannot accept ${item.status} ticket`);
     if (isUpstreamBump(item)) return this.acceptUpstream(item, role);
-    if ((item.destructive ?? isDestructive(item.text)) && role && !isAdmin(role)) {
+    if (!item.appAction && (item.destructive ?? isDestructive(item.text)) && role && !isAdmin(role)) {
       throw new Error('Accepting destructive work requires admin or owner');
     }
     if (item.dream) return this.applyDream(item);
-    const reason = blockedReason(role ?? item.requesterRole ?? 'member', 'act', item.text);
+    const reason = item.appAction ? undefined : blockedReason(role ?? item.requesterRole ?? 'member', 'act', item.text);
     if (reason) {
       return this.finish(item, { status: 'blocked', summary: reason,
         changes: [], tests: [], risks: [reason], options: [] });
@@ -719,7 +719,7 @@ class SuperagentService {
     role: 'viewer' | 'member' | 'admin' | 'owner'): Promise<InboxItem> {
     const item = this.items.get(input.id);
     if (!item || item.status !== 'approval') throw new Error('Ticket is not awaiting approval');
-    if (item.approval?.destructive && role !== 'admin' && role !== 'owner') {
+    if (!item.appAction && item.approval?.destructive && role !== 'admin' && role !== 'owner') {
       throw new Error('Destructive approval requires admin or owner');
     }
     if (item.dream) {

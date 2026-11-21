@@ -488,8 +488,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   const appInboxView = (item: InboxItem, context: GatewayAuthContext): InboxItem | undefined => {
     if (!item.appAction) return item;
     if (!item.appAction.workspaceId || item.appAction.workspaceId !== context.workspaceId) return undefined;
-    if (context.role === 'admin' || context.role === 'owner' ||
-      (item.appAction.ownerUserId && item.appAction.ownerUserId === context.user?.id)) {
+    if (item.appAction.ownerUserId && item.appAction.ownerUserId === context.user?.id) {
       return { ...item, text: `${item.text}\nArguments: ${JSON.stringify(item.appAction.arguments ?? {})}` };
     }
     const { appAction: _appAction, ...summary } = item;
@@ -501,15 +500,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     return visible;
   };
   const assertAppInboxDecider = (item: InboxItem | undefined, context: GatewayAuthContext) => {
-    if (item?.appAction && context.role !== 'admin' && context.role !== 'owner' &&
-      (!item.appAction.ownerUserId || item.appAction.ownerUserId !== context.user?.id)) {
-      throw new ORPCError('FORBIDDEN', { message: 'Connected-app action requires account owner or admin' });
+    if (item?.appAction && (!item.appAction.ownerUserId || item.appAction.ownerUserId !== context.user?.id)) {
+      throw new ORPCError('FORBIDDEN', { message: 'Connected-app action requires account owner' });
     }
-  };
-  const appInboxScope = async (id: string, context: GatewayAuthContext) => {
-    const item = (await invokeInbox('list', {}) as InboxItem[]).find(item => item.id === id);
-    if (item?.appAction && !appInboxView(item, context)) throw new ORPCError('FORBIDDEN', { message: 'Inbox workspace access denied' });
-    return item;
   };
   const invokeMemory = async (route: string, body: unknown) => {
     const path = `/x/memory-local/${route}`;
@@ -746,7 +739,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       list: os.inbox.list.handler(async ({ context }) => {
         authorize('inbox.list', context);
         const items = await invokeInbox('list', {}) as InboxItem[];
-        return items.filter((item) => inboxVisible(item, context));
+        return items.filter((item) => inboxVisible(item, context))
+          .map((item) => appInboxView(item, context)).filter((item): item is InboxItem => !!item);
       }),
       decisions: {
         list: os.inbox.decisions.list.handler(async ({ input, context }) => {
@@ -761,15 +755,17 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorizeInboxAction('inbox.accept', context);
         const { item, role } = await inboxItemForAction('inbox.accept', input.id, context);
         // Accepting a Suggestion starts work: destructive work needs an admin or owner (as approvals do).
-        if (item.destructive && role !== 'admin' && role !== 'owner') {
+        assertAppInboxDecider(item, context);
+        if (!item.appAction && item.destructive && role !== 'admin' && role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Accepting destructive work requires admin or owner' });
         }
         return visibleAppInboxItem(await invokeInbox('accept', { ...input, role }) as InboxItem, context);
       }),
       dismiss: os.inbox.dismiss.handler(async ({ input, context }) => {
         authorizeInboxAction('inbox.dismiss', context);
-        const { role } = await inboxItemForAction('inbox.dismiss', input.id, context);
-        return invokeInbox('dismiss', { ...input, role }) as Promise<InboxItem>;
+        const { item, role } = await inboxItemForAction('inbox.dismiss', input.id, context);
+        assertAppInboxDecider(item, context);
+        return visibleAppInboxItem(await invokeInbox('dismiss', { ...input, role }) as InboxItem, context);
       }),
       acceptMode: {
         deployment: {
@@ -795,21 +791,24 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       },
       reply: os.inbox.reply.handler(async ({ input, context }) => {
         authorizeInboxAction('inbox.reply', context);
-        await inboxItemForAction('inbox.reply', input.id, context);
-        return invokeInbox('reply', input) as Promise<InboxItem>;
+        const { item } = await inboxItemForAction('inbox.reply', input.id, context);
+        assertAppInboxDecider(item, context);
+        return visibleAppInboxItem(await invokeInbox('reply', input) as InboxItem, context);
       }),
       approval: { decide: os.inbox.approval.decide.handler(async ({ input, context }) => {
         authorizeInboxAction('inbox.approval.decide', context);
         const { item, role } = await inboxItemForAction('inbox.approval.decide', input.id, context);
-        if ((item.approval?.destructive || item.source === 'neo/github') && role !== 'admin' && role !== 'owner') {
+        assertAppInboxDecider(item, context);
+        if (!item.appAction && (item.approval?.destructive || item.source === 'neo/github') && role !== 'admin' && role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Destructive approval requires admin or owner' });
         }
         return visibleAppInboxItem(await invokeInbox('approval/decide', { ...input, role }) as InboxItem, context);
       }) },
       retry: os.inbox.retry.handler(async ({ input, context }) => {
         authorizeInboxAction('inbox.retry', context);
-        await inboxItemForAction('inbox.retry', input.id, context);
-        return invokeInbox('retry', input) as Promise<InboxItem>;
+        const { item } = await inboxItemForAction('inbox.retry', input.id, context);
+        assertAppInboxDecider(item, context);
+        return visibleAppInboxItem(await invokeInbox('retry', input) as InboxItem, context);
       }),
       upstream: {
         check: os.inbox.upstream.check.handler(async ({ context }) => {
@@ -851,14 +850,23 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       events: os.inbox.events.handler(async function* ({ input, signal, context }) {
         authorize('inbox.events', context);
         const stream = await invokeInbox('events', { ...input, signal }) as AsyncIterable<InboxEvent>;
-        if (mode === 'desktop') { yield* stream; return; }
+        if (mode === 'desktop') {
+          for await (const event of stream) {
+            const item = appInboxView(event.item, context);
+            if (item) yield { ...event, item };
+          }
+          return;
+        }
         // Membership is re-checked (at most every 5 s): a removed member's stream ends, a demoted one narrows.
         let role: GatewayAuthContext['role'] | null = await currentInboxRole(context);
         let checkedAt = Date.now();
         for await (const event of stream) {
           if (Date.now() - checkedAt >= 5_000) { role = await currentInboxRole(context); checkedAt = Date.now(); }
           if (!role && !canSeeDeploymentItems(context)) return;
-          if (inboxVisible(event.item, context, role)) yield event;
+          if (inboxVisible(event.item, context, role)) {
+            const item = appInboxView(event.item, context);
+            if (item) yield { ...event, item };
+          }
         }
       }),
       cron: {

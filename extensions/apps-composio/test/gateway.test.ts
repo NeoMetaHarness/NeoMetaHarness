@@ -77,7 +77,7 @@ try {
   assert.equal((await member.apps.run(request) as any).status, 'completed'); const count = executes();
   const destructive = { ...request, action: 'GITHUB_DELETE' };
   let pending = await member.apps.run(destructive) as any; assert.equal(pending.status, 'approval'); assert.equal(executes(), count);
-  const item = (await owner.inbox.list()).find(i => i.id === pending.inboxId)!; assert.ok(item.text.includes('test/repo')); assert.equal(item.source, 'neo/apps');
+  const item = (await owner.inbox.list()).find(i => i.id === pending.inboxId)!; assert.ok(!JSON.stringify(item).includes('test/repo')); assert.equal(item.appAction, undefined); assert.equal(item.source, 'neo/apps');
   const ownerItem = (await member.inbox.list()).find(i => i.id === pending.inboxId)!;
   assert.deepEqual(ownerItem.appAction!.arguments, request.arguments, 'Only the connected-account owner sees exact arguments');
   const viewerItem = (await viewer.inbox.list()).find(i => i.id === pending.inboxId)!;
@@ -85,7 +85,6 @@ try {
   const memberBItem = (await roles.get('member-b')!.inbox.list()).find(i => i.id === pending.inboxId)!;
   assert.ok(memberBItem.text.includes('details restricted'));
   assert.ok(!JSON.stringify(memberBItem).includes('test/repo') && !JSON.stringify(memberBItem).includes(account.id));
-  assert.deepEqual(item.appAction!.arguments, request.arguments);
   assert.ok(!(await roles.get('other-workspace')!.inbox.list()).some(i => i.id === pending.inboxId));
   await assert.rejects(roles.get('other-workspace')!.inbox.accept({ id: pending.inboxId }));
   const viewerEvents = await viewer.inbox.events({ since: 0 }, { signal: AbortSignal.timeout(5000) });
@@ -97,10 +96,10 @@ try {
   await assert.rejects(roles.get('member-b')!.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'foreign member' }), (e: any) => e.code === 'FORBIDDEN');
   await assert.rejects(roles.get('member-b')!.inbox.approval.decide({ id: pending.inboxId, decision: 'deny', reason: 'foreign member' }), (e: any) => e.code === 'FORBIDDEN');
   assert.equal(executes(), count, 'Another member cannot approve or reject a connected-account action');
-  await assert.rejects(member.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'try' })); assert.equal(executes(), count);
-  await owner.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'Reviewed exact request' }); assert.equal(executes(), count + 1);
-  await assert.rejects(owner.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'duplicate' })); assert.equal(executes(), count + 1);
-  pending = await member.apps.run(destructive) as any; await owner.inbox.approval.decide({ id: pending.inboxId, decision: 'deny', reason: 'deny' }); assert.equal(executes(), count + 1);
+  await assert.rejects(owner.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'foreign administrator' }), (e: any) => e.code === 'FORBIDDEN'); assert.equal(executes(), count);
+  await member.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'Reviewed my account request' }); assert.equal(executes(), count + 1);
+  await assert.rejects(member.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'duplicate' })); assert.equal(executes(), count + 1);
+  pending = await member.apps.run(destructive) as any; await member.inbox.approval.decide({ id: pending.inboxId, decision: 'deny', reason: 'deny' }); assert.equal(executes(), count + 1);
   await owner.inbox.acceptMode.set({ mode: 'observe' }); pending = await member.apps.run(request) as any; assert.equal(pending.status, 'suggestion'); assert.equal(executes(), count + 1);
   await assert.rejects(roles.get('member-b')!.inbox.accept({ id: pending.inboxId }), (e: any) => e.code === 'FORBIDDEN');
   await member.inbox.accept({ id: pending.inboxId }); assert.equal(executes(), count + 2);
@@ -138,9 +137,9 @@ try {
   pending = await member.apps.run(destructive) as any;
   await owner.extensions.disable({ id: 'apps-composio' });
   for (const mcp of clients) assert.ok((await mcp.call('run', request)).isError);
-  await assert.rejects(owner.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'Stale' }));
+  await assert.rejects(member.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'Stale' }));
   for (const engine of ['hermes','dsh','superagent']) assert.equal((await owner.extensions.list()).find(e => e.id === `fake-${engine}`)!.status, 'running');
   assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${gateway.desktopToken}` } })).status, 200);
   fake.setFail(true); await owner.extensions.enable({ id: 'apps-composio' }); await assert.rejects(owner.apps.toolkits({})); assert.equal((await owner.extensions.list()).find(e => e.id === 'apps-composio')!.health!.ok, true);
-  console.log('P2-12 PASS desktop_auth=true fake_Composio_only=true owner_only_accounts=true App_and_MCP_workspace_isolation=true explicit_profile_grants=true revocation=true vault_scope_verified=true local_read_policy=true private_network_opt_in_admin=true Neo_callback_only=true cross_member_list_and_event_redaction=true owner_or_admin_approval=true accept_modes=true destructive_admin_approval=true MCP_three_engines=true disable_isolation=true');
+  console.log('P2-12 PASS desktop_auth=true fake_Composio_only=true owner_only_accounts=true App_and_MCP_workspace_isolation=true explicit_profile_grants=true revocation=true vault_scope_verified=true local_read_policy=true private_network_opt_in_admin=true Neo_callback_only=true cross_member_list_and_event_redaction=true account_owner_only_approval=true accept_modes=true destructive_admin_approval=true MCP_three_engines=true disable_isolation=true');
 } finally { await Promise.all(clients.map(c => c.close())); await gateway?.close(); await fake.close(); await rm(home, { recursive: true, force: true, maxRetries: 5 }); }

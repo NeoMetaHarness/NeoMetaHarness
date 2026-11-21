@@ -105,7 +105,7 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
     const corp = await (await fetch(`${base}/auth/organization/create`, json({ name: 'Corp', slug: 'corp' }, as(owner)))).json() as { id: string };
     const finance = await (await fetch(`${base}/auth/organization/create`,
       json({ name: 'Finance', slug: 'finance', keepCurrentActiveOrganization: true }, as(owner)))).json() as { id: string };
-    const join_ = async (orgId: string, email: string, role: 'member' | 'viewer' = 'member') => {
+    const join_ = async (orgId: string, email: string, role: 'member' | 'viewer' | 'admin' = 'member') => {
       const token = await signUp(email);
       const invite = await (await fetch(`${base}/auth/organization/invite-member`,
         json({ organizationId: orgId, email, role }, as(owner)))).json() as { id: string };
@@ -115,6 +115,8 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
     const alice = await join_(corp.id, 'alice@corp.test');
     const bob = await join_(finance.id, 'bob@finance.test');
     const carol = await join_(corp.id, 'carol@corp.test', 'viewer');
+    const dana = await join_(corp.id, 'dana@corp.test', 'admin');
+    const aliceUser = await gateway.auth.kysely.selectFrom('user').select('id').where('email', '=', 'alice@corp.test').executeTakeFirstOrThrow();
     assert.equal((await fetch(`${base}/extensions/enable`, json({ json: { id: 'engine-superagent' } }, as(owner)))).status, 200);
     const call = async (token: string, path: string, input: unknown) => {
       const response = await fetch(`${base}/${path}`, json({ json: input }, as(token)));
@@ -194,6 +196,27 @@ test('P6-10: Inbox items are listed and acted on only inside the caller workspac
     assert.ok(!(await tickets(owner)).some((id) => id === 'hermes-binding' || id === 'upstream-bump'), 'no deployment-level decisions');
     assert.equal((await tickets(alice, { limit: 2 })).length, 2, 'the limit applies after scoping');
     console.log('P6-10_DECISIONS PASS decision records are scoped to the caller workspace');
+    // P2-12: a workspace admin and owner cannot inspect or approve another user's connected account.
+    await fixture('test/seed', { items: [['corp-app-action', corp.id, 'approval', { source: 'neo/apps',
+      text: 'GITHUB_DELETE\nArgument keys: repo', appAction: { provider: 'composio', accountId: 'private-account-id',
+        action: 'GITHUB_DELETE', workspaceId: corp.id, ownerUserId: aliceUser.id, arguments: { repo: 'private/repo' } } }]] });
+    const ownerAction = ((await call(alice, 'inbox/list', {})).body as any[]).find(i => i.id === 'corp-app-action');
+    assert.deepEqual(ownerAction.appAction.arguments, { repo: 'private/repo' });
+    for (const outsider of [owner, dana, carol]) {
+      const otherAction = ((await call(outsider, 'inbox/list', {})).body as any[]).find(i => i.id === 'corp-app-action');
+      assert.ok(otherAction, 'same-workspace non-owner sees redacted summary');
+      assert.equal(otherAction.appAction, undefined);
+      assert.ok(!JSON.stringify(otherAction).includes('private/repo') && !JSON.stringify(otherAction).includes('private-account-id'));
+    }
+    assert.ok(!((await call(bob, 'inbox/list', {})).body as any[]).some(i => i.id === 'corp-app-action'));
+    for (const outsider of [owner, dana]) for (const decision of ['approve', 'deny']) {
+      assert.equal((await call(outsider, 'inbox/approval/decide', { id: 'corp-app-action', decision, reason: 'not my account' })).status, 403);
+    }
+    assert.equal((await call(bob, 'inbox/approval/decide', { id: 'corp-app-action', decision: 'approve', reason: 'foreign workspace' })).status, 404);
+    assert.ok(!(await fixture('test/actions') as string[]).includes('decide:corp-app-action'));
+    assert.equal((await call(alice, 'inbox/approval/decide', { id: 'corp-app-action', decision: 'approve', reason: 'own account' })).status, 200);
+    assert.ok((await fixture('test/actions') as string[]).includes('decide:corp-app-action'));
+    console.log('P2-12_ADMIN_OWNER PASS foreign connected-account args and decisions denied');
 
     // Schedules: created in the caller's workspace, listed and deleted only there; the system schedule is the owner's.
     const corpJob = await call(alice, 'inbox/cron/create', { text: 'Weekly report', botId: 'bot', schedule: '0 9 * * 1' });
