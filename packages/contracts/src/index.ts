@@ -420,8 +420,8 @@ export type VoiceSynthesizeInput = z.infer<typeof voiceSynthesizeInput>;
 export type VoiceSynthesizeOutput = z.infer<typeof voiceSynthesizeOutput>;
 export interface NeoVoiceService {
   readonly providerId: string;
-  transcribe(input: VoiceTranscribeInput): Promise<VoiceTranscribeOutput>;
-  synthesize(input: VoiceSynthesizeInput): Promise<VoiceSynthesizeOutput>;
+  transcribe(input: VoiceTranscribeInput, requesterId?: string, workspaceId?: string): Promise<VoiceTranscribeOutput>;
+  synthesize(input: VoiceSynthesizeInput, requesterId?: string, workspaceId?: string): Promise<VoiceSynthesizeOutput>;
 }
 export const voiceXaiContract = {
   status: oc.output(z.object({ providerId: z.literal('xai'), configured: z.boolean() })),

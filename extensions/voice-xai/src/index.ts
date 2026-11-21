@@ -77,19 +77,8 @@ export class XaiVoiceService implements NeoVoiceService {
   constructor(
     private readonly settings: VoiceSettings,
     private readonly http?: VoiceHttpClient,
-  ) {
-    const injected = http
-      ? (async (url: string | URL | Request, init?: RequestInit) =>
-        http.request(String(url), init ?? {})) as typeof fetch
-      : undefined;
-    this.sttFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected,
-      { maxResponseBytes: MAX_TRANSCRIPT_BYTES });
-    this.ttsFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected,
-      { maxResponseBytes: MAX_JSON_AUDIO_BYTES });
-  }
-
-  private readonly sttFetch: typeof fetch;
-  private readonly ttsFetch: typeof fetch;
+    private readonly settingsFor?: (workspaceId: string) => Promise<VoiceSettings>,
+  ) {}
 
   get configured(): boolean { return this.active && Boolean(this.settings.apiKey?.trim()); }
   dispose(): void {
@@ -98,12 +87,12 @@ export class XaiVoiceService implements NeoVoiceService {
     void this.http?.close?.().catch(() => undefined);
   }
 
-  private enforceRateLimit(requesterId: string): void {
+  private enforceRateLimit(requesterId: string, settings: VoiceSettings, workspaceId?: string): void {
     const now = Date.now();
-    const configured = this.settings.requestsPerMinute;
+    const configured = settings.requestsPerMinute;
     const limit = Number.isInteger(configured) && configured! >= 1 && configured! <= 120
       ? configured! : DEFAULT_REQUESTS_PER_MINUTE;
-    const identity = requesterId || 'internal';
+    const identity = `${workspaceId ?? 'default'}:${requesterId || 'internal'}`;
     const bucket = this.rateBuckets.get(identity);
     if (bucket && now - bucket.startedAt < RATE_WINDOW_MS) {
       if (bucket.count >= limit) throw new Error('xAI Voice rate limit exceeded');
@@ -118,20 +107,28 @@ export class XaiVoiceService implements NeoVoiceService {
     }
   }
 
-  private async send(path: string, body: BodyInit, requestBytes: number, requesterId: string, contentType?: string): Promise<Response> {
+  private async send(path: string, body: BodyInit, requestBytes: number, requesterId: string, workspaceId?: string, contentType?: string): Promise<Response> {
     if (!this.active) throw new Error('xAI Voice extension is disabled');
-    const key = this.settings.apiKey?.trim();
+    if (this.settingsFor && !workspaceId?.trim()) throw new Error('xAI Voice requires requester workspace identity');
+    const settings = this.settingsFor ? await this.settingsFor(workspaceId!) : this.settings;
+    const key = settings.apiKey?.trim();
     if (!key) throw new Error('xAI Voice API key is not configured');
     if (requestBytes > (path === '/v1/stt' ? MAX_AUDIO_BYTES : MAX_TEXT_REQUEST_BYTES)) {
       throw new Error('xAI Voice request too large');
     }
-    const origin = validateEgressUrl(this.settings.baseUrl || 'https://api.x.ai', this.settings.allowPrivateNetwork === true);
-    this.enforceRateLimit(requesterId);
+    const origin = validateEgressUrl(settings.baseUrl || 'https://api.x.ai', settings.allowPrivateNetwork === true);
+    this.enforceRateLimit(requesterId, settings, workspaceId);
     const headers: Record<string, string> = { Authorization: `Bearer ${key}` };
     if (contentType) headers['Content-Type'] = contentType;
     let response: Response;
     try {
-      response = await (path === '/v1/stt' ? this.sttFetch : this.ttsFetch)(new URL(path, origin.origin), {
+      const injected = this.http
+        ? (async (url: string | URL | Request, init?: RequestInit) =>
+          this.http!.request(String(url), init ?? {})) as typeof fetch
+        : undefined;
+      const guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected,
+        { maxResponseBytes: path === '/v1/stt' ? MAX_TRANSCRIPT_BYTES : MAX_JSON_AUDIO_BYTES });
+      response = await guardedFetch(new URL(path, origin.origin), {
         method: 'POST', headers, body, signal: AbortSignal.timeout(30_000), redirect: 'error',
       });
     } catch {
@@ -142,7 +139,7 @@ export class XaiVoiceService implements NeoVoiceService {
     return response;
   }
 
-  async transcribe(raw: VoiceTranscribeInput, requesterId = 'internal'): Promise<VoiceTranscribeOutput> {
+  async transcribe(raw: VoiceTranscribeInput, requesterId = 'internal', workspaceId?: string): Promise<VoiceTranscribeOutput> {
     const input = voiceTranscribeInput.parse(raw);
     if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.audioBase64)) {
       throw new Error('Invalid audio encoding');
@@ -157,15 +154,15 @@ export class XaiVoiceService implements NeoVoiceService {
     if (input.language) form.set('language', input.language);
     const extension = input.mimeType === 'audio/mpeg' ? 'mp3' : input.mimeType === 'audio/wav' ? 'wav' : 'audio';
     form.set('file', new Blob([Uint8Array.from(audio)], { type: input.mimeType }), `audio.${extension}`);
-    const response = await this.send('/v1/stt', form as unknown as BodyInit, audio.length, requesterId);
+    const response = await this.send('/v1/stt', form as unknown as BodyInit, audio.length, requesterId, workspaceId);
     if (mediaType(response) !== 'application/json') throw new Error('xAI Voice returned invalid transcript type');
     return voiceTranscribeOutput.parse(parseProviderJson(await readLimited(response, MAX_TRANSCRIPT_BYTES)));
   }
 
-  async synthesize(raw: VoiceSynthesizeInput, requesterId = 'internal'): Promise<VoiceSynthesizeOutput> {
+  async synthesize(raw: VoiceSynthesizeInput, requesterId = 'internal', workspaceId?: string): Promise<VoiceSynthesizeOutput> {
     const input = voiceSynthesizeInput.parse(raw);
     const body = JSON.stringify({ text: input.text, voice_id: input.voice ?? 'eve', language: input.language ?? 'en' });
-    const response = await this.send('/v1/tts', body, Buffer.byteLength(body), requesterId, 'application/json');
+    const response = await this.send('/v1/tts', body, Buffer.byteLength(body), requesterId, workspaceId, 'application/json');
     const mimeType = mediaType(response);
     if (mimeType === 'application/json') {
       const json = parseProviderJson(await readLimited(response, MAX_JSON_AUDIO_BYTES));
@@ -187,21 +184,23 @@ export class XaiVoiceService implements NeoVoiceService {
 
 export default defineExtension({
   activate(ctx) {
-    // Kernel resolves secret settings from the workspace vault before activation.
     const settings = ctx.inject<VoiceSettings>('settings') ?? {};
+    const settingsFor = ctx.inject<(workspaceId: string) => Promise<VoiceSettings>>('settingsFor');
     const http = ctx.inject<VoiceHttpClient>('voiceHttpClient');
-    const voice = new XaiVoiceService(settings, http);
+    const voice = new XaiVoiceService(settings, http, settingsFor);
     ctx.provide('neo.voice', voice);
     ctx.effect(() => () => voice.dispose());
     ctx.health(() => ({ ok: true }));
-    ctx.route('status', () => ({ providerId: 'xai', configured: voice.configured }));
+    ctx.route('status', () => ({ providerId: 'xai', configured: Boolean(settings.apiKey?.trim()) }));
     ctx.route('transcribe', ({ body }) => {
-      const request = body as { input: VoiceTranscribeInput; requesterId: string };
-      return request?.input ? voice.transcribe(request.input, request.requesterId) : voice.transcribe(body as VoiceTranscribeInput);
+      const request = body as { input: VoiceTranscribeInput; requesterId: string; workspaceId: string };
+      if (!request?.input || !request.requesterId || !request.workspaceId) throw new Error('xAI Voice requires authenticated requester identity');
+      return voice.transcribe(request.input, request.requesterId, request.workspaceId);
     });
     ctx.route('synthesize', ({ body }) => {
-      const request = body as { input: VoiceSynthesizeInput; requesterId: string };
-      return request?.input ? voice.synthesize(request.input, request.requesterId) : voice.synthesize(body as VoiceSynthesizeInput);
+      const request = body as { input: VoiceSynthesizeInput; requesterId: string; workspaceId: string };
+      if (!request?.input || !request.requesterId || !request.workspaceId) throw new Error('xAI Voice requires authenticated requester identity');
+      return voice.synthesize(request.input, request.requesterId, request.workspaceId);
     });
   },
 });

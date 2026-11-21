@@ -594,10 +594,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
     return context.workspaceId;
   };
-  const invokeVoice = async (route: string, body: unknown, requesterId?: string) => {
+  const invokeVoice = async (route: string, body: unknown, requesterId?: string, workspaceId?: string) => {
     const path = `/x/voice-xai/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Voice provider is disabled' });
-    return kernel.invokeRoute(path, 'RPC', requesterId ? { input: body, requesterId } : body);
+    return kernel.invokeRoute(path, 'RPC', requesterId ? { input: body, requesterId, workspaceId } : body);
   };
   const invokePanda = async (route: string, body: unknown) => {
     const path = `/x/models-router-panda/${route}`;
@@ -873,11 +873,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
         transcribe: os.x['voice-xai'].transcribe.handler(async ({ input, context }) => {
           requireMember(context);
-          return invokeVoice('transcribe', input as VoiceTranscribeInput, context.user?.id) as Promise<VoiceTranscribeOutput>;
+          return invokeVoice('transcribe', input as VoiceTranscribeInput, context.user?.id, settingsWorkspace(context)) as Promise<VoiceTranscribeOutput>;
         }),
         synthesize: os.x['voice-xai'].synthesize.handler(async ({ input, context }) => {
           requireMember(context);
-          return invokeVoice('synthesize', input as VoiceSynthesizeInput, context.user?.id) as Promise<VoiceSynthesizeOutput>;
+          return invokeVoice('synthesize', input as VoiceSynthesizeInput, context.user?.id, settingsWorkspace(context)) as Promise<VoiceSynthesizeOutput>;
         }),
       },
       models: {
