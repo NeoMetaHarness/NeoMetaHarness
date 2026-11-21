@@ -260,6 +260,45 @@ try {
   }));
   const migrated = new XSearchService(concurrentSettings, persistentClient, () => now, migratedFile);
   await assert.rejects(migrated.search({ query: 'legacy quota remains' }, alice), /user minute/);
+  // A staged SQLite generation can charge while an older, still-draining
+  // generation continues writing the legacy JSON store after the import.
+  const lateFile = join(home, 'late-legacy-quotas.sqlite');
+  const lateJson = lateFile.replace(/\.sqlite$/, '.json');
+  const lateDay = Math.floor(now / 86_400_000);
+  const lateMinute = Math.floor(now / 60_000);
+  const oldSnapshot = (count: number) => JSON.stringify({
+    day: lateDay,
+    users: [[alice.userId, { minute: lateMinute, minuteCount: count, dayCount: count }]],
+    workspaces: [[alice.workspaceId, { minute: lateMinute, minuteCount: count, dayCount: count }]],
+  });
+  await writeFile(lateJson, oldSnapshot(1));
+  const nextGeneration = new XSearchService({
+    ...persistentSettings, requestsPerMinutePerUser: 3, requestsPerMinutePerWorkspace: 3,
+  }, persistentClient, () => now, lateFile);
+  await nextGeneration.search({ query: 'sqlite migration starts' }, alice);
+  await writeFile(lateJson, oldSnapshot(2)); // final legacy writer charge after SQLite began
+  await assert.rejects(nextGeneration.search({ query: 'legacy late charge counted' }, alice), /user minute/);
+  const migratedDb = new DatabaseSync(lateFile);
+  const migratedRow = migratedDb.prepare('SELECT value FROM quota_state WHERE id = 1').get() as { value: string };
+  assert.equal(JSON.parse(migratedRow.value).users[0][1].minuteCount, 3);
+  migratedDb.close();
+  await assert.rejects(nextGeneration.search({ query: 'legacy not double counted' }, alice), /user minute/);
+
+  // An active write transaction must cause asynchronous retry. A scheduled
+  // timer must run before we release it, proving the event loop stays live.
+  const busyFile = join(home, 'busy-search-quotas.sqlite');
+  const lockOwner = new DatabaseSync(busyFile);
+  lockOwner.exec('CREATE TABLE quota_state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)');
+  lockOwner.exec('BEGIN IMMEDIATE');
+  let timerFired = false;
+  const lockedRequest = new XSearchService(persistentSettings, persistentClient, () => now, busyFile)
+    .search({ query: 'sqlite busy writer' }, alice);
+  await new Promise<void>(resolve => setTimeout(() => { timerFired = true; resolve(); }, 40));
+  assert.equal(timerFired, true);
+  lockOwner.exec('COMMIT');
+  lockOwner.close();
+  await lockedRequest;
+
   now += 86_400_000;
   await persistent.search({ query: 'next day' }, alice);
   const capped = new XSearchService({ apiKey, requestsPerMinutePerUser: 0, requestsPerDayPerUser: Infinity }, {

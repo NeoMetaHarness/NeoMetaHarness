@@ -2,6 +2,7 @@ import { defineExtension } from '@neometaharness/kernel';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createEgressFetch, validateEgressUrl } from '@neometaharness/egress';
 import { xSearchInput, type NeoSearchService, type XSearchInput, type XSearchOutput } from '@neometaharness/contracts';
 
@@ -30,6 +31,13 @@ interface QuotaCounter {
   minute: number;
   minuteCount: number;
   dayCount: number;
+}
+
+interface QuotaSnapshot {
+  day: number;
+  users: [string, QuotaCounter][];
+  workspaces: [string, QuotaCounter][];
+  legacy?: QuotaSnapshot;
 }
 
 class SearchRateLimitError extends Error {
@@ -135,30 +143,38 @@ export class XSearchService implements NeoSearchService {
     private readonly settingsFor?: (workspaceId: string) => Promise<SearchSettings>,
   ) {}
 
-  private loadQuotaState(serialized?: string): void {
-    this.counterDay = -1;
-    this.userCounters.clear();
-    this.workspaceCounters.clear();
-    if (!serialized) return;
+  private legacyObserved?: QuotaSnapshot;
+
+  private parseQuotaState(serialized: string): QuotaSnapshot {
     try {
-      const state = JSON.parse(serialized) as {
-          day: number;
-          users: [string, QuotaCounter][];
-          workspaces: [string, QuotaCounter][];
-      };
-      if (!Number.isSafeInteger(state.day) || !Array.isArray(state.users) || !Array.isArray(state.workspaces)
-        || ![...state.users, ...state.workspaces].every(([id, counter]) =>
+      const state = JSON.parse(serialized) as QuotaSnapshot;
+      const valid = (snapshot: QuotaSnapshot): boolean =>
+        Number.isSafeInteger(snapshot?.day)
+        && Array.isArray(snapshot.users) && Array.isArray(snapshot.workspaces)
+        && [...snapshot.users, ...snapshot.workspaces].every(([id, counter]) =>
           typeof id === 'string' && counter && Number.isSafeInteger(counter.minute)
           && Number.isSafeInteger(counter.minuteCount) && counter.minuteCount >= 0
-          && Number.isSafeInteger(counter.dayCount) && counter.dayCount >= 0)) {
+          && Number.isSafeInteger(counter.dayCount) && counter.dayCount >= 0);
+      if (!valid(state) || (state.legacy && !valid(state.legacy))) {
         throw new Error('Invalid X Search quota state');
       }
-      this.counterDay = state.day;
-      for (const [id, counter] of state.users) this.userCounters.set(id, counter);
-      for (const [id, counter] of state.workspaces) this.workspaceCounters.set(id, counter);
+      return state;
     } catch (error) {
       throw new Error('X Search quota state is unreadable', { cause: error });
     }
+  }
+
+  private loadQuotaState(serialized?: string): void {
+    this.counterDay = -1;
+    this.legacyObserved = undefined;
+    this.userCounters.clear();
+    this.workspaceCounters.clear();
+    if (!serialized) return;
+    const state = this.parseQuotaState(serialized);
+    this.counterDay = state.day;
+    this.legacyObserved = state.legacy;
+    for (const [id, counter] of state.users) this.userCounters.set(id, counter);
+    for (const [id, counter] of state.workspaces) this.workspaceCounters.set(id, counter);
   }
 
   dispose(): void { void this.httpClient?.close?.().catch(() => undefined); }
@@ -180,30 +196,104 @@ export class XSearchService implements NeoSearchService {
     return counter;
   }
 
+  private reconcileLegacy(snapshot: QuotaSnapshot): void {
+    const day = Math.floor(this.now() / 86_400_000);
+    const minute = Math.floor(this.now() / 60_000);
+    if (this.counterDay !== day) {
+      this.userCounters.clear();
+      this.workspaceCounters.clear();
+      this.counterDay = day;
+    }
+    if (snapshot.day === day && !this.legacyObserved) {
+      // Older SQLite rows lacked an import watermark. Adopt the JSON snapshot
+      // conservatively as a baseline instead of counting it twice.
+      const seed = (current: Map<string, QuotaCounter>, entries: [string, QuotaCounter][]) => {
+        for (const [id, old] of entries) {
+          const count = this.counterFor(current, id, minute);
+          count.dayCount = Math.max(count.dayCount, old.dayCount);
+          if (old.minute === minute) count.minuteCount = Math.max(count.minuteCount, old.minuteCount);
+        }
+      };
+      seed(this.userCounters, snapshot.users);
+      seed(this.workspaceCounters, snapshot.workspaces);
+    } else if (snapshot.day === day) {
+      const reconcile = (current: Map<string, QuotaCounter>, entries: [string, QuotaCounter][],
+        seen: [string, QuotaCounter][]) => {
+        const previous = new Map(seen);
+        for (const [id, old] of entries) {
+          const last = previous.get(id);
+          const count = this.counterFor(current, id, minute);
+          count.dayCount += Math.max(0, old.dayCount - (last?.dayCount ?? 0));
+          if (old.minute === minute) {
+            count.minuteCount += Math.max(0, old.minuteCount - (last?.minute === minute ? last.minuteCount : 0));
+          }
+        }
+      };
+      const observed = this.legacyObserved?.day === day ? this.legacyObserved : undefined;
+      reconcile(this.userCounters, snapshot.users, observed?.users ?? []);
+      reconcile(this.workspaceCounters, snapshot.workspaces, observed?.workspaces ?? []);
+    }
+    // Retain the last imported legacy counters so a late write from the older
+    // JSON generation contributes only its new charges, once, on the next call.
+    this.legacyObserved = snapshot;
+  }
+
   private async charge(requester: SearchRequester, settings: SearchSettings): Promise<void> {
     if (!this.quotaFile) {
       this.chargeCurrent(requester, settings);
       return;
     }
-    // SQLite's BEGIN IMMEDIATE serializes charges across processes and staged
-    // generations. OS-owned locks are released when a process exits.
-    const database = new DatabaseSync(this.quotaFile);
+    const deadline = Date.now() + 5_000;
+    while (true) {
+      try {
+        this.chargeStored(requester, settings);
+        return;
+      } catch (error) {
+        if (!this.isSqliteBusy(error)) throw error;
+        if (Date.now() >= deadline) throw new Error('X Search quota store is busy', { cause: error });
+        // node:sqlite is synchronous. Never wait on SQLite's busy_timeout in
+        // the gateway event loop: give competing transactions time to finish.
+        await delay(20);
+      }
+    }
+  }
+
+  private isSqliteBusy(error: unknown): boolean {
+    const sqliteError = error as { errcode?: number; code?: string; message?: string };
+    return sqliteError?.errcode === 5 || sqliteError?.code === 'SQLITE_BUSY'
+      || /database is (locked|busy)/i.test(sqliteError?.message ?? '');
+  }
+
+  private chargeStored(requester: SearchRequester, settings: SearchSettings): void {
+    const database = new DatabaseSync(this.quotaFile!);
     try {
-      database.exec('PRAGMA busy_timeout = 5000');
+      database.exec('PRAGMA busy_timeout = 0');
       database.exec('CREATE TABLE IF NOT EXISTS quota_state (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL)');
       database.exec('BEGIN IMMEDIATE');
+      let denied: SearchRateLimitError | undefined;
       try {
         const row = database.prepare('SELECT value FROM quota_state WHERE id = 1').get() as { value: string } | undefined;
-        // Preserve counters written by older versions before the SQLite store existed.
-        const legacyFile = this.quotaFile.replace(/\.sqlite$/, '.json');
-        const initial = row?.value ?? (legacyFile !== this.quotaFile && existsSync(legacyFile)
-          ? readFileSync(legacyFile, 'utf8') : undefined);
-        this.loadQuotaState(initial);
-        this.chargeCurrent(requester, settings);
+        const legacyFile = this.quotaFile!.replace(/\.sqlite$/, '.json');
+        const legacy = legacyFile !== this.quotaFile && existsSync(legacyFile)
+          ? readFileSync(legacyFile, 'utf8') : undefined;
+        this.loadQuotaState(row?.value ?? legacy);
+        if (legacy) {
+          const snapshot = this.parseQuotaState(legacy);
+          if (!row) this.legacyObserved = snapshot;
+          else this.reconcileLegacy(snapshot);
+        }
+        try {
+          this.chargeCurrent(requester, settings);
+        } catch (error) {
+          if (!(error instanceof SearchRateLimitError)) throw error;
+          // Store any late legacy charges even when the next request hits its cap.
+          denied = error;
+        }
         const state = JSON.stringify({
           day: this.counterDay,
           users: [...this.userCounters],
           workspaces: [...this.workspaceCounters],
+          legacy: this.legacyObserved,
         });
         database.prepare('INSERT INTO quota_state (id, value) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value').run(state);
         database.exec('COMMIT');
@@ -211,6 +301,7 @@ export class XSearchService implements NeoSearchService {
         database.exec('ROLLBACK');
         throw error;
       }
+      if (denied) throw denied;
     } finally {
       database.close();
     }
