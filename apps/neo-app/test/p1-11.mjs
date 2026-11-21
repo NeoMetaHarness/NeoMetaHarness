@@ -94,7 +94,7 @@ const baseTauriConf = JSON.parse(await readFile(join(appDir, 'src-tauri/tauri.co
 
 // Verify that default config with placeholder key strictly fails installer-check (no bypass)
 assert.throws(
-  () => runInstallerCheck(),
+  () => runInstallerCheck({ ignoreEnv: true }),
   /release installer packaging requires a valid owner minisign public key, not a placeholder or empty string/,
   'installer-check must reject the placeholder public key with no bypass'
 );
@@ -102,12 +102,10 @@ assert.throws(
 // Verify that an empty pubkey fails installer-check
 assert.throws(
   () => runInstallerCheck({
+    ignoreEnv: true,
     configOverride: {
-      ...baseTauriConf,
       plugins: {
-        ...baseTauriConf.plugins,
         updater: {
-          ...baseTauriConf.plugins?.updater,
           pubkey: '',
         },
       },
@@ -120,17 +118,46 @@ assert.throws(
 // Verify well-formed dummy test key fixture is accepted
 const dummyTestKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldUTVBERFVMWVNZTkRFUkZBS0VLRVkxMjM0NTY3ODkwMTI=';
 const dummyConfig = {
-  ...baseTauriConf,
   plugins: {
-    ...baseTauriConf.plugins,
     updater: {
-      ...baseTauriConf.plugins?.updater,
       pubkey: dummyTestKey,
     },
   },
 };
-runInstallerCheck({ configOverride: dummyConfig });
-console.log('Installer check verification passed (placeholder rejected, test key accepted).');
+runInstallerCheck({ configOverride: dummyConfig, ignoreEnv: true });
+
+// Verify that TAURI_CONFIG in environment is merged and validated
+process.env.TAURI_CONFIG = JSON.stringify({
+  plugins: {
+    updater: {
+      pubkey: dummyTestKey,
+    },
+  },
+});
+runInstallerCheck();
+delete process.env.TAURI_CONFIG;
+
+// Verify that TAURI_CONFIG with placeholder key fails
+process.env.TAURI_CONFIG = JSON.stringify({
+  plugins: {
+    updater: {
+      pubkey: 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY',
+    },
+  },
+});
+assert.throws(
+  () => runInstallerCheck(),
+  /release installer packaging requires a valid owner minisign public key/,
+  'installer-check must reject placeholder passed via TAURI_CONFIG'
+);
+delete process.env.TAURI_CONFIG;
+
+// Verify that CLI --config argument override is merged and validated
+runInstallerCheck({
+  ignoreEnv: true,
+  cliArgs: ['--config', JSON.stringify({ plugins: { updater: { pubkey: dummyTestKey } } })],
+});
+console.log('Installer check verification passed (effective config merging, placeholder rejected, test key accepted).');
 
 console.log('Running cargo unit tests (verifying updater overrides and endpoint HTTPS enforcement)...');
 execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['test'], {
@@ -142,10 +169,17 @@ execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['build'], {
   cwd: join(appDir, 'src-tauri'), stdio: 'pipe',
 });
 
-// 2. Setup mock updater server serving latest.json
+// 2. Setup mock updater server serving latest.json and redirects
 let updateRequestCount = 0;
+let redirectFollowedCount = 0;
 const updateServer = createServer((request, response) => {
   console.log(`Fake update server received request: ${request.method} ${request.url}`);
+  if (request.url === '/latest-redirect') {
+    redirectFollowedCount++;
+    response.writeHead(302, { Location: `http://127.0.0.1:${updateServer.address().port}/latest.json` });
+    response.end();
+    return;
+  }
   if (request.url === '/latest.json') {
     updateRequestCount++;
     response.writeHead(200, { 'content-type': 'application/json' });
@@ -156,10 +190,16 @@ const updateServer = createServer((request, response) => {
       platforms: {
         'windows-x86_64': {
           signature: 'dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZQpmYWtlLXNpZ25hdHVyZQo=',
-          url: `http://127.0.0.1:${updateServer.address().port}/download/neo-app-0.2.0.msi.zip`
+          url: `http://127.0.0.1:${updateServer.address().port}/download/redirect`
         }
       }
     }));
+    return;
+  }
+  if (request.url === '/download/redirect') {
+    redirectFollowedCount++;
+    response.writeHead(302, { Location: `http://127.0.0.1:${updateServer.address().port}/download/neo-app-0.2.0.msi.zip` });
+    response.end();
     return;
   }
   response.writeHead(404).end();
@@ -183,7 +223,7 @@ const desktop = spawn(exe, [], {
     NMH_DESKTOP_DATA_DIR: join(home, 'state'),
     NMH_HERMES_HOME: join(home, 'hermes'),
     NMH_DESKTOP_STATUS_FILE: statusFile,
-    NMH_UPDATER_ENDPOINT: `http://127.0.0.1:${updaterPort}/latest.json`,
+    NMH_UPDATER_ENDPOINT: `http://127.0.0.1:${updaterPort}/latest-redirect`,
     WEBVIEW2_USER_DATA_FOLDER: join(home, 'webview'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
   },
@@ -229,6 +269,7 @@ try {
   const installButton = await view.evaluate('document.querySelector("[data-testid=settings-update-install]")?.textContent');
   assert.equal(installButton?.trim(), 'Install and restart');
 
+  assert.ok(redirectFollowedCount >= 1, 'Fake update server redirect chain followed');
   assert.ok(updateRequestCount >= 1, 'Fake update server received at least one request');
 
   // Clean exit without executing install

@@ -48,9 +48,54 @@ fn validate_updater_endpoint(endpoint: &str, is_debug: bool) -> Result<(), Strin
     Ok(())
 }
 
+fn resolve_allowed_hosts(
+    endpoint_urls: &[url::Url],
+    configured_hosts: &[String],
+) -> Vec<String> {
+    let mut hosts = Vec::new();
+
+    for ep in endpoint_urls {
+        if let Some(host) = ep.host_str() {
+            let host_lower = host.to_lowercase();
+            if !hosts.contains(&host_lower) {
+                hosts.push(host_lower.clone());
+            }
+            if host_lower == "github.com" || host_lower == "api.github.com" {
+                for gh_host in ["objects.githubusercontent.com", "release-assets.githubusercontent.com"] {
+                    let s = gh_host.to_string();
+                    if !hosts.contains(&s) {
+                        hosts.push(s);
+                    }
+                }
+            }
+        }
+    }
+
+    for h in configured_hosts {
+        let h_lower = h.trim().to_lowercase();
+        if !h_lower.is_empty() && !hosts.contains(&h_lower) {
+            hosts.push(h_lower);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(env_hosts) = std::env::var("NMH_UPDATER_ALLOWED_HOSTS") {
+            for h in env_hosts.split(',') {
+                let h_lower = h.trim().to_lowercase();
+                if !h_lower.is_empty() && !hosts.contains(&h_lower) {
+                    hosts.push(h_lower);
+                }
+            }
+        }
+    }
+
+    hosts
+}
+
 fn validate_update_download_url(
     download_url: &url::Url,
-    allowed_endpoint_urls: &[url::Url],
+    allowed_hosts: &[String],
     is_debug: bool,
 ) -> Result<(), String> {
     if !is_debug && download_url.scheme() != "https" {
@@ -58,15 +103,14 @@ fn validate_update_download_url(
     }
     let download_host = download_url
         .host_str()
-        .ok_or_else(|| format!("Update download URL has no valid host: {download_url}"))?;
+        .ok_or_else(|| format!("Update download URL has no valid host: {download_url}"))?
+        .to_lowercase();
 
-    let matches_endpoint_host = allowed_endpoint_urls.iter().any(|ep| {
-        ep.host_str() == Some(download_host)
-    });
+    let is_allowed = allowed_hosts.iter().any(|h| h.eq_ignore_ascii_case(&download_host));
 
-    if !matches_endpoint_host {
+    if !is_allowed {
         return Err(format!(
-            "Update download URL host '{download_host}' does not match any configured updater endpoint host"
+            "Update download URL host '{download_host}' is not in the allowed hosts list: {allowed_hosts:?}"
         ));
     }
     Ok(())
@@ -87,7 +131,7 @@ fn get_updater_overrides() -> (Option<String>, Option<String>) {
 
 fn configure_updater_builder(
     app: &tauri::AppHandle,
-) -> Result<(tauri_plugin_updater::UpdaterBuilder, Vec<url::Url>), String> {
+) -> Result<(tauri_plugin_updater::UpdaterBuilder, Vec<String>), String> {
     #[allow(unused_mut)]
     let mut builder = app.updater_builder();
     let (override_endpoint, override_pubkey) = get_updater_overrides();
@@ -115,17 +159,36 @@ fn configure_updater_builder(
         builder = builder.pubkey(public_key.trim());
     }
 
-    // Set Reqwest redirect policy: only HTTPS and same host
-    builder = builder.configure_client(|client_builder| {
-        client_builder.redirect(reqwest::redirect::Policy::custom(|attempt| {
+    let mut configured_allowed_hosts = Vec::new();
+    if let Some(hosts) = app.config().plugins.0.get("updater")
+        .and_then(|val| val.get("allowedHosts"))
+        .and_then(|val| val.as_array())
+    {
+        for h in hosts {
+            if let Some(s) = h.as_str() {
+                configured_allowed_hosts.push(s.to_string());
+            }
+        }
+    }
+
+    let allowed_hosts = resolve_allowed_hosts(&effective_endpoints, &configured_allowed_hosts);
+
+    // Set Reqwest redirect policy: only HTTPS (in release) and target host in allowed_hosts
+    let redirect_hosts = allowed_hosts.clone();
+    builder = builder.configure_client(move |client_builder| {
+        let hosts = redirect_hosts.clone();
+        client_builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
             let next = attempt.url();
             if !cfg!(debug_assertions) && next.scheme() != "https" {
                 return attempt.error("Updater redirects must use HTTPS in release builds");
             }
-            if let Some(initial) = attempt.previous().first() {
-                if next.host_str() != initial.host_str() {
-                    return attempt.error("Updater redirect to a different host is forbidden");
+            if let Some(next_host) = next.host_str() {
+                let is_allowed = hosts.iter().any(|h| h.eq_ignore_ascii_case(next_host));
+                if !is_allowed {
+                    return attempt.error("Updater redirect to an untrusted host is forbidden");
                 }
+            } else {
+                return attempt.error("Updater redirect target has no host");
             }
             if attempt.previous().len() >= 5 {
                 attempt.error("Too many updater redirects")
@@ -135,15 +198,15 @@ fn configure_updater_builder(
         }))
     });
 
-    Ok((builder, effective_endpoints))
+    Ok((builder, allowed_hosts))
 }
 
 async fn check_for_updates_internal(app: &tauri::AppHandle) -> Result<Option<String>, String> {
-    let (builder, allowed_endpoints) = configure_updater_builder(app)?;
+    let (builder, allowed_hosts) = configure_updater_builder(app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
     let update = updater.check().await.map_err(|error| error.to_string())?;
     if let Some(ref update) = update {
-        validate_update_download_url(&update.download_url, &allowed_endpoints, cfg!(debug_assertions))?;
+        validate_update_download_url(&update.download_url, &allowed_hosts, cfg!(debug_assertions))?;
     }
     let version = update.map(|candidate| candidate.version);
     if let Some(state) = app.try_state::<UpdateCandidate>() {
@@ -169,13 +232,13 @@ async fn install_update(app: tauri::AppHandle, window: tauri::Window) -> Result<
         .and_then(|state| state.0.lock().unwrap().clone())
         .ok_or_else(|| "No update candidate available. Check for updates first.".to_string())?;
 
-    let (builder, allowed_endpoints) = configure_updater_builder(&app)?;
+    let (builder, allowed_hosts) = configure_updater_builder(&app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
     if let Some(update) = updater.check().await.map_err(|error| error.to_string())? {
         if update.version != candidate {
             return Err(format!("Available update version ({}) does not match expected candidate ({candidate})", update.version));
         }
-        validate_update_download_url(&update.download_url, &allowed_endpoints, cfg!(debug_assertions))?;
+        validate_update_download_url(&update.download_url, &allowed_hosts, cfg!(debug_assertions))?;
         update.download_and_install(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
         app.restart();
     }
@@ -398,26 +461,40 @@ mod tests {
     }
 
     #[test]
-    fn test_download_url_validation() {
-        let endpoints = vec![url::Url::parse("https://updates.neometaharness.com/desktop/latest.json").unwrap()];
+    fn test_resolve_allowed_hosts_github_defaults() {
+        let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
+        let hosts = resolve_allowed_hosts(&ep, &[]);
+        assert!(hosts.contains(&"github.com".to_string()));
+        assert!(hosts.contains(&"objects.githubusercontent.com".to_string()));
+        assert!(hosts.contains(&"release-assets.githubusercontent.com".to_string()));
+        assert!(!hosts.contains(&"attacker.com".to_string()));
+    }
+
+    #[test]
+    fn test_download_url_validation_with_allowed_hosts() {
+        let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
+        let allowed_hosts = resolve_allowed_hosts(&ep, &["updates.custom.com".to_string()]);
 
         // Disallowed scheme in release
-        let http_url = url::Url::parse("http://updates.neometaharness.com/desktop/neo-0.2.0.msi").unwrap();
-        assert!(validate_update_download_url(&http_url, &endpoints, false).is_err());
-        assert!(validate_update_download_url(&http_url, &endpoints, true).is_ok());
+        let http_url = url::Url::parse("http://objects.githubusercontent.com/asset.msi.zip").unwrap();
+        assert!(validate_update_download_url(&http_url, &allowed_hosts, false).is_err());
+        assert!(validate_update_download_url(&http_url, &allowed_hosts, true).is_ok());
 
-        // Mismatched host (compromised manifest pointing to attacker server)
-        let attacker_url = url::Url::parse("https://attacker.com/desktop/neo-0.2.0.msi").unwrap();
-        assert!(validate_update_download_url(&attacker_url, &endpoints, false).is_err());
-        assert!(validate_update_download_url(&attacker_url, &endpoints, true).is_err());
+        // Redirect to GitHub asset host (valid)
+        let github_asset_url = url::Url::parse("https://objects.githubusercontent.com/asset.msi.zip").unwrap();
+        assert!(validate_update_download_url(&github_asset_url, &allowed_hosts, false).is_ok());
 
-        // Private address pointing to SSRF/internal network
-        let internal_url = url::Url::parse("https://192.168.1.1/desktop/neo-0.2.0.msi").unwrap();
-        assert!(validate_update_download_url(&internal_url, &endpoints, false).is_err());
+        let release_asset_url = url::Url::parse("https://release-assets.githubusercontent.com/asset.msi.zip").unwrap();
+        assert!(validate_update_download_url(&release_asset_url, &allowed_hosts, false).is_ok());
 
-        // Valid matching HTTPS URL
-        let valid_url = url::Url::parse("https://updates.neometaharness.com/desktop/neo-0.2.0.msi").unwrap();
-        assert!(validate_update_download_url(&valid_url, &endpoints, false).is_ok());
+        // Configured custom host (valid)
+        let custom_url = url::Url::parse("https://updates.custom.com/asset.msi.zip").unwrap();
+        assert!(validate_update_download_url(&custom_url, &allowed_hosts, false).is_ok());
+
+        // Untrusted third-party host (rejected)
+        let attacker_url = url::Url::parse("https://attacker.com/asset.msi.zip").unwrap();
+        assert!(validate_update_download_url(&attacker_url, &allowed_hosts, false).is_err());
+        assert!(validate_update_download_url(&attacker_url, &allowed_hosts, true).is_err());
     }
 
     #[test]
