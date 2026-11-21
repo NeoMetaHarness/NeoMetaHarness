@@ -31,6 +31,19 @@ export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: Neo
     }
     return service;
   };
+  const ownBot = async (botId: string, context: GatewayAuthContext): Promise<void> => {
+    if (mode !== 'server') return;
+    const bot = await db.agents.getBot(botId);
+    if (!bot || !context.workspaceId || bot.workspace_id !== context.workspaceId) {
+      throw new ORPCError('NOT_FOUND', { message: 'Bot not found' });
+    }
+  };
+  const ownTurn = async (turnId: string, context: GatewayAuthContext): Promise<void> => {
+    if (mode !== 'server') return;
+    const turn = await db.agents.getTurn(turnId);
+    if (!turn) throw new ORPCError('NOT_FOUND', { message: 'Turn not found' });
+    await ownBot(turn.bot_id, context);
+  };
   await sync();
   const os = implement(neoContract).$context<GatewayAuthContext>().use(policyMiddleware as any);
   const router = {
@@ -46,32 +59,38 @@ export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: Neo
       }),
       update: os.agents.bots.update.handler(async ({ input, context }) => {
         authorize('agents.bots.update', context as GatewayAuthContext);
+        await ownBot(input.id, context);
         return (await requireService().updateBot(input.id, input.name)) ?? null;
       }),
       delete: os.agents.bots.delete.handler(async ({ input, context }) => {
         authorize('agents.bots.delete', context as GatewayAuthContext);
+        await ownBot(input.id, context);
         return { deleted: await requireService().deleteBot(input.id) };
       }),
     },
     turns: {
       send: os.agents.turns.send.handler(async ({ input, context }) => {
         authorize('agents.turns.send', context as GatewayAuthContext);
+        await ownBot(input.botId, context);
         const handle = await requireService().send(input.botId, input.text);
         void handle.done.catch(() => {});
         return { turnId: handle.turnId };
       }),
-      list: os.agents.turns.list.handler(({ input, context }) => {
+      list: os.agents.turns.list.handler(async ({ input, context }) => {
         authorize('agents.turns.list', context as GatewayAuthContext);
+        await ownBot(input.botId, context);
         return requireService().records.listTurns(input.botId);
       }),
       stop: os.agents.turns.stop.handler(async ({ input, context }) => {
         authorize('agents.turns.stop', context as GatewayAuthContext);
+        await ownTurn(input.turnId, context);
         const agents = requireService();
         await agents.stopTurn(input.turnId);
         return { stopped: (await agents.records.getTurn(input.turnId))?.status === 'stopped' };
       }),
       events: os.agents.turns.events.handler(async function* ({ input, context, signal }) {
         authorize('agents.turns.events', context as GatewayAuthContext);
+        await ownTurn(input.turnId, context);
         const agents = requireService();
         async function* raw(): AsyncGenerator<T3Event> {
           for await (const event of agents.events(input.turnId, input.since, signal)) {
@@ -88,12 +107,18 @@ export async function createAgentGateway(db: SqliteDatabaseProvider, kernel: Neo
       }),
     },
     approvals: {
-      list: os.agents.approvals.list.handler(({ input, context }) => {
+      list: os.agents.approvals.list.handler(async ({ input, context }) => {
         authorize('agents.approvals.list', context as GatewayAuthContext);
+        await ownTurn(input.turnId, context);
         return requireService().records.approvalsForTurn(input.turnId);
       }),
       resolve: os.agents.approvals.resolve.handler(async ({ input, context }) => {
         authorize('agents.approvals.resolve', context as GatewayAuthContext);
+        if (mode === 'server') {
+          const approval = await db.agents.getApproval(input.id);
+          if (!approval) throw new ORPCError('NOT_FOUND', { message: 'Approval not found' });
+          await ownTurn(approval.turn_id, context);
+        }
         if (input.decision === 'allow') {
           const approval = await requireService().records.getApproval(input.id);
           if (approval && destructiveToolApproval(approval.tool, approval.detail)) {

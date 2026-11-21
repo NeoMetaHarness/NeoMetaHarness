@@ -22,6 +22,7 @@ export default defineExtension({
     ctx.effect(() => () => runtime.stop());
     ctx.health(() => ({ ok: true }));
     ctx.route('create', ({ body }) => runtime.create(body as Parameters<typeof runtime.create>[0]));
+    ctx.route('session/workspace', ({ body }) => ({ workspaceId: runtime.workspaceOf((body as { sessionId: string }).sessionId) }));
     ctx.route('prompt', ({ body }) => runtime.prompt(body as Parameters<typeof runtime.prompt>[0]));
     ctx.route('events', ({ body }) => runtime.events(body as Parameters<typeof runtime.events>[0]));
     ctx.route('wait', ({ body }) => runtime.wait(body as Parameters<typeof runtime.wait>[0]));

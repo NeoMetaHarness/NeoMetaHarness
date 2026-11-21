@@ -352,6 +352,10 @@ export class DshAgentRuntime {
     return session;
   }
 
+  workspaceOf(sessionId: string): string | undefined {
+    return this.sessions.has(sessionId) ? this.owners.get(sessionId) : undefined;
+  }
+
   prompt(input: { sessionId: string; text: string; workspaceId?: string }) {
     return this.session(input.sessionId, input.workspaceId).prompt(input.text);
   }
@@ -421,5 +425,6 @@ export class DshAgentRuntime {
     }
     this.sessions.clear();
     this.reportSettings.clear();
+    this.owners.clear();
   }
 }

@@ -281,3 +281,5 @@ try {
 }
 
 await import('./p3-10-scope.js');
+
+await import('./p3-10-resources.js');

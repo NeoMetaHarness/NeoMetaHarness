@@ -1477,13 +1477,21 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         const workspace = computerWorkspace(context.workspaceId);
         if (workspace) {
           computers.assertWorkspace(input.computerId, workspace);
-          const normalized = input.engine === 'hermes' && /^neo_[a-f0-9]{32}$/i.test(input.targetId)
-            ? input.targetId.slice(4).replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5')
-            : input.targetId;
-          const bot = await db.agents.getBot(normalized);
-          if (!bot || bot.workspace_id !== workspace) {
-            throw new ORPCError('NOT_FOUND', { message: 'Bot unavailable in this workspace' });
+          let owned = false;
+          if (input.engine === 'hermes') {
+            const normalized = /^neo_[a-f0-9]{32}$/i.test(input.targetId)
+              ? input.targetId.slice(4).replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5')
+              : input.targetId;
+            const bot = await db.agents.getBot(normalized);
+            owned = bot?.workspace_id === workspace;
+          } else if (input.engine === 'dsh') {
+            const session = await invokeDsh('session/workspace', { sessionId: input.targetId }) as { workspaceId?: string };
+            owned = session.workspaceId === workspace;
+          } else if (input.engine === 'superagent') {
+            const items = await invokeInbox('list', {}) as InboxItem[];
+            owned = items.some((item) => item.botId === input.targetId && item.workspace === workspace);
           }
+          if (!owned) throw new ORPCError('NOT_FOUND', { message: 'Target unavailable in this workspace' });
         }
         computers.assign(input.engine, input.targetId, input.computerId, workspace);
         return input;
