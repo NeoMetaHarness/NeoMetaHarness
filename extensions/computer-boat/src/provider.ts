@@ -10,6 +10,7 @@ type Instance = {
   workspaceId: string;
   url: string;
   key: string;
+  http: BoatHttp;
   blocked: boolean;
   stopping?: boolean;
   killRequested?: boolean;
@@ -54,14 +55,10 @@ export class BoatComputerProvider implements ComputerProvider {
   readonly capabilities = { screen: true, input: true, browserCdp: false, shell: false, files: false, snapshot: true };
   private readonly instances = new Map<string, Instance>();
   private disposed = false;
-  private readonly http: BoatHttp;
-
   constructor(
-    private readonly settings: () => BoatSettings,
-    injectedHttp?: BoatHttp,
-  ) {
-    this.http = createEgressFetch(() => this.settings().allowPrivateNetwork === true, injectedHttp);
-  }
+    private readonly settingsFor: (workspaceId: string) => Promise<BoatSettings> | BoatSettings,
+    private readonly injectedHttp?: BoatHttp,
+  ) {}
 
   attach(): never { throw new Error('Boat computers must be created through computers.provision'); }
 
@@ -72,7 +69,7 @@ export class BoatComputerProvider implements ComputerProvider {
       ...(body ? { body: JSON.stringify(body) } : {}),
       ...(signal ? { signal } : {}),
     };
-    const response = await this.http(instance.url + path, request);
+    const response = await instance.http(instance.url + path, request);
     if (!response.ok) throw new Error(`Boat API ${method} ${path.split('?')[0]} returned HTTP ${response.status}`);
     return await response.json() as T;
   }
@@ -80,11 +77,13 @@ export class BoatComputerProvider implements ComputerProvider {
   async provision(spec: Record<string, unknown>, context?: ComputerAttachContext): Promise<Computer> {
     if (this.disposed) throw new Error('Boat provider disabled');
     if (!context?.workspaceId || typeof spec.id !== 'string' || !managedId.test(spec.id)) throw new Error('Authenticated managed computer required');
-    const config = this.settings();
+    const config = await this.settingsFor(context.workspaceId);
     if (!config.apiKey || typeof config.apiKey !== 'string') throw new Error('Boat API key must be configured in extension settings');
     const endpoint = validateEgressUrl(config.baseUrl ?? 'https://boat.dev/api/v1', config.allowPrivateNetwork === true);
+    const allowPrivateNetwork = config.allowPrivateNetwork === true;
     const instance: Instance = { sandboxId: '', workspaceId: context.workspaceId, url: endpoint.href.replace(/\/$/, ''),
-      key: config.apiKey, blocked: false, holder: 'agent', leaseVersion: 0 };
+      key: config.apiKey, http: createEgressFetch(() => allowPrivateNetwork, this.injectedHttp),
+      blocked: false, holder: 'agent', leaseVersion: 0 };
     const options: Record<string, unknown> = { labels: { 'neo-computer': spec.id, 'neo-workspace': context.workspaceId } };
     if (spec.type !== undefined) {
       if (typeof spec.type !== 'string' || !sizes.has(spec.type)) throw new Error('Invalid Boat sandbox size');

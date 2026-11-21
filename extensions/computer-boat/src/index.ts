@@ -5,9 +5,9 @@ import { BoatComputerProvider, type BoatSettings, type BoatHttp } from './provid
 export default defineExtension({
   activate(ctx) {
     const computers = ctx.inject<ComputerRegistry>('computers');
-    const settings = ctx.inject<BoatSettings>('settings');
-    if (!computers || !settings) throw new Error('Boat requires computer registry and settings');
-    const provider = new BoatComputerProvider(() => settings, ctx.inject<BoatHttp>('computerBoatHttp'));
+    const settingsFor = ctx.inject<(workspaceId: string) => Promise<BoatSettings>>('settingsFor');
+    if (!computers || !settingsFor) throw new Error('Boat requires computer registry and workspace settings');
+    const provider = new BoatComputerProvider(settingsFor, ctx.inject<BoatHttp>('computerBoatHttp'));
     ctx.effect(() => {
       const unregister = computers.registerProvider('computer-boat', provider);
       return async () => { await unregister(); await provider.close(); };

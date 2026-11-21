@@ -190,9 +190,22 @@ try {
 
 // Authorization precedes extension availability. A viewer sees 403 in both states.
 const authRoot = await mkdtemp(join(tmpdir(), 'neo-p311-auth-'));
+const workspaceRequests: { workspaceId?: string; url: string; authorization: string | null }[] = [];
+let workspaceSandboxNumber = 0;
+const workspaceBoatHttp: typeof fetch = async (url, init) => {
+  const path = new URL(String(url)).pathname;
+  const body = init?.body ? JSON.parse(String(init.body)) as { labels?: Record<string, string> } : {};
+  workspaceRequests.push({ workspaceId: body.labels?.['neo-workspace'], url: String(url),
+    authorization: new Headers(init?.headers).get('authorization') });
+  const response = path.endsWith('/sandboxes') && init?.method === 'POST'
+    ? { sandbox: { id: ['bx_23456789', 'bx_2345678a'][workspaceSandboxNumber++] } }
+    : { success: true };
+  return new Response(JSON.stringify(response), { headers: { 'content-type': 'application/json' } });
+};
 const authGateway = await startGateway({
   databaseFile: join(authRoot, 'neo.sqlite'), dataDir: authRoot,
   extensionsDir: resolve('..', '..', 'extensions'), mode: 'server', signup: 'open',
+  computerBoatHttp: workspaceBoatHttp,
 });
 try {
   const authBase = `http://127.0.0.1:${authGateway.port}`;
@@ -239,7 +252,37 @@ try {
   await ownerRpc.extensions.enable({ id: 'computer-boat' });
   assert.equal((await snapshot()).status, 403, 'viewer receives 403 with Boat enabled');
   assert.equal((await adminSnapshot()).status, 400, 'admin is authorized, then unknown snapshot fails validation');
+
+  // Real gateway settingsFor reads separate vault scopes while the provider runs in the background.
+  const secondUser = await signup('boat-second@neo.local');
+  const secondToken = await login('boat-second@neo.local');
+  const secondCreated = await fetch(`${authBase}/auth/organization/create`, { method: 'POST',
+    headers: { authorization: `Bearer ${ownerToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Second Boat Workspace', slug: 'second-boat-workspace', keepCurrentActiveOrganization: true }) });
+  assert.equal(secondCreated.status, 200);
+  const secondWorkspace = await secondCreated.json() as { id: string };
+  await authGateway.auth.api.addMember({ body: {
+    organizationId: secondWorkspace.id, userId: secondUser.user.id, role: 'admin',
+  }, headers: new Headers({ authorization: `Bearer ${ownerToken}` }) });
+  const secondRpc = createORPCClient<Client>(new RPCLink({ url: authBase, headers: { authorization: `Bearer ${secondToken}` } }));
+  await ownerRpc.settings.set({ extension: 'computer-boat', values: {
+    apiKey: 'vaulted-workspace-A', baseUrl: 'https://boat.example/api/v1',
+  } });
+  await secondRpc.settings.set({ extension: 'computer-boat', values: {
+    apiKey: 'vaulted-workspace-B', baseUrl: 'https://10.20.0.5/api/v1', allowPrivateNetwork: true,
+  } });
+  const firstComputer = await ownerRpc.computers.provision({ providerId: 'computer-boat', spec: {} });
+  const secondComputer = await secondRpc.computers.provision({ providerId: 'computer-boat', spec: {} });
+  assert.deepEqual(workspaceRequests.slice(0, 2), [
+    { workspaceId: workspace.id, url: 'https://boat.example/api/v1/sandboxes', authorization: 'Bearer vaulted-workspace-A' },
+    { workspaceId: secondWorkspace.id, url: 'https://10.20.0.5/api/v1/sandboxes', authorization: 'Bearer vaulted-workspace-B' },
+  ], 'each workspace provisions with its own vaulted key, endpoint and network policy');
+  await ownerRpc.computers.release({ id: firstComputer.id });
+  await secondRpc.computers.release({ id: secondComputer.id });
+  assert.deepEqual(workspaceRequests.slice(2).map(request => request.authorization),
+    ['Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-B'], 'cleanup uses the originating workspace credentials');
   console.log('P3-11 AUTH PASS viewer=403 enabled+disabled admin=authorized');
+  console.log('P3-11 WORKSPACE CREDENTIALS PASS two vault scopes, separate endpoints, keys and egress policies');
 } finally {
   await authGateway.close();
   await rm(authRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

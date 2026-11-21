@@ -121,3 +121,38 @@ try {
 } finally {
   await provider.close();
 }
+
+// Background provider work must use the initiating workspace's vaulted key and egress policy.
+const scopedCalls: { url: string; authorization: string | null }[] = [];
+const scopedSettings = new Map([
+  ['workspace-A', { apiKey: 'key-for-A', baseUrl: 'https://boat.example/api/v1', allowPrivateNetwork: false }],
+  ['workspace-B', { apiKey: 'key-for-B', baseUrl: 'https://10.0.0.20/api/v1', allowPrivateNetwork: true }],
+  ['workspace-C', { apiKey: 'key-for-C', baseUrl: 'https://10.0.0.30/api/v1', allowPrivateNetwork: false }],
+]);
+const scopedProvider = new BoatComputerProvider(async workspaceId => scopedSettings.get(workspaceId) ?? {},
+  async (url, init) => {
+    scopedCalls.push({ url: String(url), authorization: new Headers(init?.headers).get('authorization') });
+    return new Response(JSON.stringify({ sandbox: { id: 'bx_23456789' }, success: true, exitCode: 0, stdout: '' }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  });
+try {
+  const first = await scopedProvider.provision({ id: 'neo-aaaaaaaaaaaaaaaaaaaaaaaa' }, { workspaceId: 'workspace-A' });
+  const second = await scopedProvider.provision({ id: 'neo-bbbbbbbbbbbbbbbbbbbbbbbb' }, { workspaceId: 'workspace-B' });
+  assert.deepEqual(scopedCalls.slice(0, 2), [
+    { url: 'https://boat.example/api/v1/sandboxes', authorization: 'Bearer key-for-A' },
+    { url: 'https://10.0.0.20/api/v1/sandboxes', authorization: 'Bearer key-for-B' },
+  ], 'provisioning uses separate workspace API keys and permits private networking only where enabled');
+  scopedSettings.set('workspace-B', { apiKey: 'rotated-key-for-B', baseUrl: 'https://boat.example/api/v1', allowPrivateNetwork: false });
+  await first.input({ action: 'key', keys: 'Enter' });
+  await second.input({ action: 'key', keys: 'Enter' });
+  assert.deepEqual(scopedCalls.slice(2).map(call => call.authorization), ['Bearer key-for-A', 'Bearer key-for-B'],
+    'existing instances retain their own credentials regardless of other workspace updates');
+  await assert.rejects(scopedProvider.provision({ id: 'neo-cccccccccccccccccccccccc' }, { workspaceId: 'workspace-C' }),
+    /private|denied|not allowed/i, 'another workspace cannot reuse private network permission');
+  await assert.rejects(scopedProvider.provision({ id: 'neo-dddddddddddddddddddddddd' }, { workspaceId: 'workspace-D' }),
+    /API key must be configured/, 'workspace without a secret cannot provision');
+  console.log('Boat credentials PASS distinct workspace vault keys, endpoints and egress permissions');
+} finally {
+  await scopedProvider.close();
+}
