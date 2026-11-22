@@ -8,7 +8,8 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
 let failure: 'exit' | 'xdotool' | 'abort' | undefined;
 let cleanupFailure: 'stop' | 'delete' | undefined;
 let nextCleanupResponse: { method: 'POST' | 'DELETE'; status: 204 | 404 } | undefined;
-let sandboxLookup: 'absent' | 'present' | 'html' | 'generic' = 'absent';
+let sandboxLookup: 'absent' | 'present' | 'html' | 'generic' | 'wrong-id' = 'absent';
+let sandboxList: 'absent' | 'present' | 'invalid' | 'paged-present' = 'absent';
 let signalCommandStarted: (() => void) | undefined;
 const calls: { path: string; method: string; body: Record<string, unknown> }[] = [];
 
@@ -24,6 +25,21 @@ const fakeHttp: typeof fetch = async (url, init) => {
     nextCleanupResponse = undefined;
     return new Response(null, { status });
   }
+  if (init?.method === 'GET' && path === '/api/v1/sandboxes') {
+    if (sandboxList === 'invalid') return new Response(JSON.stringify({
+      ok: false, type: 'sandbox.error', status: 404, code: 'not_found',
+    }), { status: 404, headers: { 'content-type': 'application/json' } });
+    const followingPage = new URL(String(url)).searchParams.has('cursor');
+    return new Response(JSON.stringify({
+      ok: true, type: 'sandbox.list',
+      sandboxes: sandboxList === 'present' || (sandboxList === 'paged-present' && followingPage)
+        ? [{ id: 'bx_23456789' }] : [],
+      pageInfo: {
+        hasMore: sandboxList === 'paged-present' && !followingPage,
+        nextCursor: sandboxList === 'paged-present' && !followingPage ? 'page-two' : null,
+      },
+    }), { headers: { 'content-type': 'application/json' } });
+  }
   if (init?.method === 'GET' && /^\/api\/v1\/sandboxes\/[^/]+$/.test(path)) {
     if (sandboxLookup === 'html') return new Response('<html>route missing</html>', {
       status: 404, headers: { 'content-type': 'text/html' },
@@ -36,7 +52,9 @@ const fakeHttp: typeof fetch = async (url, init) => {
     }), { headers: { 'content-type': 'application/json' } });
     return new Response(JSON.stringify({
       ok: false, type: 'sandbox.error', status: 404, code: 'not_found',
-      error: { code: 'not_found', status: 404 },
+      error: { code: 'not_found', status: 404, details: {
+        sandboxId: sandboxLookup === 'wrong-id' ? 'bx_87654322' : path.split('/').pop(),
+      } },
     }), { status: 404, headers: { 'content-type': 'application/json' } });
   }
   let response: unknown;
@@ -174,6 +192,27 @@ try {
     nextCleanupResponse = { method: operation === 'release' ? 'POST' : 'DELETE', status: 204 };
     await provider[operation](cleanupId);
     assert.equal(nextCleanupResponse, undefined, 'retry must repeat the remote cleanup');
+  }
+  // A valid-looking per-sandbox 404 is insufficient if the list route is broken,
+  // the sandbox is still listed, or the error identifies a different sandbox.
+  for (const [operation, lookup, listMode, digit] of [
+    ['release', 'absent', 'invalid', 'b'],
+    ['terminate', 'absent', 'present', 'c'],
+    ['release', 'wrong-id', 'absent', 'd'],
+    ['terminate', 'absent', 'paged-present', 'e'],
+  ] as const) {
+    const cleanupId = `neo-${digit.repeat(24)}`;
+    await provider.provision({ id: cleanupId }, { workspaceId: 'workspace-A' });
+    sandboxLookup = lookup;
+    sandboxList = listMode;
+    nextCleanupResponse = { method: operation === 'release' ? 'POST' : 'DELETE', status: 404 };
+    await assert.rejects(provider[operation](cleanupId), /HTTP 404/,
+      `${operation} must stay pending after ${lookup}/${listMode} confirmation`);
+    sandboxLookup = 'absent';
+    sandboxList = 'absent';
+    nextCleanupResponse = { method: operation === 'release' ? 'POST' : 'DELETE', status: 204 };
+    await provider[operation](cleanupId);
+    assert.equal(nextCleanupResponse, undefined, 'retry must still reach Boat after false absence');
   }
   console.log('Boat provider PASS workspace+snapshot=true lease+screen=true cleanup-retry+204+verified404+unconfirmed404=true');
 } finally {

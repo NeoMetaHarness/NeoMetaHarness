@@ -195,6 +195,7 @@ let workspaceSandboxNumber = 0;
 let failNextWorkspaceStop = false;
 let nextWorkspaceCleanup: { method: 'POST' | 'DELETE'; status: 204 | 404 } | undefined;
 let workspaceSandboxLookup: 'absent' | 'html' | 'generic' = 'absent';
+let workspaceSandboxList: 'absent' | 'misrouted' = 'absent';
 const workspaceBoatHttp: typeof fetch = async (url, init) => {
   const path = new URL(String(url)).pathname;
   const body = init?.body ? JSON.parse(String(init.body)) as { labels?: Record<string, string> } : {};
@@ -211,6 +212,14 @@ const workspaceBoatHttp: typeof fetch = async (url, init) => {
     nextWorkspaceCleanup = undefined;
     return new Response(null, { status });
   }
+  if (init?.method === 'GET' && path === '/api/v1/sandboxes') {
+    if (workspaceSandboxList === 'misrouted') return new Response(JSON.stringify({
+      ok: false, type: 'sandbox.error', status: 404, code: 'not_found',
+    }), { status: 404, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({
+      ok: true, type: 'sandbox.list', sandboxes: [], pageInfo: { hasMore: false, nextCursor: null },
+    }), { headers: { 'content-type': 'application/json' } });
+  }
   if (init?.method === 'GET' && /^\/api\/v1\/sandboxes\/[^/]+$/.test(path)) {
     if (workspaceSandboxLookup === 'html') return new Response('<html>unknown endpoint</html>', {
       status: 404, headers: { 'content-type': 'text/html' },
@@ -220,7 +229,7 @@ const workspaceBoatHttp: typeof fetch = async (url, init) => {
     });
     return new Response(JSON.stringify({
       ok: false, type: 'sandbox.error', status: 404, code: 'not_found',
-      error: { code: 'not_found', status: 404 },
+      error: { code: 'not_found', status: 404, details: { sandboxId: path.split('/').pop() } },
     }), { status: 404, headers: { 'content-type': 'application/json' } });
   }
   const response = path.endsWith('/sandboxes') && init?.method === 'POST'
@@ -344,18 +353,27 @@ try {
   })), [{ id: firstComputer.id, cleanupPending: true }],
   'an unconfirmed 404 remains retryable in the owning workspace');
   workspaceSandboxLookup = 'absent';
+  workspaceSandboxList = 'misrouted';
+  nextWorkspaceCleanup = { method: 'POST', status: 404 };
+  await assert.rejects(ownerRpc.computers.release({ id: firstComputer.id }),
+    'a valid Boat not_found with a misrouted sandbox list must leave cleanup pending');
+  assert.deepEqual((await ownerRpc.computers.list()).map(computer => ({
+    id: computer.id, cleanupPending: (computer as { cleanupPending?: boolean }).cleanupPending,
+  })), [{ id: firstComputer.id, cleanupPending: true }],
+  'the workspace retains its computer after the misleading not_found envelope');
+  workspaceSandboxList = 'absent';
   nextWorkspaceCleanup = { method: 'POST', status: 404 };
   await ownerRpc.computers.release({ id: firstComputer.id });
-  assert.equal(workspaceRequests.filter(request => new URL(request.url).pathname === stopPath).length, 3,
-    'the third release retries the Boat stop, and the GET confirms remote absence');
+  assert.equal(workspaceRequests.filter(request => new URL(request.url).pathname === stopPath).length, 4,
+    'the fourth release retries Boat stop and confirms absence via a valid list');
   assert.deepEqual(await ownerRpc.computers.list(), [], 'confirmed 404 clears cleanup-pending entry');
   nextWorkspaceCleanup = { method: 'POST', status: 204 };
   await secondRpc.computers.release({ id: secondComputer.id });
   assert.deepEqual(await secondRpc.computers.list(), [], '204 release clears cleanup-pending entry');
-  assert.deepEqual(workspaceRequests.slice(2).map(request => request.authorization),
-    ['Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-A',
-      'Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-B'],
-    'cleanup retries and their GET confirmations use the originating workspace credentials');
+  assert.ok(workspaceRequests.slice(2).every(request =>
+    request.authorization === (new URL(request.url).hostname === 'boat.example'
+      ? 'Bearer vaulted-workspace-A' : 'Bearer vaulted-workspace-B')),
+  'cleanup and both GET confirmation routes use the originating workspace credentials');
 
   const adminRpc = createORPCClient<Client>(new RPCLink({ url: authBase,
     headers: { authorization: `Bearer ${adminToken}` } }));
@@ -383,7 +401,7 @@ try {
   console.log('P3-11 AUTH PASS viewer=403 enabled+disabled admin=authorized');
   console.log('P3-11 WORKSPACE CREDENTIALS PASS two vault scopes, separate endpoints, keys and egress policies');
   console.log('P3-11 WORKSPACE REGISTRY PASS isolated list, capture, lease, release and assignment bindings');
-  console.log('P3-11 CLEANUP RETRY PASS 503 retry 404=verified generic+html404=pending release 204 terminate 204+404');
+  console.log('P3-11 CLEANUP RETRY PASS 503 retry 404=id+list-verified misrouted-list=pending release 204 terminate 204+404');
 } finally {
   await authGateway.close();
   await rm(authRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

@@ -72,13 +72,13 @@ export class BoatComputerProvider implements ComputerProvider {
     const response = await instance.http(instance.url + path, request);
     const cleanup = (method === 'POST' && /^\/sandboxes\/[^/]+\/stop$/.test(path)) ||
       (method === 'DELETE' && /^\/sandboxes\/[^/]+$/.test(path));
-    // A cleanup 404 can also mean an invalid route. Confirm absence using Boat's documented
-    // GET /sandboxes/{id} error envelope before dropping the tracked instance.
+    // A route-level 404 can mimic a deleted sandbox. Require both an ID-bound error and
+    // an exhaustive, successful Boat sandbox list before forgetting the managed instance.
     if (cleanup && response.status === 404) {
       const sandboxPath = path.endsWith('/stop') ? path.slice(0, -'/stop'.length) : path;
+      const sandboxId = sandboxPath.slice('/sandboxes/'.length);
       const confirmation = await instance.http(instance.url + sandboxPath, {
-        method: 'GET',
-        headers: request.headers,
+        method: 'GET', headers: request.headers,
       });
       if (confirmation.status === 404 && confirmation.headers.get('content-type')?.includes('application/json')) {
         const result = await confirmation.json().catch(() => null) as {
@@ -86,11 +86,36 @@ export class BoatComputerProvider implements ComputerProvider {
           type?: unknown;
           status?: unknown;
           code?: unknown;
-          error?: { status?: unknown; code?: unknown };
+          error?: { status?: unknown; code?: unknown; details?: { sandboxId?: unknown } };
         } | null;
         if (result?.ok === false && result.type === 'sandbox.error' && result.status === 404 &&
-          result.code === 'not_found' && result.error?.code === 'not_found' && result.error.status === 404) {
-          return undefined as T;
+          result.code === 'not_found' && result.error?.code === 'not_found' &&
+          result.error.status === 404 && result.error.details?.sandboxId === sandboxId) {
+          const cursors = new Set<string>();
+          let cursor: string | undefined;
+          for (let page = 0; page < 100; page++) {
+            const query = `?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+            const listing = await instance.http(`${instance.url}/sandboxes${query}`, {
+              method: 'GET', headers: request.headers,
+            });
+            if (listing.status !== 200 || !listing.headers.get('content-type')?.includes('application/json')) break;
+            const pageResult = await listing.json().catch(() => null) as {
+              ok?: unknown;
+              type?: unknown;
+              sandboxes?: { id?: unknown }[];
+              pageInfo?: { hasMore?: unknown; nextCursor?: unknown };
+            } | null;
+            if (pageResult?.ok !== true || pageResult.type !== 'sandbox.list' ||
+              !Array.isArray(pageResult.sandboxes) ||
+              !pageResult.sandboxes.every(sandbox => sandbox && typeof sandbox.id === 'string') ||
+              pageResult.sandboxes.some(sandbox => sandbox.id === sandboxId)) break;
+            if (pageResult.pageInfo?.hasMore === false) return undefined as T;
+            const nextCursor = pageResult.pageInfo?.nextCursor;
+            if (pageResult.pageInfo?.hasMore !== true || typeof nextCursor !== 'string' ||
+              !nextCursor || cursors.has(nextCursor)) break;
+            cursors.add(nextCursor);
+            cursor = nextCursor;
+          }
         }
       }
     }
