@@ -70,7 +70,15 @@ export class BoatComputerProvider implements ComputerProvider {
       ...(signal ? { signal } : {}),
     };
     const response = await instance.http(instance.url + path, request);
+    const cleanup = (method === 'POST' && /^\/sandboxes\/[^/]+\/stop$/.test(path)) ||
+      (method === 'DELETE' && /^\/sandboxes\/[^/]+$/.test(path));
+    // A missing remote sandbox is already cleaned up. Only sandbox stop/delete have this behavior.
+    if (cleanup && response.status === 404) return undefined as T;
     if (!response.ok) throw new Error(`Boat API ${method} ${path.split('?')[0]} returned HTTP ${response.status}`);
+    if (cleanup) {
+      const payload = (await response.text()).trim();
+      return (payload ? JSON.parse(payload) : undefined) as T;
+    }
     return await response.json() as T;
   }
 

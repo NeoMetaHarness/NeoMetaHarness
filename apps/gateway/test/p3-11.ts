@@ -193,6 +193,7 @@ const authRoot = await mkdtemp(join(tmpdir(), 'neo-p311-auth-'));
 const workspaceRequests: { workspaceId?: string; url: string; authorization: string | null }[] = [];
 let workspaceSandboxNumber = 0;
 let failNextWorkspaceStop = false;
+let nextWorkspaceCleanup: { method: 'POST' | 'DELETE'; status: 204 | 404 } | undefined;
 const workspaceBoatHttp: typeof fetch = async (url, init) => {
   const path = new URL(String(url)).pathname;
   const body = init?.body ? JSON.parse(String(init.body)) as { labels?: Record<string, string> } : {};
@@ -202,8 +203,15 @@ const workspaceBoatHttp: typeof fetch = async (url, init) => {
     failNextWorkspaceStop = false;
     return new Response('{"error":"temporarily unavailable"}', { status: 503 });
   }
+  const cleanupRequest = path.endsWith('/stop') ||
+    (init?.method === 'DELETE' && path.startsWith('/api/v1/sandboxes/'));
+  if (cleanupRequest && nextWorkspaceCleanup && nextWorkspaceCleanup.method === init?.method) {
+    const status = nextWorkspaceCleanup.status;
+    nextWorkspaceCleanup = undefined;
+    return new Response(null, { status });
+  }
   const response = path.endsWith('/sandboxes') && init?.method === 'POST'
-    ? { sandbox: { id: ['bx_23456789', 'bx_2345678a'][workspaceSandboxNumber++] } }
+    ? { sandbox: { id: `bx_${(0x23456789 + workspaceSandboxNumber++).toString(16)}` } }
     : { success: true };
   return new Response(JSON.stringify(response), { headers: { 'content-type': 'application/json' } });
 };
@@ -314,17 +322,32 @@ try {
   await assert.rejects(secondRpc.computers.release({ id: firstComputer.id }),
     'another workspace cannot retry the pending cleanup');
   const stopPath = '/api/v1/sandboxes/bx_23456789/stop';
+  nextWorkspaceCleanup = { method: 'POST', status: 404 };
   await ownerRpc.computers.release({ id: firstComputer.id });
   assert.equal(workspaceRequests.filter(request => new URL(request.url).pathname === stopPath).length, 2,
-    'the second release retries the failed Boat stop');
+    'the second release retries the failed Boat stop, and 404 confirms remote absence');
+  assert.deepEqual(await ownerRpc.computers.list(), [], '404 retry clears cleanup-pending entry');
+  nextWorkspaceCleanup = { method: 'POST', status: 204 };
   await secondRpc.computers.release({ id: secondComputer.id });
+  assert.deepEqual(await secondRpc.computers.list(), [], '204 release clears cleanup-pending entry');
   assert.deepEqual(workspaceRequests.slice(2).map(request => request.authorization),
     ['Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-B'],
     'cleanup retries use the originating workspace credentials');
+
+  const adminRpc = createORPCClient<Client>(new RPCLink({ url: authBase,
+    headers: { authorization: `Bearer ${adminToken}` } }));
+  for (const status of [204, 404] as const) {
+    const target = await ownerRpc.computers.provision({ providerId: 'computer-boat', spec: {} });
+    nextWorkspaceCleanup = { method: 'DELETE', status };
+    assert.deepEqual(await adminRpc.computers.terminate({ id: target.id }), { terminated: true },
+      `admin terminate succeeds when Boat DELETE returns HTTP ${status}`);
+    assert.deepEqual(await ownerRpc.computers.list(), [],
+      `HTTP ${status} delete removes the registry entry`);
+  }
   console.log('P3-11 AUTH PASS viewer=403 enabled+disabled admin=authorized');
   console.log('P3-11 WORKSPACE CREDENTIALS PASS two vault scopes, separate endpoints, keys and egress policies');
   console.log('P3-11 WORKSPACE REGISTRY PASS isolated list, capture, lease, release and assignment bindings');
-  console.log('P3-11 CLEANUP RETRY PASS failed stop stays workspace-scoped until retry succeeds');
+  console.log('P3-11 CLEANUP RETRY PASS 503 retry 404=absent release 204=empty terminate 204+404=removed');
 } finally {
   await authGateway.close();
   await rm(authRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

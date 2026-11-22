@@ -7,6 +7,7 @@ import { BoatComputerProvider } from '../src/provider.js';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jCj8AAAAASUVORK5CYII=', 'base64');
 let failure: 'exit' | 'xdotool' | 'abort' | undefined;
 let cleanupFailure: 'stop' | 'delete' | undefined;
+let nextCleanupResponse: { method: 'POST' | 'DELETE'; status: 204 | 404 } | undefined;
 let signalCommandStarted: (() => void) | undefined;
 const calls: { path: string; method: string; body: Record<string, unknown> }[] = [];
 
@@ -15,6 +16,13 @@ const fakeHttp: typeof fetch = async (url, init) => {
   const path = new URL(String(url)).pathname;
   const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
   calls.push({ path, method: init?.method ?? 'GET', body });
+  const cleanupRequest = path.endsWith('/stop') ||
+    (init?.method === 'DELETE' && path.startsWith('/api/v1/sandboxes/'));
+  if (cleanupRequest && nextCleanupResponse && nextCleanupResponse.method === init?.method) {
+    const status = nextCleanupResponse.status;
+    nextCleanupResponse = undefined;
+    return new Response(null, { status });
+  }
   let response: unknown;
   if (path === '/api/v1/sandboxes') {
     response = { sandbox: { id: 'bx_23456789' } };
@@ -120,7 +128,20 @@ try {
   await provider.terminate('neo-333333333333333333333333');
   assert.equal(calls.filter(call => call.method === 'DELETE').length, deletesBefore + 2,
     'failed delete remains tracked for retry');
-  console.log('Boat provider PASS workspace+snapshot=true lease+screen=true failed-command+xdotool+abort=true cleanup-retry=true');
+  for (const [operation, status, digit] of [
+    ['release', 204, '4'], ['release', 404, '5'],
+    ['terminate', 204, '6'], ['terminate', 404, '7'],
+  ] as const) {
+    const cleanupId = `neo-${digit.repeat(24)}`;
+    await provider.provision({ id: cleanupId }, { workspaceId: 'workspace-A' });
+    nextCleanupResponse = { method: operation === 'release' ? 'POST' : 'DELETE', status };
+    await provider[operation](cleanupId);
+    assert.equal(nextCleanupResponse, undefined, `${operation} must handle HTTP ${status}`);
+    const callCount = calls.length;
+    await provider[operation](cleanupId);
+    assert.equal(calls.length, callCount, `successful ${operation} HTTP ${status} clears the tracked instance`);
+  }
+  console.log('Boat provider PASS workspace+snapshot=true lease+screen=true failed-command+xdotool+abort=true cleanup-retry+204+404=true');
 } finally {
   await provider.close();
 }
