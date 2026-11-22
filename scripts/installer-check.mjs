@@ -23,11 +23,66 @@ export function jsonMergePatch(target, patch) {
 
 export const deepMerge = jsonMergePatch;
 
+function isAsciiWhitespace(code) {
+  return code === 0x20 || (code >= 0x09 && code <= 0x0D);
+}
+
+export function trimAscii(str) {
+  if (typeof str !== 'string') return '';
+  let start = 0;
+  while (start < str.length && isAsciiWhitespace(str.charCodeAt(start))) start++;
+  let end = str.length;
+  while (end > start && isAsciiWhitespace(str.charCodeAt(end - 1))) end--;
+  return str.slice(start, end);
+}
+
+export function base64Decode(input) {
+  let clean = '';
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === '\r' || ch === '\n') {
+      continue;
+    }
+    const code = ch.charCodeAt(0);
+    if (
+      (code >= 65 && code <= 90) || // A-Z
+      (code >= 97 && code <= 122) || // a-z
+      (code >= 48 && code <= 57) || // 0-9
+      code === 43 || // +
+      code === 47 || // /
+      code === 61 // =
+    ) {
+      clean += ch;
+    } else {
+      throw new Error(`invalid character in base64: ${ch}`);
+    }
+  }
+
+  if (clean.length === 0 || clean.length % 4 !== 0) {
+    throw new Error('invalid base64 length');
+  }
+
+  // Reject data after '=' and check padding positions
+  const firstEq = clean.indexOf('=');
+  if (firstEq !== -1) {
+    if (firstEq < clean.length - 2) {
+      throw new Error("invalid padding in base64: '=' can only appear in the last two bytes");
+    }
+    for (let i = firstEq; i < clean.length; i++) {
+      if (clean[i] !== '=') {
+        throw new Error(`invalid character after '=' at index ${i}: ${clean[i]}`);
+      }
+    }
+  }
+
+  return Buffer.from(clean, 'base64');
+}
+
 export function validateMinisignPublicKey(pubkey) {
   if (typeof pubkey !== 'string') {
     throw new Error('Public key must be a string');
   }
-  const trimmed = pubkey.trim();
+  const trimmed = trimAscii(pubkey);
   if (!trimmed) {
     throw new Error('release installer packaging requires a valid owner minisign public key, not a placeholder or empty string');
   }
@@ -35,15 +90,16 @@ export function validateMinisignPublicKey(pubkey) {
     throw new Error('release installer packaging requires a valid owner minisign public key, not a placeholder or empty string');
   }
 
-  const outerClean = trimmed.replace(/\s+/g, '');
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(outerClean) || outerClean.length % 4 !== 0) {
-    throw new Error('Public key is not valid base64');
+  let outerBytes;
+  try {
+    outerBytes = base64Decode(trimmed);
+  } catch (err) {
+    throw new Error('updater public key is not valid base64: ' + err.message);
   }
 
   let fileContent;
   try {
-    const outerBytes = Buffer.from(outerClean, 'base64');
-    fileContent = new TextDecoder('utf-8', { fatal: true }).decode(outerBytes);
+    fileContent = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(outerBytes);
   } catch (err) {
     throw new Error('updater public key decoded bytes are not valid UTF-8: ' + err.message);
   }
@@ -60,24 +116,34 @@ export function validateMinisignPublicKey(pubkey) {
     throw new Error(`Minisign public key file must have exactly 2 lines, got ${lines.length}`);
   }
 
-  const line1 = lines[0].trim();
+  const line1 = trimAscii(lines[0]);
   if (!line1.startsWith('untrusted comment:')) {
     throw new Error('Minisign public key file must begin with "untrusted comment:"');
   }
 
-  const line2 = lines[1].trim();
-  const innerClean = line2.replace(/\s+/g, '');
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(innerClean) || innerClean.length % 4 !== 0) {
-    throw new Error('Minisign public key line 2 is not valid base64');
+  const line2 = trimAscii(lines[1]);
+  if (!line2) {
+    throw new Error('Minisign public key line 2 is empty');
   }
 
-  const rawKey = Buffer.from(innerClean, 'base64');
+  let rawKey;
+  try {
+    rawKey = base64Decode(line2);
+  } catch (err) {
+    throw new Error('Minisign public key line 2 is not valid base64: ' + err.message);
+  }
+
   if (rawKey.length !== 42) {
     throw new Error('Minisign public key must decode to exactly 42 bytes, got ' + rawKey.length);
   }
 
   if (rawKey[0] !== 0x45 || rawKey[1] !== 0x64) {
     throw new Error('Minisign public key algorithm ID must be "Ed", got 0x' + rawKey.subarray(0, 2).toString('hex'));
+  }
+
+  const keyId = rawKey.subarray(2, 10).toString('ascii');
+  if (keyId === 'TESTKEY1' || line1 === 'untrusted comment: NEO TEST KEY - DO NOT SHIP') {
+    throw new Error("test public key with ID 'TESTKEY1' must not ship in a release build! Provide owner key via --config or TAURI_CONFIG.");
   }
 
   return true;
@@ -125,7 +191,10 @@ export function runInstallerCheck(options = {}) {
   // Hierarchy: base config -> tauri.bundle.conf.json -> env (TAURI_CONFIG) -> CLI args (--config) -> options overrides
   let envConfig = {};
   if (!options.ignoreEnv) {
-    const rawEnv = options.envConfig ?? process.env.TAURI_CONFIG ?? process.env.TAURI_ENV_CONFIG;
+    if (process.env.TAURI_ENV_CONFIG) {
+      throw new Error('Release installer packaging failed closed: TAURI_ENV_CONFIG is not supported by Tauri; use TAURI_CONFIG instead.');
+    }
+    const rawEnv = options.envConfig ?? process.env.TAURI_CONFIG;
     if (rawEnv) {
       try {
         envConfig = typeof rawEnv === 'object' ? rawEnv : JSON.parse(rawEnv);

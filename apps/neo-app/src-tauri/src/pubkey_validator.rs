@@ -1,0 +1,151 @@
+fn trim_ascii(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    let mut end = bytes.len();
+    while end > start && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    &s[start..end]
+}
+
+pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    let mut clean: Vec<u8> = Vec::new();
+    for &b in input.as_bytes() {
+        if b == b'\r' || b == b'\n' {
+            continue;
+        }
+        if b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=' {
+            clean.push(b);
+        } else {
+            return Err(format!("invalid character in base64: {}", b as char));
+        }
+    }
+    if clean.is_empty() || clean.len() % 4 != 0 {
+        return Err("invalid base64 length".to_string());
+    }
+
+    // Reject data after '=' and check padding positions
+    let first_eq = clean.iter().position(|&b| b == b'=');
+    if let Some(pos) = first_eq {
+        if pos < clean.len() - 2 {
+            return Err("invalid padding in base64: '=' can only appear in the last two bytes".to_string());
+        }
+        for (idx, &b) in clean.iter().enumerate().skip(pos) {
+            if b != b'=' {
+                return Err(format!("invalid character after '=' at index {}: {}", idx, b as char));
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < clean.len() {
+        let chunk = &clean[i..i + 4];
+        let mut vals = [0u32; 4];
+        let mut pad_count = 0;
+        for (j, &c) in chunk.iter().enumerate() {
+            vals[j] = match c {
+                b'A'..=b'Z' => (c - b'A') as u32,
+                b'a'..=b'z' => (c - b'a' + 26) as u32,
+                b'0'..=b'9' => (c - b'0' + 52) as u32,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' => {
+                    pad_count += 1;
+                    0
+                }
+                _ => unreachable!(),
+            };
+        }
+        let triple = (vals[0] << 18) | (vals[1] << 12) | (vals[2] << 6) | vals[3];
+        out.push(((triple >> 16) & 0xff) as u8);
+        if pad_count < 2 {
+            out.push(((triple >> 8) & 0xff) as u8);
+        }
+        if pad_count < 1 {
+            out.push((triple & 0xff) as u8);
+        }
+        i += 4;
+    }
+    Ok(out)
+}
+
+pub fn validate_minisign_pubkey(pubkey: &str) -> Result<(), String> {
+    let trimmed = trim_ascii(pubkey);
+    if trimmed.is_empty() {
+        return Err("updater public key cannot be empty in a release build".to_string());
+    }
+    if trimmed == "REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY" {
+        return Err(
+            "placeholder updater public key REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY must not ship in a release build! Provide owner key via --config or TAURI_CONFIG."
+                .to_string(),
+        );
+    }
+
+    let outer_bytes = base64_decode(trimmed)
+        .map_err(|e| format!("updater public key is not valid base64: {}", e))?;
+
+    let file_content = String::from_utf8(outer_bytes)
+        .map_err(|e| format!("updater public key decoded bytes are not valid UTF-8: {}", e))?;
+
+    let body = if let Some(s) = file_content.strip_suffix("\r\n") {
+        s
+    } else if let Some(s) = file_content.strip_suffix('\n') {
+        s
+    } else {
+        file_content.as_str()
+    };
+
+    let lines: Vec<&str> = body
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .collect();
+
+    if lines.len() != 2 {
+        return Err(format!(
+            "minisign public key file must have exactly 2 lines, got {}",
+            lines.len()
+        ));
+    }
+
+    let line1 = trim_ascii(lines[0]);
+    if !line1.starts_with("untrusted comment:") {
+        return Err("minisign public key first line must start with 'untrusted comment:'".to_string());
+    }
+
+    let line2 = trim_ascii(lines[1]);
+    if line2.is_empty() {
+        return Err("minisign public key line 2 is empty".to_string());
+    }
+
+    let key_bytes = base64_decode(line2)
+        .map_err(|e| format!("minisign public key line 2 is not valid base64: {}", e))?;
+
+    if key_bytes.len() != 42 {
+        return Err(format!(
+            "minisign public key must decode to exactly 42 bytes, got {}",
+            key_bytes.len()
+        ));
+    }
+
+    if key_bytes[0] != 0x45 || key_bytes[1] != 0x64 {
+        return Err(format!(
+            "minisign public key algorithm ID must be 'Ed', got [0x{:02x}, 0x{:02x}]",
+            key_bytes[0], key_bytes[1]
+        ));
+    }
+
+    // Reject test key ID 'TESTKEY1' in release builds
+    let key_id = &key_bytes[2..10];
+    if key_id == b"TESTKEY1" || line1 == "untrusted comment: NEO TEST KEY - DO NOT SHIP" {
+        return Err(
+            "test public key with ID 'TESTKEY1' must not ship in a release build! Provide owner key via --config or TAURI_CONFIG."
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}

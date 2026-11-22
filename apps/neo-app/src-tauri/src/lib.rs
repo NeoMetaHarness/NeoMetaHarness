@@ -464,115 +464,7 @@ pub fn run() {
 
 
 
-pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    let mut clean: Vec<u8> = Vec::new();
-    for b in input.bytes() {
-        if !b.is_ascii_whitespace() {
-            clean.push(b);
-        }
-    }
-    if clean.is_empty() || clean.len() % 4 != 0 {
-        return Err("invalid base64 length".to_string());
-    }
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < clean.len() {
-        let chunk = &clean[i..i + 4];
-        let mut vals = [0u32; 4];
-        let mut pad_count = 0;
-        for (j, &c) in chunk.iter().enumerate() {
-            vals[j] = match c {
-                b'A'..=b'Z' => (c - b'A') as u32,
-                b'a'..=b'z' => (c - b'a' + 26) as u32,
-                b'0'..=b'9' => (c - b'0' + 52) as u32,
-                b'+' => 62,
-                b'/' => 63,
-                b'=' => {
-                    pad_count += 1;
-                    0
-                }
-                _ => return Err(format!("invalid base64 character: {}", c as char)),
-            };
-        }
-        if pad_count > 2 || (pad_count > 0 && i + 4 != clean.len()) {
-            return Err("invalid base64 padding".to_string());
-        }
-        let triple = (vals[0] << 18) | (vals[1] << 12) | (vals[2] << 6) | vals[3];
-        out.push(((triple >> 16) & 0xff) as u8);
-        if pad_count < 2 {
-            out.push(((triple >> 8) & 0xff) as u8);
-        }
-        if pad_count < 1 {
-            out.push((triple & 0xff) as u8);
-        }
-        i += 4;
-    }
-    Ok(out)
-}
-
-pub fn validate_minisign_pubkey(pubkey: &str) -> Result<(), String> {
-    let trimmed = pubkey.trim();
-    if trimmed.is_empty() {
-        return Err("updater public key cannot be empty in a release build".to_string());
-    }
-    if trimmed == "REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY" {
-        return Err(
-            "placeholder updater public key REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY must not ship in a release build! Provide owner key via --config or TAURI_CONFIG."
-                .to_string(),
-        );
-    }
-
-    let outer_bytes = base64_decode(trimmed)
-        .map_err(|e| format!("updater public key is not valid base64: {}", e))?;
-
-    let file_content = String::from_utf8(outer_bytes)
-        .map_err(|e| format!("updater public key decoded bytes are not valid UTF-8: {}", e))?;
-
-    let body = if let Some(s) = file_content.strip_suffix("\r\n") {
-        s
-    } else if let Some(s) = file_content.strip_suffix('\n') {
-        s
-    } else {
-        file_content.as_str()
-    };
-
-    let lines: Vec<&str> = body
-        .split('\n')
-        .map(|l| l.strip_suffix('\r').unwrap_or(l))
-        .collect();
-
-    if lines.len() != 2 {
-        return Err(format!(
-            "minisign public key file must have exactly 2 lines, got {}",
-            lines.len()
-        ));
-    }
-
-    let line1 = lines[0].trim();
-    if !line1.starts_with("untrusted comment:") {
-        return Err("minisign public key first line must start with 'untrusted comment:'".to_string());
-    }
-
-    let line2 = lines[1].trim();
-    let key_bytes = base64_decode(line2)
-        .map_err(|e| format!("minisign public key line 2 is not valid base64: {}", e))?;
-
-    if key_bytes.len() != 42 {
-        return Err(format!(
-            "minisign public key must decode to exactly 42 bytes, got {}",
-            key_bytes.len()
-        ));
-    }
-
-    if key_bytes[0] != 0x45 || key_bytes[1] != 0x64 {
-        return Err(format!(
-            "minisign public key algorithm ID must be 'Ed', got [0x{:02x}, 0x{:02x}]",
-            key_bytes[0], key_bytes[1]
-        ));
-    }
-
-    Ok(())
-}
+include!("pubkey_validator.rs");
 
 #[cfg(test)]
 mod tests {
@@ -705,10 +597,57 @@ mod tests {
 
     #[test]
     fn test_validate_minisign_pubkey_valid() {
-        let valid_key = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldSVVJWTlVTMFZaTVZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEK";
+        let valid_key = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQo=";
         assert!(validate_minisign_pubkey(valid_key).is_ok());
     }
 
+    #[test]
+    fn test_validate_minisign_pubkey_accepted_crlf() {
+        let valid_crlf = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQ0KUldSUFYwNUZVa3RGV1ZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGENCg==";
+        assert!(validate_minisign_pubkey(valid_crlf).is_ok());
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_test_key_rejected() {
+        let test_key = "dW50cnVzdGVkIGNvbW1lbnQ6IE5FTyBURVNUIEtFWSAtIERPIE5PVCBTSElQClJXUlVSVk5VUzBWWk1WcGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhCg==";
+        let err = validate_minisign_pubkey(test_key).unwrap_err();
+        assert!(err.contains("test public key with ID 'TESTKEY1' must not ship in a release build"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_empty_line2() {
+        let empty_line2 = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQoK";
+        let err = validate_minisign_pubkey(empty_line2).unwrap_err();
+        assert!(err.contains("line 2 is empty"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_two_trailing_newlines() {
+        let two_trailing = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQoK";
+        let err = validate_minisign_pubkey(two_trailing).unwrap_err();
+        assert!(err.contains("must have exactly 2 lines"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_bad_length_32() {
+        let bad_len_32 = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xvPQo=";
+        let err = validate_minisign_pubkey(bad_len_32).unwrap_err();
+        assert!(err.contains("must decode to exactly 42 bytes, got 32"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_data_after_eq() {
+        let data_after_eq = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JTVDFkT1JWSkxSVmxhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2w9QQo=";
+        let err = validate_minisign_pubkey(data_after_eq).unwrap_err();
+        assert!(err.contains("invalid character after '='"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_bom_rejected() {
+        let bom_key = "77u/dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQo=";
+        let err = validate_minisign_pubkey(bom_key).unwrap_err();
+        assert!(err.contains("first line must start with 'untrusted comment:'"));
+    }
     #[test]
     fn test_validate_minisign_pubkey_placeholder() {
         assert!(validate_minisign_pubkey("REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY").is_err());
@@ -733,13 +672,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_minisign_pubkey_wrong_length() {
-        let bad_len = "dW50cnVzdGVkIGNvbW1lbnQ6IHRlc3QKV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbz0K";
-        let err = validate_minisign_pubkey(bad_len).unwrap_err();
-        assert!(err.contains("must decode to exactly 42 bytes"));
-    }
-
-    #[test]
     fn test_validate_minisign_pubkey_third_line() {
         let third_line = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldSVVJWTlVTMFZaTVZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEKZXh0cmEgdGhpcmQgbGluZQo=";
         let err = validate_minisign_pubkey(third_line).unwrap_err();
@@ -752,4 +684,14 @@ mod tests {
         let err = validate_minisign_pubkey(invalid_utf8).unwrap_err();
         assert!(err.contains("not valid UTF-8"));
     }
+
+    #[test]
+    fn test_shared_pubkey_validator_included() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let build_rs = std::fs::read_to_string(std::path::Path::new(manifest_dir).join("build.rs")).unwrap_or_default();
+        let lib_rs = std::fs::read_to_string(std::path::Path::new(manifest_dir).join("src/lib.rs")).unwrap_or_default();
+        assert!(build_rs.contains(r#"include!("src/pubkey_validator.rs");"#));
+        assert!(lib_rs.contains(r#"include!("pubkey_validator.rs");"#));
+    }
+
 }
