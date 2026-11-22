@@ -81,6 +81,7 @@ gantt
 - Installers (Win / macOS / Linux, Docker Compose); docs site; onboarding under 15 minutes.
 - P7-12: measure the PRD §6 success metrics from the running product (attention, learning, time to first value) and show them in the App (decided 2026-11-21).
 - P7-13: fix the docs that disagree with the code (sweep of 2026-11-21; the code is the source of truth).
+- P7-14: installers ship the Gateway runtime (production dependencies only, one shared flat node_modules) as a single archive that the desktop shell unpacks into the app data folder on first launch and after each update (decided 2026-11-22: loose files broke the Windows installer build on path length and bundling time). On-demand engine downloads are a later optimisation.
 - **v1.0 public release.**
 
 ## After v1
