@@ -16,6 +16,7 @@ Set the date on the heading when the release is cut.
 - Installers for Windows (NSIS, MSI), macOS (DMG) and Linux (AppImage, deb), with install docs (P7-6).
 - In-product PRD success metrics (P7-12).
 - Signed desktop auto-updates from full GitHub releases, verified with the checked-in public key; stable versions only (P1-11).
+- The desktop Gateway sidecar never outlives the app: it shuts down when the app exits, crashes or fails to start (P1-15).
 
 ### Kernel, extensions and Gateway
 - Cordis kernel facade, oRPC contracts, Kysely/SQLite state, Gateway, and sample TypeScript and Python extensions (P1-1).
