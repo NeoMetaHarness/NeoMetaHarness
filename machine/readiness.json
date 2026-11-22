@@ -462,8 +462,9 @@
     },
     "P3-10": {
       "title": "computer-orgo provider and P3 exit swap",
-      "status": "in_progress",
-      "owner": "sol-a"
+      "status": "done",
+      "owner": "sol-a",
+      "evidence": "PM review 2026-11-22 on main cd16449 + work/sol-a-p310 (af2f429, rebased on P1-13/P1-14) + PM test fix 69284bf (p3-10-resources enables extensions with the deployment owner session, required since P1-14). computer-orgo provider: Orgo credentials only via settingsFor(workspace)/vault, provider-owned ownership ledger (foreign workspace cannot attach or use another workspace's computer), egress via packages/egress; computer registry partitioned by workspace; DSH sessions workspace-owned with workspace-scoped assignment cleanup; same Hermes bot swaps local/docker/orgo. test:p3-10 PASS x2, app tsc, test:p1-14, engine-dsh, gateway, toggle, pnpm check, secret scan PASS; clean full regression 49/49. Cross-reviews: Gemini re-check of the rebase (no findings)."
     },
     "P3-11": {
       "title": "computer-boat provider (boat.dev and PandaOS)",
