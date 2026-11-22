@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import type { ComputerRegistry } from '@neometaharness/computers';
+import type { ExtensionContext } from '@neometaharness/kernel';
+import boatExtension from '../src/index.js';
 import { BoatComputerProvider } from '../src/provider.js';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jCj8AAAAASUVORK5CYII=', 'base64');
@@ -156,3 +159,32 @@ try {
 } finally {
   await scopedProvider.close();
 }
+
+// Even if the registry cannot unregister, extension shutdown must close its provider.
+let registeredProvider: BoatComputerProvider | undefined;
+let disposeExtension: (() => void | Promise<void>) | undefined;
+const registryThatFailsUnregister = {
+  registerProvider: (_name: string, provider: BoatComputerProvider) => {
+    registeredProvider = provider;
+    return async () => { throw new Error('unregister failed'); };
+  },
+} as unknown as ComputerRegistry;
+await boatExtension.activate({
+  inject: (name: string) => {
+    if (name === 'computers') return registryThatFailsUnregister;
+    if (name === 'settingsFor') return () => ({ apiKey: 'fake-only', baseUrl: 'https://boat.example/api/v1' });
+    if (name === 'computerBoatHttp') return fakeHttp;
+    return undefined;
+  },
+  effect: (register: () => () => void | Promise<void>) => { disposeExtension = register(); },
+  route: () => {},
+  health: () => {},
+} as unknown as ExtensionContext);
+assert.ok(registeredProvider);
+assert.ok(disposeExtension);
+await registeredProvider.provision({ id: 'neo-eeeeeeeeeeeeeeeeeeeeeeee' }, { workspaceId: 'workspace-A' });
+const shutdownStopsBefore = calls.filter(call => call.path.endsWith('/stop')).length;
+await assert.rejects(async () => { await disposeExtension!(); }, /unregister failed/);
+assert.equal(calls.filter(call => call.path.endsWith('/stop')).length, shutdownStopsBefore + 1,
+  'provider.close still stops the managed sandbox when unregister throws');
+console.log('Boat extension shutdown PASS provider closes when unregister fails');

@@ -32,6 +32,7 @@ const computerInfoSchema = z.object({
     gpu: z.boolean().optional(),
   }),
   holder: z.enum(['agent', 'human']),
+  cleanupPending: z.boolean().optional(),
   assignments: z.array(z.object({ engine: z.string(), targetId: z.string() })),
 });
 

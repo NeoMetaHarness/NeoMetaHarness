@@ -58,10 +58,11 @@ export interface ComputerInfo {
   capabilities: ComputerCapabilities;
   holder: LeaseHolder;
   assignments: { engine: string; targetId: string }[];
+  cleanupPending?: boolean;
 }
 export interface ComputerBinding { endpoint: string; token: string; computerId: string }
 
-interface Entry { providerId: string; provider: ComputerProvider; computer: Computer; holder: LeaseHolder; policy: ComputerSafetyPolicy; queue: Promise<unknown>; workspaceId?: string }
+interface Entry { providerId: string; provider: ComputerProvider; computer: Computer; holder: LeaseHolder; policy: ComputerSafetyPolicy; queue: Promise<unknown>; workspaceId?: string; cleanupPending?: boolean }
 interface Assignment { engine: string; targetId: string; computerId: string; token: string }
 
 export class ComputerRegistry {
@@ -97,6 +98,7 @@ export class ComputerRegistry {
         screen: false, input: false, browserCdp: false, shell: false, files: false, snapshot: false,
       },
       holder: entry.holder,
+      cleanupPending: entry.cleanupPending,
       assignments: [...this.assignments.values()]
         .filter((assignment) => assignment.computerId === id)
         .map(({ engine, targetId }) => ({ engine, targetId })),
@@ -155,8 +157,9 @@ export class ComputerRegistry {
   private async remove(id: string, force: boolean): Promise<boolean> {
     const entry = this.entries.get(id);
     if (!entry) return false;
+    if (this.releasing.has(id)) throw new Error('Computer cleanup already in progress');
     this.releasing.add(id);
-    this.entries.delete(id);
+    entry.cleanupPending = true;
     for (const [key, assignment] of this.assignments) {
       if (assignment.computerId === id) this.revoke(key);
     }
@@ -164,6 +167,7 @@ export class ComputerRegistry {
       await entry.queue.catch(() => {});
       if (force && entry.provider.terminate) await entry.provider.terminate(id);
       else await entry.provider.release(id);
+      this.entries.delete(id);
       return true;
     } finally {
       this.releasing.delete(id);
@@ -178,8 +182,10 @@ export class ComputerRegistry {
   }
 
   assign(engine: 'hermes' | 'dsh' | 'superagent', targetId: string, computerId: string, workspaceId?: string): ComputerBinding {
-    if (!this.entries.has(computerId)) throw new Error('Unknown computer');
+    const entry = this.entries.get(computerId);
+    if (!entry) throw new Error('Unknown computer');
     if (workspaceId !== undefined) this.assertWorkspace(computerId, workspaceId);
+    if (entry.cleanupPending) throw new Error('Computer cleanup pending');
     const key = this.key(engine, targetId, workspaceId);
     this.revoke(key);
     const assignment = { engine, targetId, computerId, token: randomBytes(32).toString('hex') };
@@ -208,7 +214,7 @@ export class ComputerRegistry {
     for (const entry of this.entries.values()) {
       if (workspaceId && entry.workspaceId !== workspaceId) continue;
       if (engaged) entry.computer.interrupt?.();
-      else if (entry.holder === 'agent' && !this.killed && !this.killedWorkspaces.get(entry.workspaceId ?? '')) entry.computer.resumeInput?.();
+      else if (!entry.cleanupPending && entry.holder === 'agent' && !this.killed && !this.killedWorkspaces.get(entry.workspaceId ?? '')) entry.computer.resumeInput?.();
     }
     this.publish({ type: 'computer.kill', engaged });
     return { engaged };
@@ -229,6 +235,7 @@ export class ComputerRegistry {
     if (workspaceId !== undefined) this.assertWorkspace(id, workspaceId);
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Unknown computer');
+    if (entry.cleanupPending) throw new Error('Computer cleanup pending');
     // Human takeover preempts active native input before queued agent work drains.
     if (holder === 'human') {
       entry.holder = 'human';
@@ -244,6 +251,7 @@ export class ComputerRegistry {
   }
 
   private runQueued<T>(entry: Entry, operation: () => Promise<T>): Promise<T> {
+    if (entry.cleanupPending) return Promise.reject(new Error('Computer cleanup pending'));
     const running = entry.queue.then(operation, operation);
     entry.queue = running.catch(() => {});
     return running;

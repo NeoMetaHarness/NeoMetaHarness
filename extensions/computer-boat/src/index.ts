@@ -10,7 +10,10 @@ export default defineExtension({
     const provider = new BoatComputerProvider(settingsFor, ctx.inject<BoatHttp>('computerBoatHttp'));
     ctx.effect(() => {
       const unregister = computers.registerProvider('computer-boat', provider);
-      return async () => { await unregister(); await provider.close(); };
+      return async () => {
+        try { await unregister(); }
+        finally { await provider.close(); }
+      };
     });
     ctx.route('snapshot', async ({ body }) => {
       const { id, workspaceId } = (body as { id?: unknown; workspaceId?: unknown } | undefined) ?? {};

@@ -192,11 +192,16 @@ try {
 const authRoot = await mkdtemp(join(tmpdir(), 'neo-p311-auth-'));
 const workspaceRequests: { workspaceId?: string; url: string; authorization: string | null }[] = [];
 let workspaceSandboxNumber = 0;
+let failNextWorkspaceStop = false;
 const workspaceBoatHttp: typeof fetch = async (url, init) => {
   const path = new URL(String(url)).pathname;
   const body = init?.body ? JSON.parse(String(init.body)) as { labels?: Record<string, string> } : {};
   workspaceRequests.push({ workspaceId: body.labels?.['neo-workspace'], url: String(url),
     authorization: new Headers(init?.headers).get('authorization') });
+  if (path.endsWith('/stop') && failNextWorkspaceStop) {
+    failNextWorkspaceStop = false;
+    return new Response('{"error":"temporarily unavailable"}', { status: 503 });
+  }
   const response = path.endsWith('/sandboxes') && init?.method === 'POST'
     ? { sandbox: { id: ['bx_23456789', 'bx_2345678a'][workspaceSandboxNumber++] } }
     : { success: true };
@@ -297,13 +302,29 @@ try {
     { workspaceId: workspace.id, url: 'https://boat.example/api/v1/sandboxes', authorization: 'Bearer vaulted-workspace-A' },
     { workspaceId: secondWorkspace.id, url: 'https://10.20.0.5/api/v1/sandboxes', authorization: 'Bearer vaulted-workspace-B' },
   ], 'each workspace provisions with its own vaulted key, endpoint and network policy');
+  failNextWorkspaceStop = true;
+  await assert.rejects(ownerRpc.computers.release({ id: firstComputer.id }),
+    'a Boat 503 must surface as a failed release');
+  assert.deepEqual((await ownerRpc.computers.list()).map(computer => ({
+    id: computer.id, cleanupPending: (computer as { cleanupPending?: boolean }).cleanupPending,
+  })), [{ id: firstComputer.id, cleanupPending: true }],
+  'failed cleanup stays visible as pending in the owning workspace');
+  assert.deepEqual((await secondRpc.computers.list()).map(computer => computer.id), [secondComputer.id],
+    'a failed cleanup is invisible across workspaces');
+  await assert.rejects(secondRpc.computers.release({ id: firstComputer.id }),
+    'another workspace cannot retry the pending cleanup');
+  const stopPath = '/api/v1/sandboxes/bx_23456789/stop';
   await ownerRpc.computers.release({ id: firstComputer.id });
+  assert.equal(workspaceRequests.filter(request => new URL(request.url).pathname === stopPath).length, 2,
+    'the second release retries the failed Boat stop');
   await secondRpc.computers.release({ id: secondComputer.id });
   assert.deepEqual(workspaceRequests.slice(2).map(request => request.authorization),
-    ['Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-B'], 'cleanup uses the originating workspace credentials');
+    ['Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-B'],
+    'cleanup retries use the originating workspace credentials');
   console.log('P3-11 AUTH PASS viewer=403 enabled+disabled admin=authorized');
   console.log('P3-11 WORKSPACE CREDENTIALS PASS two vault scopes, separate endpoints, keys and egress policies');
   console.log('P3-11 WORKSPACE REGISTRY PASS isolated list, capture, lease, release and assignment bindings');
+  console.log('P3-11 CLEANUP RETRY PASS failed stop stays workspace-scoped until retry succeeds');
 } finally {
   await authGateway.close();
   await rm(authRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
