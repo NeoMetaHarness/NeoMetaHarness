@@ -532,7 +532,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
    * The accept-mode workspace of a caller: desktop keeps its single 'default' mode; in server mode each
    * workspace has its own (the same key its memory dreams use, so a dream follows the caller's setting).
    */
-  const acceptModeWorkspace = (context: GatewayAuthContext): string => mode === 'desktop' ? 'default' : memoryWorkspace(undefined, context);
+  const acceptModeWorkspace = (context: GatewayAuthContext): string => mode === 'desktop' ? desktopWorkspace! : memoryWorkspace(undefined, context);
   /**
    * P6-10 Inbox isolation. Stamped items belong to the caller's workspace.
    * Unstamped channel/Hermes bindings, GitHub and upstream items belong to the deployment.
