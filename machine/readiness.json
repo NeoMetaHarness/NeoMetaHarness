@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "phase": "P1-kernel-and-app",
-  "updated": "2026-11-21",
+  "updated": "2026-11-22",
   "decisions": {
     "upstream_strategy": "engines unmodified via seams; bot-hq adopted first-party",
     "ui": "one Neo App on Astryx",
@@ -313,8 +313,9 @@
     },
     "P2-10": {
       "title": "voice-xai and provider-agnostic voice interface",
-      "status": "in_progress",
-      "owner": "codex"
+      "status": "done",
+      "owner": "codex",
+      "evidence": "PM review 2026-11-22 on main 123190d + work/codex-p210 (bde88a2, rebased after P1-14; head 94c197e). Provider-neutral neo.voice contract with xAI provider: credentials only via workspace vault, synthesis/transcription scoped to the requester workspace, egress through packages/egress with DNS-pinned sockets (rebinding rejected), bounded per-user requests, caller abort propagated upstream, member policy on the voice route. test:p2-10 PASS x2, app tsc, test:p1-14, kernel tests, gateway, toggle, pnpm check, secret scan PASS; full regression 62/63 with test:p2-5 timing out under machine load, then PASS x2 on rerun (channels UI, unrelated to voice)."
     },
     "P2-11": {
       "title": "x-search optional extension",
