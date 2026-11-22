@@ -4,10 +4,9 @@ All notable changes to Neo Meta Harness. Versions follow [Semantic Versioning](h
 Every release is a full GitHub release (never a pre-release or draft); see [docs/release.md](docs/release.md).
 The release notes in each update manifest (`latest.json`) are the section for that version below.
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-11-23
 
 First public release. This section lists the tasks marked `done` in `machine/readiness.json` (P0–P7).
-Set the date on the heading when the release is cut.
 
 ### Desktop and web app
 - Neo App on the Astryx design system, served as a web app and PWA and as a Tauri 2 desktop app with the Gateway as a sidecar, tray, global launcher, `neo://` deep links and clean exit (P1-2, P1-5, P1-8).
