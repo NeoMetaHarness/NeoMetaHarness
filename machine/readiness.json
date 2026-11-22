@@ -471,8 +471,9 @@
     },
     "P3-11": {
       "title": "computer-boat provider (boat.dev and PandaOS)",
-      "status": "in_progress",
-      "owner": "sol-b"
+      "status": "done",
+      "owner": "sol-b",
+      "evidence": "PM review 2026-11-22 on main adc843b (after P2-11) + work/sol-b-p311b (8565c5d), rebased onto P2-11 by a helper (one both-sides-append conflict in GatewayOptions; content verified identical; head aaa1a7c). computer-boat provider (boat.dev and PandaOS): Boat egress, snapshots and routes guarded; remote absence confirmed with list before cleanup; workspace-scoped credentials and registry; cleanup retry. Cross-reviews: Codex closing re-check, no blocking findings. Accepted residual risks: an unconfirmed Boat 404 stays cleanupPending; LOW hasMore:false with nextCursor populated (provider.ts:112). test:p3-11 PASS x2, app tsc, test:p1-14, test:p3-10, gateway, toggle, pnpm check, secret scan PASS; full regression 63 OK; desktop suites p1-5, p1-8, p7-8 PASS on serial rerun after freeing the Ctrl+Shift+Space hotkey held by another local app (earlier failures were environmental)."
     }
   },
   "p5_tasks": {
