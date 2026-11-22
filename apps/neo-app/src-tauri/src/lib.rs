@@ -723,10 +723,27 @@ impl GatewaySidecar {
         let repo = std::env::var_os("NMH_DESKTOP_REPO_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."));
-        let bundled = app.path().resource_dir()?.join("gateway");
-        let packaged = bundled.join("apps/gateway/src/main.ts").is_file();
-        let gateway_dir = if packaged { bundled.join("apps/gateway") } else { repo.join("apps/gateway") };
-        let extensions_dir = if packaged { bundled.join("extensions") } else { repo.join("extensions") };
+        // Installers bundle one runtime archive; it is unpacked into the user's local data dir before the
+        // Gateway starts (and before the ready timer below). No archive means development: repo paths.
+        let runtime_dir = match runtime::bundled_archive(&app.path().resource_dir()?.join("runtime"))? {
+            Some((archive, manifest)) => {
+                let base = match std::env::var_os("NMH_RUNTIME_DIR") {
+                    Some(dir) => PathBuf::from(dir),
+                    None => app.path().app_local_data_dir()?.join("runtime"),
+                };
+                let dir = runtime::ensure_runtime(&archive, &manifest, &base)
+                    .map_err(|error| format!("Unpacking the Neo runtime failed: {error}"))?;
+                if !dir.join("apps/gateway/src/main.ts").is_file() {
+                    return Err(format!("Unpacked runtime {} has no apps/gateway/src/main.ts", dir.display()).into());
+                }
+                Some(dir)
+            }
+            None => None,
+        };
+        let packaged = runtime_dir.is_some();
+        let root = runtime_dir.unwrap_or(repo);
+        let gateway_dir = root.join("apps/gateway");
+        let extensions_dir = root.join("extensions");
         let node = if packaged {
             let filename = if cfg!(windows) { "neo-gateway.exe" } else { "neo-gateway" };
             std::env::current_exe()?.with_file_name(filename).into_os_string()
@@ -931,6 +948,8 @@ pub fn run() {
 }
 
 
+
+mod runtime;
 
 include!("pubkey_validator.rs");
 
