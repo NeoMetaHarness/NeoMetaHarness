@@ -22,8 +22,16 @@ let closing = false;
 async function close(): Promise<void> {
   if (closing) return;
   closing = true;
-  await gateway.close();
-  process.exit(0);
+  // Nothing outside may be left to kill a stuck gateway (the shell may be gone), so cap shutdown.
+  setTimeout(() => process.exit(1), 15000).unref();
+  try {
+    await gateway.close();
+  } catch (error) {
+    console.error('Gateway shutdown failed:', error);
+    process.exitCode = 1;
+  } finally {
+    process.exit();
+  }
 }
 process.on('SIGINT', () => { void close(); });
 process.on('SIGTERM', () => { void close(); });

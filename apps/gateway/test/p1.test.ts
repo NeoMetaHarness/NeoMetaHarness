@@ -170,7 +170,9 @@ async function ownerExit(): Promise<void> {
     } finally { socket.close(); }
     const exited = new Promise<number | null>((done) => gateway!.child.once('exit', (code) => done(code)));
     gateway.child.stdin!.destroy();
-    const code = await Promise.race([exited, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Gateway outlived its closed stdin')), 10000))]);
+    let timer: NodeJS.Timeout | undefined;
+    const code = await Promise.race([exited, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Gateway outlived its closed stdin')), 10000); })])
+      .finally(() => clearTimeout(timer));
     assert.equal(code, 0, 'gateway shut down cleanly after stdin closed');
     await eventually(() => !alive(pid!), `Python process ${pid} exited with the gateway`);
     await rm(temp, { recursive: true, force: true });

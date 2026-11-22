@@ -107,6 +107,7 @@ async function trial(number) {
   let processTree = [];
   let status;
   let view;
+  let passed = false;
   const desktop = spawn(exe, [], {
     cwd: appDir,
     stdio: 'ignore',
@@ -172,14 +173,17 @@ async function trial(number) {
     await eventually(() => processTree.every((entry) => !alive(entry.ProcessId)), 'gateway and Python exit', 450);
     await assert.rejects(fetch(`${base}/x/sample-ts/hello`), 'gateway port should be closed');
     console.log(`P1-5_WEBVIEW PASS trial=${number} rows=${expectedRows} tray=true shortcut=true deep_links=2 live=true off=404 on=200 python=200 sw=0 process_tree=${processTree.length} clean_exit=true`);
+    passed = true;
   } finally {
     view?.close();
     if (alive(desktop.pid)) spawnSync('taskkill.exe', ['/PID', String(desktop.pid), '/T', '/F'], { windowsHide: true });
     if (status && alive(status.gatewayPid)) spawnSync('taskkill.exe', ['/PID', String(status.gatewayPid), '/T', '/F'], { windowsHide: true });
     if (status?.gatewayPid) await eventually(() => !alive(status.gatewayPid), 'gateway exit before cleanup', 100).catch(() => {});
-    // Cleanup must never replace the real failure: an EBUSY here only means a process still held the temp dir.
-    await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 })
-      .catch((error) => console.warn(`P1-5 cleanup warning: ${error.message}`));
+    // A cleanup error (e.g. EBUSY) must not replace a real failure, but on a passing run it is a leak and fails the test.
+    await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch((error) => {
+      if (passed) throw error;
+      console.warn(`P1-5 cleanup warning (test already failed): ${error.message}`);
+    });
   }
 }
 
