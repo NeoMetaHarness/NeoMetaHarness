@@ -17,7 +17,7 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  assertNoKeyMaterial, assertReleaseVersion, changelogSection, checkedInPublicKey, parseSignature, plistShortVersion,
+  TAURI_CONFIG, assertNoKeyMaterial, assertReleaseVersion, changelogSection, checkedInPublicKey, parseSignature, plistShortVersion,
   readTarGzEntry, readVersions, releaseDownloadBase, verifyMinisign, versionProblems,
 } from './release-lib.mjs';
 
@@ -97,6 +97,8 @@ export async function buildManifest({ root = DEFAULT_ROOT, version, artifacts, p
 
   const base = assertHttpsBase(baseUrl ?? releaseDownloadBase(version));
   const publicKey = checkedInPublicKey(root);
+  const productName = JSON.parse(readFileSync(join(root, TAURI_CONFIG), 'utf8')).productName;
+  if (typeof productName !== 'string' || !productName.trim()) throw new Error(`${TAURI_CONFIG} has no productName`);
 
   if (!Array.isArray(artifacts) || artifacts.length === 0) throw new Error('At least one --artifact is required');
   const platforms = {};
@@ -114,6 +116,12 @@ export async function buildManifest({ root = DEFAULT_ROOT, version, artifacts, p
     }
     if (KINDS[kind].os !== os || !KINDS[kind].matches(name)) {
       throw new Error(`${platform}: ${name} is not a ${kind} updater artifact`);
+    }
+    // The bundler names every artifact after productName: "<productName>.app.tar.gz" on macOS,
+    // "<productName>_<version>_<arch>..." for the other installers (Linux included).
+    const expectedPrefix = kind === 'app' ? `${productName}.app.` : `${productName}_`;
+    if (!name.startsWith(expectedPrefix)) {
+      throw new Error(`${platform}: ${name} is not named after productName "${productName}" (expected ${expectedPrefix}...)`);
     }
 
     const sigFile = `${source}.sig`;

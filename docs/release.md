@@ -110,6 +110,8 @@ store. This runbook does not say where the key is kept, and nothing here reads i
 
 Don't write either value to a file in the repository, a profile script or the shell history.
 
+Keep `TAURI_CONFIG` **unset** in the build shell. `cargo tauri build` sets it itself from its `--config` arguments. The build (`build.rs`) and the bundle check (`installer-check.mjs`) refuse any updater public key that differs from the one checked in to `tauri.conf.json`.
+
 ```powershell
 Push-Location apps/neo-app/src-tauri
 cargo tauri build --config tauri.bundle.conf.json --config $override --bundles nsis,msi     # Windows
@@ -120,15 +122,15 @@ Pop-Location
 Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 ```
 
-Each updater artifact gets a `.sig` file next to it under `apps/neo-app/src-tauri/target/release/bundle/`:
+Each updater artifact gets a `.sig` file next to it under `apps/neo-app/src-tauri/target/release/bundle/`. The bundler names every artifact after `productName` in `tauri.conf.json` (`Neo Meta Harness`), Linux included. macOS needs `--bundles app,dmg`: the `app` bundle is what produces the `.app.tar.gz`.
 
 | Platform key | Updater artifact (and its `.sig`) |
 |---|---|
 | `windows-x86_64-nsis` | `nsis/Neo Meta Harness_X.Y.Z_x64-setup.exe` |
 | `windows-x86_64-msi` | `msi/Neo Meta Harness_X.Y.Z_x64_en-US.msi` |
 | `darwin-aarch64-app` (or `darwin-x86_64-app`) | `macos/Neo Meta Harness.app.tar.gz` |
-| `linux-x86_64-appimage` | `appimage/neo-meta-harness_X.Y.Z_amd64.AppImage` |
-| `linux-x86_64-deb` | `deb/neo-meta-harness_X.Y.Z_amd64.deb` |
+| `linux-x86_64-appimage` | `appimage/Neo Meta Harness_X.Y.Z_amd64.AppImage` |
+| `linux-x86_64-deb` | `deb/Neo Meta Harness_X.Y.Z_amd64.deb` |
 
 The macOS archive's name has no version. `release-manifest.mjs` reads the version from the bundle's
 `Info.plist` (`CFBundleShortVersionString`) inside the signed archive, so an older archive with a valid
@@ -153,8 +155,8 @@ node scripts/release-manifest.mjs --version $v --out-dir release-out `
   --artifact "windows-x86_64-nsis=$bundle/nsis/Neo Meta Harness_${v}_x64-setup.exe" `
   --artifact "windows-x86_64-msi=$bundle/msi/Neo Meta Harness_${v}_x64_en-US.msi" `
   --artifact "darwin-aarch64-app=C:/release-inputs/Neo Meta Harness.app.tar.gz" `
-  --artifact "linux-x86_64-appimage=C:/release-inputs/neo-meta-harness_${v}_amd64.AppImage" `
-  --artifact "linux-x86_64-deb=C:/release-inputs/neo-meta-harness_${v}_amd64.deb"
+  --artifact "linux-x86_64-appimage=C:/release-inputs/Neo Meta Harness_${v}_amd64.AppImage" `
+  --artifact "linux-x86_64-deb=C:/release-inputs/Neo Meta Harness_${v}_amd64.deb"
 ```
 
 The script writes `release-out/latest.json` and copies each artifact into `release-out/`, named as GitHub
@@ -173,7 +175,7 @@ It refuses to write anything when:
 - the public key checked in to `tauri.conf.json` is missing or still the placeholder;
 - a `.sig` is missing or malformed, does not verify against the artifact's bytes with that key, or names a
   different file in its signed trusted comment;
-- an artifact is missing, or has the wrong type for its platform key;
+- an artifact is missing, has the wrong type for its platform key, or is not named after `productName`;
 - an artifact was built for another version: from its file name or, for the macOS `.app.tar.gz`, from its
   `Info.plist`;
 - the CHANGELOG section looks like it contains key material;

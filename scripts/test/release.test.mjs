@@ -113,8 +113,8 @@ function fakeBundles(root, version = '1.0.0') {
     'windows-x86_64-nsis': [`Neo Meta Harness_${version}_x64-setup.exe`, randomBytes(2048)],
     'windows-x86_64-msi': [`Neo Meta Harness_${version}_x64_en-US.msi`, randomBytes(2048)],
     'darwin-aarch64-app': ['Neo Meta Harness.app.tar.gz', appTarGz(version)],
-    'linux-x86_64-appimage': [`neo-meta-harness_${version}_amd64.AppImage`, randomBytes(2048)],
-    'linux-x86_64-deb': [`neo-meta-harness_${version}_amd64.deb`, randomBytes(2048)],
+    'linux-x86_64-appimage': [`Neo Meta Harness_${version}_amd64.AppImage`, randomBytes(2048)],
+    'linux-x86_64-deb': [`Neo Meta Harness_${version}_amd64.deb`, randomBytes(2048)],
   };
   return Object.entries(files).map(([platform, [name, data]]) => ({ platform, file: signedArtifact(dir, name, data) }));
 }
@@ -141,7 +141,7 @@ test('release-manifest: builds latest.json from verified, signed bundles', async
     assert.deepEqual(manifest.platforms['windows-x86_64'], manifest.platforms['windows-x86_64-nsis'], 'plain key prefers NSIS');
     // P1-11: deb installs request linux-<arch>-deb, AppImage installs linux-<arch>-appimage. Both are signed entries.
     const deb = manifest.platforms['linux-x86_64-deb'];
-    assert.equal(deb.url, 'https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v1.0.0/neo-meta-harness_1.0.0_amd64.deb');
+    assert.equal(deb.url, 'https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v1.0.0/Neo.Meta.Harness_1.0.0_amd64.deb');
     assert.equal(deb.signature, readFileSync(`${artifacts[4].file}.sig`, 'utf8').trim(), 'deb signature is its own .sig');
     assert.notEqual(deb.url, manifest.platforms['linux-x86_64-appimage'].url);
     assert.deepEqual(manifest.platforms['linux-x86_64'], manifest.platforms['linux-x86_64-appimage'], 'plain key prefers the AppImage');
@@ -156,8 +156,8 @@ test('release-manifest: builds latest.json from verified, signed bundles', async
     const written = writeRelease({ outDir: out, manifest, assets });
     assert.deepEqual(JSON.parse(readFileSync(written, 'utf8')), manifest);
     assert.deepEqual(readdirSync(out).sort(), [
-      'Neo.Meta.Harness.app.tar.gz', 'Neo.Meta.Harness_1.0.0_x64-setup.exe', 'Neo.Meta.Harness_1.0.0_x64_en-US.msi',
-      'latest.json', 'neo-meta-harness_1.0.0_amd64.AppImage', 'neo-meta-harness_1.0.0_amd64.deb',
+      'Neo.Meta.Harness.app.tar.gz', 'Neo.Meta.Harness_1.0.0_amd64.AppImage', 'Neo.Meta.Harness_1.0.0_amd64.deb',
+      'Neo.Meta.Harness_1.0.0_x64-setup.exe', 'Neo.Meta.Harness_1.0.0_x64_en-US.msi', 'latest.json',
     ], 'assets are staged under the names GitHub serves');
     assert.throws(() => writeRelease({ outDir: out, manifest, assets }), /not empty/, 'never mixes into an old output');
     assert.equal(githubAssetName('Neo Meta Harness_1.0.0_x64-setup.exe'), 'Neo.Meta.Harness_1.0.0_x64-setup.exe');
@@ -210,8 +210,11 @@ test('release-manifest: fails closed on bad inputs', async () => {
     await rejects({ version: '1.0.0-rc.1' }, /without a pre-release suffix/, 'pre-releases are never published');
     const stale = signedArtifact(dir, 'Neo Meta Harness_0.9.0_x64-setup.exe', randomBytes(512));
     await rejects({ artifacts: [{ platform: 'windows-x86_64-nsis', file: stale }] }, /built for 0\.9\.0, not 1\.0\.0/, 'stale bundle (name)');
-    const unversioned = signedArtifact(dir, 'Neo Meta Harness-setup.exe', randomBytes(512));
+    const unversioned = signedArtifact(dir, 'Neo Meta Harness_x64-setup.exe', randomBytes(512));
     await rejects({ artifacts: [{ platform: 'windows-x86_64-nsis', file: unversioned }] }, /no version in its file name/, 'version required in name');
+    const crateNamed = signedArtifact(dir, 'neo-meta-harness_1.0.0_amd64.AppImage', randomBytes(512));
+    await rejects({ artifacts: [{ platform: 'linux-x86_64-appimage', file: crateNamed }] },
+      /not named after productName "Neo Meta Harness"/, 'Linux bundles are named after productName, not the crate');
     const oldMac = signedArtifact(join(dir, 'old'), 'Neo Meta Harness.app.tar.gz', appTarGz('0.9.0'));
     await rejects({ artifacts: [{ platform: 'darwin-aarch64-app', file: oldMac }] },
       /darwin-aarch64-app: Neo Meta Harness\.app\.tar\.gz was built for 0\.9\.0, not 1\.0\.0/, 'validly signed old .app.tar.gz');
@@ -256,7 +259,7 @@ test('release-manifest: fails closed on bad inputs', async () => {
   try {
     await assert.rejects(buildManifest({ root: lockDrift, version: '1.0.0', artifacts: fakeBundles(lockDrift) }), /Cargo\.lock: 0\.1\.0/);
   } finally { rmSync(lockDrift, { recursive: true, force: true }); }
-  console.log('P7-11_MANIFEST_FAIL_CLOSED PASS tampered bytes/comment, foreign file/key, placeholder key, stale name and Info.plist, URLs, platforms, notes, key material');
+  console.log('P7-11_MANIFEST_FAIL_CLOSED PASS tampered bytes/comment, foreign file/key, placeholder key, stale name and Info.plist, productName file names, URLs, platforms, notes, key material');
 });
 
 test('release-manifest CLI: writes the release directory; no notes or key file options', () => {
