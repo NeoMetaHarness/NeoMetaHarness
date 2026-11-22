@@ -215,9 +215,9 @@
     },
     "P1-11": {
       "title": "Desktop auto-updater (Tauri updater): real signing key and update flow",
-      "status": "in_progress",
-      "owner": "gemini",
-      "code_check_2026_11_21": "Code ahead of readiness: work/gemini-p111 is 2 commits ahead of main (review fixes on signing key override + IPC checks), unmerged. Updater plumbing already on main (src-tauri/src/lib.rs check_for_updates; tauri.conf.json pubkey still a placeholder)."
+      "status": "done",
+      "owner": "gemini, opus",
+      "evidence": "PM review 2026-11-22: review/p111 (2db91fa) rebased onto main ce24225 as 3daba4c, content identical. 7 re-check rounds converged on: production feed pinned to the NeoMetaHarness/NeoMetaHarness releases latest.json and GitHub asset hosts; stable-only comparator; single Rust update state with generation counter; install validates rendered {generation, version}; single-flight checks, RAII busy guard, 30 s check / 15 min download deadlines; gateway stopped in on_before_exit; Linux deb + AppImage targets; non-fatal launcher shortcut. Real owner public key checked in to apps/neo-app/src-tauri/tauri.conf.json (key ID CD4A392114308502; private key stays with the owner); build.rs + installer-check enforce it, placeholder fails closed. test:p1-11 PASS x2, cargo test, neo-app tsc, test:p1-14, gateway, toggle, check, secret scan OK; full regression ok=69 fail=0. Accepted limitation: installer-check composes --config patches slightly differently from tauri-cli, failing closed only."
     },
     "P1-12": {
       "title": "Perf budgets wired into neo check",
