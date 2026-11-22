@@ -261,6 +261,45 @@ try {
   }));
   const migrated = new XSearchService(concurrentSettings, persistentClient, () => now, migratedFile);
   await assert.rejects(migrated.search({ query: 'legacy quota remains' }, alice), /user minute/);
+  // Older JSON generations kept one counter per user even with multiple
+  // workspaces. All workspaces the authenticated user accesses inherit that
+  // usage, including workspaces not yet represented in the legacy snapshot.
+  const multiFile = join(home, 'multi-workspace-legacy.sqlite');
+  const multiJson = multiFile.replace(/\.sqlite$/, '.json');
+  const multiMinute = Math.floor(now / 60_000);
+  const multiDay = Math.floor(now / 86_400_000);
+  const multiSnapshot = (count: number) => JSON.stringify({
+    day: multiDay,
+    users: [[alice.userId, { minute: multiMinute, minuteCount: count, dayCount: count }]],
+    workspaces: [
+      [alice.workspaceId, { minute: multiMinute, minuteCount: count, dayCount: count }],
+      [aliceElsewhere.workspaceId, { minute: multiMinute, minuteCount: 0, dayCount: 0 }],
+    ],
+  });
+  await writeFile(multiJson, multiSnapshot(2));
+  const multiSettings = { ...persistentSettings, requestsPerMinutePerUser: 3,
+    requestsPerMinutePerWorkspace: 10, requestsPerDayPerUser: 10 };
+  const multi = new XSearchService(multiSettings, persistentClient, () => now, multiFile);
+  const thirdWorkspace = { userId: alice.userId, workspaceId: 'team-3' };
+  await multi.search({ query: 'workspace A inherits usage' }, alice);
+  await multi.search({ query: 'workspace B inherits usage' }, aliceElsewhere);
+  await multi.search({ query: 'new workspace inherits usage' }, thirdWorkspace);
+  for (const requester of [alice, aliceElsewhere, thirdWorkspace]) {
+    await assert.rejects(multi.search({ query: 'legacy budget exhausted' }, requester), /user minute/);
+  }
+  await writeFile(multiJson, multiSnapshot(3));
+  await assert.rejects(multi.search({ query: 'late old writer charge' }, alice), /user minute/);
+  const multiDb = new DatabaseSync(multiFile);
+  const stateRow = multiDb.prepare('SELECT value FROM quota_state WHERE id = 1').get() as { value: string };
+  const multiState = JSON.parse(stateRow.value);
+  for (const requester of [alice, aliceElsewhere, thirdWorkspace]) {
+    assert.equal(multiState.users.find(([id]: [string]) =>
+      id === JSON.stringify([requester.workspaceId, requester.userId]))[1].minuteCount, 4);
+  }
+  multiDb.close();
+  const multiRestart = new XSearchService(multiSettings, persistentClient, () => now, multiFile);
+  await assert.rejects(multiRestart.search({ query: 'migration remains limited after restart' }, aliceElsewhere), /user minute/);
+
   // A staged SQLite generation can charge while an older, still-draining
   // generation continues writing the legacy JSON store after the import.
   const lateFile = join(home, 'late-legacy-quotas.sqlite');

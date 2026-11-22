@@ -40,6 +40,15 @@ interface QuotaSnapshot {
   legacy?: QuotaSnapshot;
 }
 
+function scopedUserFromCounterKey(key: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    if (Array.isArray(parsed) && parsed.length === 2
+      && parsed.every(value => typeof value === 'string')) return parsed[1];
+  } catch { /* Legacy JSON quota user IDs are unscoped. */ }
+  return undefined;
+}
+
 class SearchRateLimitError extends Error {
   readonly code = 'X_SEARCH_RATE_LIMIT';
 }
@@ -164,11 +173,7 @@ export class XSearchService implements NeoSearchService {
         if (snapshot.workspaces.length !== 1) return;
         const workspaceId = snapshot.workspaces[0][0];
         snapshot.users = snapshot.users.map(([id, counter]) => {
-          try {
-            const scoped = JSON.parse(id);
-            if (Array.isArray(scoped) && scoped.length === 2
-              && scoped.every(part => typeof part === 'string')) return [id, counter];
-          } catch {}
+          if (scopedUserFromCounterKey(id) !== undefined) return [id, counter];
           return [JSON.stringify([workspaceId, id]), counter];
         });
       };
@@ -226,10 +231,18 @@ export class XSearchService implements NeoSearchService {
         const previous = new Map(seen);
         for (const [id, old] of entries) {
           const last = previous.get(id);
-          const count = this.counterFor(current, id, minute);
-          count.dayCount += Math.max(0, old.dayCount - (last?.dayCount ?? 0));
-          if (old.minute === minute) {
-            count.minuteCount += Math.max(0, old.minuteCount - (last?.minute === minute ? last.minuteCount : 0));
+          // Legacy writers aggregate a member's usage across workspaces. Apply
+          // each new charge to every already-seen workspace for that member.
+          // Workspaces first seen later inherit the aggregate in chargeCurrent.
+          const keys = current === this.userCounters && scopedUserFromCounterKey(id) === undefined
+            ? [id, ...[...current.keys()].filter(key => scopedUserFromCounterKey(key) === id)]
+            : [id];
+          for (const key of keys) {
+            const count = this.counterFor(current, key, minute);
+            count.dayCount += Math.max(0, old.dayCount - (last?.dayCount ?? 0));
+            if (old.minute === minute) {
+              count.minuteCount += Math.max(0, old.minuteCount - (last?.minute === minute ? last.minuteCount : 0));
+            }
           }
         }
       };
@@ -323,7 +336,14 @@ export class XSearchService implements NeoSearchService {
       this.workspaceCounters.clear();
       this.counterDay = day;
     }
-    const user = this.counterFor(this.userCounters, JSON.stringify([requester.workspaceId, requester.userId]), minute);
+    const userKey = JSON.stringify([requester.workspaceId, requester.userId]);
+    const legacyUser = this.userCounters.get(requester.userId);
+    if (!this.userCounters.has(userKey) && legacyUser) {
+      // An unscoped legacy counter cannot identify which workspaces paid for
+      // the calls. Conservatively charge every workspace this member accesses.
+      this.userCounters.set(userKey, { ...legacyUser });
+    }
+    const user = this.counterFor(this.userCounters, userKey, minute);
     const workspace = this.counterFor(this.workspaceCounters, requester.workspaceId, minute);
     const checks = [
       [user.minuteCount, quota(settings.requestsPerMinutePerUser, 5, 60), 'user minute'],
