@@ -178,9 +178,10 @@ try {
   await metered.search({ query: 'one' }, alice);
   await metered.search({ query: 'two' }, alice);
   await assert.rejects(metered.search({ query: 'three' }, alice), /user minute/);
-  await assert.rejects(metered.search({ query: 'same user other workspace' }, {
-    userId: 'alice', workspaceId: 'team-2',
-  }), /user minute/);
+  const aliceElsewhere = { userId: 'alice', workspaceId: 'team-2' };
+  await metered.search({ query: 'first in other workspace' }, aliceElsewhere);
+  await metered.search({ query: 'second in other workspace' }, aliceElsewhere);
+  await assert.rejects(metered.search({ query: 'other workspace user limit' }, aliceElsewhere), /user minute/);
   await metered.search({ query: 'bob' }, bob);
   await assert.rejects(metered.search({ query: 'workspace full' }, bob), /workspace minute/);
   now += 60_000;
@@ -188,10 +189,10 @@ try {
   await assert.rejects(metered.search({ query: 'alice daily limit' }, alice), /user day/);
   await metered.search({ query: 'bob again' }, bob);
   await assert.rejects(metered.search({ query: 'workspace daily limit' }, bob), /workspace day/);
-  assert.equal(meteredRequests, 5);
+  assert.equal(meteredRequests, 7);
   now += 86_400_000;
   await metered.search({ query: 'new day' }, alice);
-  assert.equal(meteredRequests, 6);
+  assert.equal(meteredRequests, 8);
   const quotaFile = join(home, 'persisted-search-quotas.sqlite');
   const persistentSettings = {
     apiKey, requestsPerMinutePerUser: 2, requestsPerMinutePerWorkspace: 3,
@@ -227,7 +228,7 @@ try {
   const upgradeRow = upgradeDb.prepare('SELECT value FROM quota_state WHERE id = 1').get() as { value: string };
   const upgradeState = JSON.parse(upgradeRow.value);
   upgradeDb.close();
-  assert.equal(upgradeState.users.find(([id]: [string]) => id === alice.userId)[1].minuteCount, 2);
+  assert.equal(upgradeState.users.find(([id]: [string]) => id === JSON.stringify([alice.workspaceId, alice.userId]))[1].minuteCount, 2);
 
   const concurrentFile = join(home, 'concurrent-search-quotas.sqlite');
   // Simulate a lock left by a crashed earlier generation. Two waiters must
@@ -284,6 +285,33 @@ try {
   migratedDb.close();
   await assert.rejects(nextGeneration.search({ query: 'legacy not double counted' }, alice), /user minute/);
 
+  // A failed SQLite update rolls back reconciliation. On retry the legacy
+  // delta must be applied exactly once, alongside that request's own charge.
+  const rollbackFile = join(home, 'rollback-search-quotas.sqlite');
+  const rollbackJson = rollbackFile.replace(/\.sqlite$/, '.json');
+  await writeFile(rollbackJson, oldSnapshot(1));
+  const rollbackService = new XSearchService({
+    ...persistentSettings, requestsPerMinutePerUser: 8, requestsPerMinutePerWorkspace: 8,
+    requestsPerDayPerUser: 8, requestsPerDayPerWorkspace: 8,
+  }, persistentClient, () => now, rollbackFile);
+  await rollbackService.search({ query: 'begin reconciliation' }, alice);
+  await writeFile(rollbackJson, oldSnapshot(2));
+  const rollbackDb = new DatabaseSync(rollbackFile);
+  const rollbackCount = () => {
+    const row = rollbackDb.prepare('SELECT value FROM quota_state WHERE id = 1').get() as { value: string };
+    const state = JSON.parse(row.value);
+    return state.users.find(([id]: [string]) => id === JSON.stringify([alice.workspaceId, alice.userId]))[1].dayCount;
+  };
+  rollbackDb.exec("CREATE TRIGGER fail_reconcile BEFORE UPDATE ON quota_state BEGIN SELECT RAISE(ABORT, 'forced rollback'); END");
+  await assert.rejects(rollbackService.search({ query: 'rollback reconciliation' }, alice), /forced rollback/);
+  assert.equal(rollbackCount(), 2);
+  rollbackDb.exec('DROP TRIGGER fail_reconcile');
+  await rollbackService.search({ query: 'reconcile after rollback' }, alice);
+  assert.equal(rollbackCount(), 4);
+  await rollbackService.search({ query: 'reconcile once only' }, alice);
+  assert.equal(rollbackCount(), 5);
+  rollbackDb.close();
+
   // An active write transaction must cause asynchronous retry. A scheduled
   // timer must run before we release it, proving the event loop stays live.
   const busyFile = join(home, 'busy-search-quotas.sqlite');
@@ -298,6 +326,33 @@ try {
   lockOwner.exec('COMMIT');
   lockOwner.close();
   await lockedRequest;
+
+  // A writer that holds SQLite's lock past the five-second deadline must
+  // refuse the request before it reaches the paid upstream or charges quota.
+  const timeoutFile = join(home, 'timeout-search-quotas.sqlite');
+  const timeoutOwner = new DatabaseSync(timeoutFile);
+  timeoutOwner.exec('CREATE TABLE quota_state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)');
+  timeoutOwner.exec('BEGIN IMMEDIATE');
+  let timeoutUpstreamCalls = 0;
+  const timeoutService = new XSearchService(persistentSettings, {
+    request: async () => {
+      timeoutUpstreamCalls++;
+      return new Response(JSON.stringify({ output_text: 'ok' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  }, () => now, timeoutFile);
+  await assert.rejects(timeoutService.search({ query: 'locked past deadline' }, alice), /quota store is busy/);
+  assert.equal(timeoutUpstreamCalls, 0);
+  assert.equal(timeoutOwner.prepare('SELECT value FROM quota_state WHERE id = 1').get(), undefined);
+  timeoutOwner.exec('COMMIT');
+  timeoutOwner.close();
+  await timeoutService.search({ query: 'after lock release' }, alice);
+  assert.equal(timeoutUpstreamCalls, 1);
+  const timeoutDb = new DatabaseSync(timeoutFile);
+  const timeoutRow = timeoutDb.prepare('SELECT value FROM quota_state WHERE id = 1').get() as { value: string };
+  assert.equal(JSON.parse(timeoutRow.value).users[0][1].dayCount, 1);
+  timeoutDb.close();
 
   now += 86_400_000;
   await persistent.search({ query: 'next day' }, alice);

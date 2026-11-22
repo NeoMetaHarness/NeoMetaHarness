@@ -158,6 +158,22 @@ export class XSearchService implements NeoSearchService {
       if (!valid(state) || (state.legacy && !valid(state.legacy))) {
         throw new Error('Invalid X Search quota state');
       }
+      // Old JSON writers used plain user IDs. A single-workspace snapshot can
+      // be attributed exactly; multi-workspace aggregate counts cannot.
+      const normalizeSingleWorkspace = (snapshot: QuotaSnapshot) => {
+        if (snapshot.workspaces.length !== 1) return;
+        const workspaceId = snapshot.workspaces[0][0];
+        snapshot.users = snapshot.users.map(([id, counter]) => {
+          try {
+            const scoped = JSON.parse(id);
+            if (Array.isArray(scoped) && scoped.length === 2
+              && scoped.every(part => typeof part === 'string')) return [id, counter];
+          } catch {}
+          return [JSON.stringify([workspaceId, id]), counter];
+        });
+      };
+      normalizeSingleWorkspace(state);
+      if (state.legacy) normalizeSingleWorkspace(state.legacy);
       return state;
     } catch (error) {
       throw new Error('X Search quota state is unreadable', { cause: error });
@@ -204,19 +220,7 @@ export class XSearchService implements NeoSearchService {
       this.workspaceCounters.clear();
       this.counterDay = day;
     }
-    if (snapshot.day === day && !this.legacyObserved) {
-      // Older SQLite rows lacked an import watermark. Adopt the JSON snapshot
-      // conservatively as a baseline instead of counting it twice.
-      const seed = (current: Map<string, QuotaCounter>, entries: [string, QuotaCounter][]) => {
-        for (const [id, old] of entries) {
-          const count = this.counterFor(current, id, minute);
-          count.dayCount = Math.max(count.dayCount, old.dayCount);
-          if (old.minute === minute) count.minuteCount = Math.max(count.minuteCount, old.minuteCount);
-        }
-      };
-      seed(this.userCounters, snapshot.users);
-      seed(this.workspaceCounters, snapshot.workspaces);
-    } else if (snapshot.day === day) {
+    if (snapshot.day === day) {
       const reconcile = (current: Map<string, QuotaCounter>, entries: [string, QuotaCounter][],
         seen: [string, QuotaCounter][]) => {
         const previous = new Map(seen);
@@ -319,7 +323,7 @@ export class XSearchService implements NeoSearchService {
       this.workspaceCounters.clear();
       this.counterDay = day;
     }
-    const user = this.counterFor(this.userCounters, requester.userId, minute);
+    const user = this.counterFor(this.userCounters, JSON.stringify([requester.workspaceId, requester.userId]), minute);
     const workspace = this.counterFor(this.workspaceCounters, requester.workspaceId, minute);
     const checks = [
       [user.minuteCount, quota(settings.requestsPerMinutePerUser, 5, 60), 'user minute'],
