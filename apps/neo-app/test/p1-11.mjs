@@ -136,6 +136,23 @@ const bomKey = '77u/dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1
 const malformedSurfaceKey = Buffer.from('this is a surface-valid base64 string that is not a minisign key at all').toString('base64');
 // Structurally malformed key: line 2 algorithm is 'XX' instead of 'Ed'
 const badAlgKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IHRlc3QKV0ZoVVJWTlVTMFZaTVZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEK';
+// Wrapped outer base64 (embedded newline in outer base64 string)
+const wrappedOuterKey = `${validReleaseKey.slice(0, 32)}\n${validReleaseKey.slice(32)}`;
+// Nonzero unused padding bits in outer base64 ('o=' replaced with 'p=')
+const unusedBitsOuterKey = `${validReleaseKey.slice(0, -4)}YQp=`;
+// Nonzero unused padding bits in inner base64 (line 2 ends with non-canonical padding)
+const unusedBitsInnerKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwPQo=';
+// Leading vertical tab (Rust is_ascii_whitespace excludes \v, so it is preserved and rejected as base64)
+const vtKey = `\x0b${validReleaseKey}`;
+
+// Key fixture with high-bit key ID: in ascii toString it would mask to TESTKEY1, but raw byte compare distinguishes it
+const highBitKeyBytes = Buffer.concat([
+  Buffer.from([0x45, 0x64]), // 'Ed'
+  Buffer.from([0xD4, 0xC5, 0xD3, 0xD4, 0xCB, 0xC5, 0xD9, 0xB1]), // 'TESTKEY1' with high bits set
+  Buffer.alloc(32, 0x5a), // 32 bytes pubkey
+]);
+const highBitMinisignFile = `untrusted comment: release public key\n${highBitKeyBytes.toString('base64')}\n`;
+const highBitKey = Buffer.from(highBitMinisignFile, 'utf8').toString('base64');
 
 // Verify that an empty pubkey fails installer-check
 assert.throws(
@@ -233,12 +250,63 @@ assert.throws(
   'installer-check must reject key with wrong algorithm ID'
 );
 
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: wrappedOuterKey } } },
+  }),
+  /invalid character in base64/i,
+  'installer-check must reject wrapped outer base64 key'
+);
+
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: unusedBitsOuterKey } } },
+  }),
+  /nonzero unused padding bits/i,
+  'installer-check must reject outer base64 key with nonzero unused padding bits'
+);
+
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: unusedBitsInnerKey } } },
+  }),
+  /nonzero unused padding bits/i,
+  'installer-check must reject inner base64 key with nonzero unused padding bits'
+);
+
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: vtKey } } },
+  }),
+  /invalid character in base64/i,
+  'installer-check must reject key with leading vertical tab'
+);
+
+// Verify high-bit key ID does NOT collide with TESTKEY1 when compared by raw bytes
+runInstallerCheck({
+  ignoreEnv: true,
+  configOverride: { plugins: { updater: { pubkey: highBitKey } } },
+});
+
 // Verify TAURI_ENV_CONFIG is rejected
 process.env.TAURI_ENV_CONFIG = JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } });
 assert.throws(
   () => runInstallerCheck(),
   /TAURI_ENV_CONFIG is not supported by Tauri/i,
   'installer-check must reject TAURI_ENV_CONFIG'
+);
+delete process.env.TAURI_ENV_CONFIG;
+
+// Verify explicitly empty TAURI_ENV_CONFIG is also rejected
+process.env.TAURI_ENV_CONFIG = '';
+assert.throws(
+  () => runInstallerCheck(),
+  /TAURI_ENV_CONFIG is not supported by Tauri/i,
+  'installer-check must reject explicitly empty TAURI_ENV_CONFIG'
 );
 delete process.env.TAURI_ENV_CONFIG;
 
@@ -307,153 +375,155 @@ console.log('Testing release build fail-closed validation in build.rs...');
 const cargoBin = join(process.env.USERPROFILE, '.cargo/bin/cargo.exe');
 const srcTauriDir = join(appDir, 'src-tauri');
 
+function assertCargoCheckFailsWith(env, expectedPattern, description, extraOpts = {}) {
+  try {
+    execFileSync(cargoBin, ['check', '--release'], {
+      cwd: srcTauriDir,
+      stdio: 'pipe',
+      env: { ...process.env, ...env },
+      ...extraOpts,
+    });
+    assert.fail(`Expected cargo check --release to fail for ${description}`);
+  } catch (err) {
+    const combined = `${err.message || ''}\n${err.stderr ? err.stderr.toString('utf8') : ''}\n${err.stdout ? err.stdout.toString('utf8') : ''}`;
+    assert.match(
+      combined,
+      expectedPattern,
+      `Expected cargo check to fail with specific error matching ${expectedPattern} for: ${description}. Got:\n${combined}`
+    );
+  }
+}
+
 // 1. Verify cargo check --release FAILS when TAURI_CONFIG has invalid/unresolvable JSON
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: 'invalid-non-json' },
-  }),
-  /failed to run custom build command|Release build failed closed|exit code/i,
-  'release cargo check must fail closed when TAURI_CONFIG is unresolvable JSON'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: 'invalid-non-json' },
+  /unresolvable updater configuration \(invalid JSON in TAURI_CONFIG\)/,
+  'invalid TAURI_CONFIG JSON'
 );
 
-// 1b. Verify cargo check --release FAILS when TAURI_ENV_CONFIG is set
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_ENV_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|TAURI_ENV_CONFIG is not supported|exit code/i,
-  'release cargo check must fail closed when TAURI_ENV_CONFIG is set'
+// 1b. Verify cargo check --release FAILS when TAURI_ENV_CONFIG is set (with value or empty)
+assertCargoCheckFailsWith(
+  { TAURI_ENV_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }) },
+  /TAURI_ENV_CONFIG is not supported by Tauri; use TAURI_CONFIG instead/,
+  'TAURI_ENV_CONFIG with value'
+);
+assertCargoCheckFailsWith(
+  { TAURI_ENV_CONFIG: '' },
+  /TAURI_ENV_CONFIG is not supported by Tauri; use TAURI_CONFIG instead/,
+  'empty TAURI_ENV_CONFIG'
 );
 
 // 2. Verify cargo check --release FAILS when config has missing/empty pubkey
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: '' } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|exit code/i,
-  'release cargo check must fail closed when updater pubkey is empty'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: '' } } }) },
+  /updater public key cannot be empty in a release build/,
+  'empty updater pubkey'
 );
 
 // 3. Verify cargo check --release FAILS with default placeholder key (no config override provided)
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: undefined, TAURI_ENV_CONFIG: undefined },
-  }),
-  /failed to run custom build command|Release build failed closed|exit code/i,
-  'release cargo check must fail closed when building with placeholder key'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: undefined, TAURI_ENV_CONFIG: undefined },
+  /placeholder updater public key REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY must not ship in a release build/,
+  'placeholder key'
 );
 
 // 3b. Verify cargo check --release FAILS when test key ID is used
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: testKey } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|test public key with ID 'TESTKEY1' must not ship|exit code/i,
-  'release cargo check must fail closed when test key ID is passed'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: testKey } } }) },
+  /test public key with ID 'TESTKEY1' must not ship in a release build/,
+  'test key ID TESTKEY1'
 );
 
 // 4. Verify cargo check --release FAILS when key is surface-valid base64 but structurally malformed
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: malformedSurfaceKey } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|exit code/i,
-  'release cargo check must fail closed when key lacks minisign structure'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: malformedSurfaceKey } } }) },
+  /minisign public key file must have exactly 2 lines/,
+  'surface-valid base64 lacking minisign structure'
 );
 
 // 5. Verify cargo check --release FAILS when key has wrong algorithm ID
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: badAlgKey } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|exit code/i,
-  'release cargo check must fail closed when key algorithm is not Ed'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: badAlgKey } } }) },
+  /minisign public key algorithm ID must be 'Ed'/,
+  'wrong algorithm ID'
 );
 
 // 5b. Verify cargo check --release FAILS when key has empty second line
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: emptyLine2Key } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|line 2 is empty|exit code/i,
-  'release cargo check must fail closed when key has empty second line'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: emptyLine2Key } } }) },
+  /minisign public key line 2 is empty/,
+  'empty second line'
 );
 
 // 5c. Verify cargo check --release FAILS when key has two trailing newlines
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: twoTrailingNewlinesKey } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|must have exactly 2 lines|exit code/i,
-  'release cargo check must fail closed when key has two trailing newlines'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: twoTrailingNewlinesKey } } }) },
+  /minisign public key file must have exactly 2 lines/,
+  'two trailing newlines'
 );
 
 // 5d. Verify cargo check --release FAILS when key is 32 bytes instead of 42 bytes
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: badLen32Key } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|must decode to exactly 42 bytes, got 32|exit code/i,
-  'release cargo check must fail closed when key is 32 bytes'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: badLen32Key } } }) },
+  /minisign public key must decode to exactly 42 bytes, got 32/,
+  '32-byte key'
 );
 
 // 5e. Verify cargo check --release FAILS when key has data after '='
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: dataAfterEqKey } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|invalid character after '='|exit code/i,
-  'release cargo check must fail closed when key has data after ='
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: dataAfterEqKey } } }) },
+  /invalid character after '='/,
+  'data after ='
 );
 
-// 5f. Verify cargo check --release FAILS when alternate platform config exists
-const alternateConf = join(srcTauriDir, 'tauri.windows.conf.json');
-try {
-  writeFileSync(alternateConf, '{}', 'utf8');
-  assert.throws(
-    () => execFileSync(cargoBin, ['check', '--release'], {
-      cwd: srcTauriDir,
-      stdio: 'pipe',
-      env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }) },
-    }),
-    /failed to run custom build command|Release build failed closed|alternate config file tauri.windows.conf.json exists|exit code/i,
-    'release cargo check must fail closed when alternate config file exists'
-  );
-} finally {
-  if (existsSync(alternateConf)) rmSync(alternateConf, { force: true });
+// 5f. Verify cargo check --release FAILS when outer base64 is wrapped
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: wrappedOuterKey } } }) },
+  /invalid character in base64/,
+  'wrapped outer base64'
+);
+
+// 5g. Verify cargo check --release FAILS when outer base64 has nonzero unused padding bits
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: unusedBitsOuterKey } } }) },
+  /nonzero unused padding bits/,
+  'outer base64 nonzero unused padding bits'
+);
+
+// 5h. Verify cargo check --release FAILS when inner base64 has nonzero unused padding bits
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: unusedBitsInnerKey } } }) },
+  /nonzero unused padding bits/,
+  'inner base64 nonzero unused padding bits'
+);
+
+// 5i. Verify cargo check --release FAILS when key has leading vertical tab
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: vtKey } } }) },
+  /invalid character in base64/,
+  'leading vertical tab'
+);
+
+// 5j. Verify cargo check --release FAILS when alternate platform configs exist (covering json, json5, and toml variants)
+for (const altFile of ['tauri.windows.conf.json', 'tauri.windows.conf.json5', 'Tauri.windows.toml', 'tauri.linux.conf.json5', 'Tauri.toml']) {
+  const altPath = join(srcTauriDir, altFile);
+  try {
+    writeFileSync(altPath, '{}', 'utf8');
+    assertCargoCheckFailsWith(
+      { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }) },
+      new RegExp(`alternate config file ${altFile.replace(/\./g, '\\\.')} exists but is not supported for release validation`),
+      `alternate config ${altFile}`
+    );
+  } finally {
+    if (existsSync(altPath)) rmSync(altPath, { force: true });
+  }
 }
 
 // 6. Verify cargo check --release FAILS when TAURI_CONFIG only sets unrelated plugin (updater retained, base placeholder rejected)
-assert.throws(
-  () => execFileSync(cargoBin, ['check', '--release'], {
-    cwd: srcTauriDir,
-    stdio: 'pipe',
-    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true } } }) },
-  }),
-  /failed to run custom build command|Release build failed closed|exit code/i,
-  'release cargo check must fail closed when unrelated plugin is overridden without replacing placeholder pubkey'
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true } } }) },
+  /placeholder updater public key REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY must not ship in a release build/,
+  'unrelated plugin override without pubkey'
 );
 
 // 7. Verify cargo check --release SUCCEEDS when unrelated plugin AND valid release key are supplied
@@ -485,6 +555,26 @@ execFileSync(cargoBin, ['check', '--release'], {
     TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }),
   },
 });
+
+// 10. Verify warm build guards: build.rs reruns when TAURI_ENV_CONFIG changes or alternate config is added
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }), TAURI_ENV_CONFIG: '' },
+  /TAURI_ENV_CONFIG is not supported by Tauri; use TAURI_CONFIG instead/,
+  'warm build rerun with TAURI_ENV_CONFIG'
+);
+
+const warmAltPath = join(srcTauriDir, 'tauri.macos.conf.json5');
+try {
+  writeFileSync(warmAltPath, '{}', 'utf8');
+  assertCargoCheckFailsWith(
+    { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }) },
+    /alternate config file tauri.macos.conf.json5 exists but is not supported for release validation/,
+    'warm build rerun with new alternate config file'
+  );
+} finally {
+  if (existsSync(warmAltPath)) rmSync(warmAltPath, { force: true });
+}
+
 console.log('PASS build.rs release fail-closed verification (unresolvable config, placeholder, malformed keys, alternate configs, and unrelated plugin override verified; valid release config passes)');
 console.log('Building desktop binary with Cargo (debug)...');
 execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['build'], {

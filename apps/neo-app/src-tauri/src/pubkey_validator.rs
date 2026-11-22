@@ -12,40 +12,45 @@ fn trim_ascii(s: &str) -> &str {
 }
 
 pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    let mut clean: Vec<u8> = Vec::new();
-    for &b in input.as_bytes() {
-        if b == b'\r' || b == b'\n' {
-            continue;
-        }
-        if b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=' {
-            clean.push(b);
-        } else {
-            return Err(format!("invalid character in base64: {}", b as char));
+    let bytes = input.as_bytes();
+    if bytes.is_empty() {
+        return Err("invalid base64 length".to_string());
+    }
+
+    // Strict standard base64: no line wrapping, no whitespace, only [A-Za-z0-9+/=]
+    for &b in bytes {
+        if !b.is_ascii_alphanumeric() && b != b'+' && b != b'/' && b != b'=' {
+            return Err(format!("invalid character in base64: {:?}", b as char));
         }
     }
-    if clean.is_empty() || clean.len() % 4 != 0 {
+
+    if bytes.len() % 4 != 0 {
         return Err("invalid base64 length".to_string());
     }
 
     // Reject data after '=' and check padding positions
-    let first_eq = clean.iter().position(|&b| b == b'=');
-    if let Some(pos) = first_eq {
-        if pos < clean.len() - 2 {
+    let first_eq = bytes.iter().position(|&b| b == b'=');
+    let pad_count = if let Some(pos) = first_eq {
+        if pos < bytes.len() - 2 {
             return Err("invalid padding in base64: '=' can only appear in the last two bytes".to_string());
         }
-        for (idx, &b) in clean.iter().enumerate().skip(pos) {
+        for (idx, &b) in bytes.iter().enumerate().skip(pos) {
             if b != b'=' {
                 return Err(format!("invalid character after '=' at index {}: {}", idx, b as char));
             }
         }
-    }
+        bytes.len() - pos
+    } else {
+        0
+    };
 
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity((bytes.len() / 4) * 3);
     let mut i = 0;
-    while i < clean.len() {
-        let chunk = &clean[i..i + 4];
+    while i < bytes.len() {
+        let is_last_chunk = i == bytes.len() - 4;
+        let chunk_pad = if is_last_chunk { pad_count } else { 0 };
+        let chunk = &bytes[i..i + 4];
         let mut vals = [0u32; 4];
-        let mut pad_count = 0;
         for (j, &c) in chunk.iter().enumerate() {
             vals[j] = match c {
                 b'A'..=b'Z' => (c - b'A') as u32,
@@ -54,18 +59,32 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
                 b'+' => 62,
                 b'/' => 63,
                 b'=' => {
-                    pad_count += 1;
+                    if !is_last_chunk || j < 4 - chunk_pad {
+                        return Err(format!("unexpected padding '=' at index {}", i + j));
+                    }
                     0
                 }
                 _ => unreachable!(),
             };
         }
+
+        // Canonical padding: zero unused padding bits
+        if chunk_pad == 1 {
+            if (vals[2] & 0x03) != 0 {
+                return Err("invalid base64 padding: nonzero unused padding bits".to_string());
+            }
+        } else if chunk_pad == 2 {
+            if (vals[1] & 0x0F) != 0 {
+                return Err("invalid base64 padding: nonzero unused padding bits".to_string());
+            }
+        }
+
         let triple = (vals[0] << 18) | (vals[1] << 12) | (vals[2] << 6) | vals[3];
         out.push(((triple >> 16) & 0xff) as u8);
-        if pad_count < 2 {
+        if chunk_pad < 2 {
             out.push(((triple >> 8) & 0xff) as u8);
         }
-        if pad_count < 1 {
+        if chunk_pad < 1 {
             out.push((triple & 0xff) as u8);
         }
         i += 4;

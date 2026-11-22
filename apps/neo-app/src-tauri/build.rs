@@ -1,5 +1,34 @@
 include!("src/pubkey_validator.rs");
 
+const ALT_CONFIGS: &[&str] = &[
+    // JSON platform variants
+    "tauri.windows.conf.json",
+    "tauri.macos.conf.json",
+    "tauri.linux.conf.json",
+    "tauri.android.conf.json",
+    "tauri.ios.conf.json",
+    // JSON5 base and platform variants
+    "tauri.conf.json5",
+    "tauri.windows.conf.json5",
+    "tauri.macos.conf.json5",
+    "tauri.linux.conf.json5",
+    "tauri.android.conf.json5",
+    "tauri.ios.conf.json5",
+    // TOML base and platform variants (Tauri.<platform>.toml and tauri.<platform>.toml)
+    "Tauri.toml",
+    "Tauri.windows.toml",
+    "Tauri.macos.toml",
+    "Tauri.linux.toml",
+    "Tauri.android.toml",
+    "Tauri.ios.toml",
+    "tauri.toml",
+    "tauri.windows.toml",
+    "tauri.macos.toml",
+    "tauri.linux.toml",
+    "tauri.android.toml",
+    "tauri.ios.toml",
+];
+
 fn json_merge_patch(target: &mut serde_json::Value, patch: &serde_json::Value) {
     if let serde_json::Value::Object(patch_obj) = patch {
         if !target.is_object() {
@@ -25,14 +54,7 @@ fn validate_release_config() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
 
     // Check for unsupported alternate config files that would bypass or conflict with tauri.conf.json
-    let alt_configs = [
-        "tauri.windows.conf.json",
-        "tauri.macos.conf.json",
-        "tauri.linux.conf.json",
-        "tauri.conf.json5",
-        "Tauri.toml",
-    ];
-    for alt in &alt_configs {
+    for alt in ALT_CONFIGS {
         let p = std::path::Path::new(&manifest_dir).join(alt);
         if p.exists() {
             panic!(
@@ -108,6 +130,16 @@ fn validate_release_config() {
 }
 
 fn main() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+
+    println!("cargo:rerun-if-env-changed=TAURI_ENV_CONFIG");
+    println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
+    println!("cargo:rerun-if-changed={}", manifest_dir);
+    for alt in ALT_CONFIGS {
+        let p = std::path::Path::new(&manifest_dir).join(alt);
+        println!("cargo:rerun-if-changed={}", p.display());
+    }
+
     let profile = std::env::var("PROFILE").unwrap_or_default();
     if profile == "release" {
         validate_release_config();

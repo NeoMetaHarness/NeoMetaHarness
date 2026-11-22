@@ -24,7 +24,10 @@ export function jsonMergePatch(target, patch) {
 export const deepMerge = jsonMergePatch;
 
 function isAsciiWhitespace(code) {
-  return code === 0x20 || (code >= 0x09 && code <= 0x0D);
+  // Matches Rust's u8::is_ascii_whitespace():
+  // 0x20 (SPACE), 0x09 (TAB), 0x0A (LF), 0x0C (FF), 0x0D (CR)
+  // Excludes 0x0B (Vertical Tab / '\v')
+  return code === 0x20 || code === 0x09 || code === 0x0A || code === 0x0C || code === 0x0D;
 }
 
 export function trimAscii(str) {
@@ -37,45 +40,94 @@ export function trimAscii(str) {
 }
 
 export function base64Decode(input) {
-  let clean = '';
+  if (typeof input !== 'string' || input.length === 0) {
+    throw new Error('invalid base64 length');
+  }
+
+  // Strict standard base64: no line wrapping, no whitespace, only [A-Za-z0-9+/=]
   for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    if (ch === '\r' || ch === '\n') {
-      continue;
-    }
-    const code = ch.charCodeAt(0);
-    if (
+    const code = input.charCodeAt(i);
+    const valid =
       (code >= 65 && code <= 90) || // A-Z
       (code >= 97 && code <= 122) || // a-z
       (code >= 48 && code <= 57) || // 0-9
       code === 43 || // +
       code === 47 || // /
-      code === 61 // =
-    ) {
-      clean += ch;
-    } else {
-      throw new Error(`invalid character in base64: ${ch}`);
+      code === 61; // =
+    if (!valid) {
+      throw new Error(`invalid character in base64: ${input[i]}`);
     }
   }
 
-  if (clean.length === 0 || clean.length % 4 !== 0) {
+  if (input.length % 4 !== 0) {
     throw new Error('invalid base64 length');
   }
 
   // Reject data after '=' and check padding positions
-  const firstEq = clean.indexOf('=');
+  const firstEq = input.indexOf('=');
+  let padCount = 0;
   if (firstEq !== -1) {
-    if (firstEq < clean.length - 2) {
+    if (firstEq < input.length - 2) {
       throw new Error("invalid padding in base64: '=' can only appear in the last two bytes");
     }
-    for (let i = firstEq; i < clean.length; i++) {
-      if (clean[i] !== '=') {
-        throw new Error(`invalid character after '=' at index ${i}: ${clean[i]}`);
+    for (let i = firstEq; i < input.length; i++) {
+      if (input[i] !== '=') {
+        throw new Error(`invalid character after '=' at index ${i}: ${input[i]}`);
       }
+      padCount++;
     }
   }
 
-  return Buffer.from(clean, 'base64');
+  const out = [];
+  for (let i = 0; i < input.length; i += 4) {
+    const isLastChunk = (i === input.length - 4);
+    const chunkPad = isLastChunk ? padCount : 0;
+    const vals = new Uint32Array(4);
+    for (let j = 0; j < 4; j++) {
+      const ch = input[i + j];
+      const code = ch.charCodeAt(0);
+      if (code >= 65 && code <= 90) {
+        vals[j] = code - 65;
+      } else if (code >= 97 && code <= 122) {
+        vals[j] = code - 97 + 26;
+      } else if (code >= 48 && code <= 57) {
+        vals[j] = code - 48 + 52;
+      } else if (code === 43) {
+        vals[j] = 62;
+      } else if (code === 47) {
+        vals[j] = 63;
+      } else if (code === 61) {
+        if (!isLastChunk || (j < 4 - chunkPad)) {
+          throw new Error(`unexpected padding '=' at index ${i + j}`);
+        }
+        vals[j] = 0;
+      } else {
+        throw new Error(`invalid character in base64: ${ch}`);
+      }
+    }
+
+    // Canonical padding: zero unused padding bits
+    if (chunkPad === 1) {
+      if ((vals[2] & 0x03) !== 0) {
+        throw new Error('invalid base64 padding: nonzero unused padding bits');
+      }
+    } else if (chunkPad === 2) {
+      if ((vals[1] & 0x0F) !== 0) {
+        throw new Error('invalid base64 padding: nonzero unused padding bits');
+      }
+    }
+
+    const triple = (vals[0] << 18) | (vals[1] << 12) | (vals[2] << 6) | vals[3];
+    out.push((triple >> 16) & 0xff);
+    if (chunkPad < 2) {
+      out.push((triple >> 8) & 0xff);
+    }
+    if (chunkPad < 1) {
+      out.push(triple & 0xff);
+    }
+  }
+
+  return Buffer.from(out);
 }
 
 export function validateMinisignPublicKey(pubkey) {
@@ -141,8 +193,9 @@ export function validateMinisignPublicKey(pubkey) {
     throw new Error('Minisign public key algorithm ID must be "Ed", got 0x' + rawKey.subarray(0, 2).toString('hex'));
   }
 
-  const keyId = rawKey.subarray(2, 10).toString('ascii');
-  if (keyId === 'TESTKEY1' || line1 === 'untrusted comment: NEO TEST KEY - DO NOT SHIP') {
+  const keyIdBytes = rawKey.subarray(2, 10);
+  const isTestKeyId = keyIdBytes.equals(Buffer.from('TESTKEY1', 'utf8'));
+  if (isTestKeyId || line1 === 'untrusted comment: NEO TEST KEY - DO NOT SHIP') {
     throw new Error("test public key with ID 'TESTKEY1' must not ship in a release build! Provide owner key via --config or TAURI_CONFIG.");
   }
 
@@ -191,7 +244,7 @@ export function runInstallerCheck(options = {}) {
   // Hierarchy: base config -> tauri.bundle.conf.json -> env (TAURI_CONFIG) -> CLI args (--config) -> options overrides
   let envConfig = {};
   if (!options.ignoreEnv) {
-    if (process.env.TAURI_ENV_CONFIG) {
+    if ('TAURI_ENV_CONFIG' in process.env || process.env.TAURI_ENV_CONFIG !== undefined) {
       throw new Error('Release installer packaging failed closed: TAURI_ENV_CONFIG is not supported by Tauri; use TAURI_CONFIG instead.');
     }
     const rawEnv = options.envConfig ?? process.env.TAURI_CONFIG;
@@ -247,7 +300,7 @@ export function runInstallerCheck(options = {}) {
 
   const updater = effectiveConfig.plugins?.updater;
   assert.ok(updater, 'updater config is present');
-  const pubkey = (updater.pubkey ?? '').trim();
+  const pubkey = updater.pubkey ?? '';
 
   // Enforce check inside release build path with no bypass on effective merged config
   validateMinisignPublicKey(pubkey);

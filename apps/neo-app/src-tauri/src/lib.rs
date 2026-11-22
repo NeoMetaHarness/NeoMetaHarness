@@ -648,6 +648,38 @@ mod tests {
         let err = validate_minisign_pubkey(bom_key).unwrap_err();
         assert!(err.contains("first line must start with 'untrusted comment:'"));
     }
+
+    #[test]
+    fn test_validate_minisign_pubkey_wrapped_outer_rejected() {
+        let valid_key = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQo=";
+        let wrapped = format!("{}\n{}", &valid_key[..32], &valid_key[32..]);
+        let err = validate_minisign_pubkey(&wrapped).unwrap_err();
+        assert!(err.contains("invalid character in base64"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_unused_bits_outer_rejected() {
+        let valid_key = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQo=";
+        let unused_bits = format!("{}YQp=", &valid_key[..valid_key.len() - 4]);
+        let err = validate_minisign_pubkey(&unused_bits).unwrap_err();
+        assert!(err.contains("nonzero unused padding bits"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_unused_bits_inner_rejected() {
+        let inner_unused_bits = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwPQo=";
+        let err = validate_minisign_pubkey(inner_unused_bits).unwrap_err();
+        assert!(err.contains("nonzero unused padding bits"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_vertical_tab_rejected() {
+        let valid_key = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQo=";
+        let vt_key = format!("\x0b{}", valid_key);
+        let err = validate_minisign_pubkey(&vt_key).unwrap_err();
+        assert!(err.contains("invalid character in base64"));
+    }
+
     #[test]
     fn test_validate_minisign_pubkey_placeholder() {
         assert!(validate_minisign_pubkey("REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY").is_err());
