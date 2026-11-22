@@ -810,6 +810,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         authorizeInboxAction('inbox.retry', context);
         const { item } = await inboxItemForAction('inbox.retry', input.id, context);
         assertAppInboxDecider(item, context);
+        if (item.appAction) throw new ORPCError('BAD_REQUEST', { message: 'Connected-app actions cannot be retried; request the action again' });
         return visibleAppInboxItem(await invokeInbox('retry', input) as InboxItem, context);
       }),
       upstream: {

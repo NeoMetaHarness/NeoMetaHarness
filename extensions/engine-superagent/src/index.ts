@@ -782,6 +782,7 @@ class SuperagentService {
   retry(input: { id: string }): InboxItem {
     const item = this.items.get(input.id);
     if (!item || item.status !== 'failed') throw new Error('Only failed tickets can be retried');
+    if (item.appAction) throw new Error('Connected-app actions cannot be retried; request the action again');
     return this.resume(item, item.text);
   }
   /**

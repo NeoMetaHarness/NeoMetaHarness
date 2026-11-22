@@ -112,6 +112,14 @@ try {
   await member.inbox.accept({ id: pending.inboxId }); assert.equal(executes(), count + 3);
   await owner.inbox.acceptMode.set({ mode: 'act-with-approval' }); pending = await member.apps.run(request) as any; assert.equal(pending.status, 'approval'); await member.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'Approve read-only action' });
   const tokens: string[] = [];
+  pending = await member.apps.run(request) as any;
+  fake.setFail(true);
+  await assert.rejects(member.inbox.approval.decide({ id: pending.inboxId, decision: 'approve', reason: 'Try an unavailable provider' }));
+  assert.equal((await member.inbox.list()).find(i => i.id === pending.inboxId)?.status, 'failed');
+  const callsAfterFailure = executes();
+  await assert.rejects(member.inbox.retry({ id: pending.inboxId }), /request the action again/i);
+  assert.equal(executes(), callsAfterFailure, 'Retry cannot execute a failed connected-app action');
+  fake.setFail(false);
   await owner.inbox.acceptMode.set({ mode: 'act' });
   for (const engine of ['hermes','dsh','superagent']) {
     await member.apps.grant({ provider: 'composio', accountId: account.id, engine: engine as any, profile: `test-${engine}`, enabled: true });

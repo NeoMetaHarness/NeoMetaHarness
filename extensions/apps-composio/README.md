@@ -60,7 +60,7 @@ metadata claims they are safe. Clients cannot supply the classification.
 
 Destructive actions require two approvals through the Inbox decision route: the
 connected-account owner and a workspace admin/owner. An account owner who is also
-an admin can satisfy both requirements. Non-destructive actions need only the
+an admin can satisfy both requirements with a single Inbox decision. Non-destructive actions need only the
 connected-account owner's approval. Only the connected-account owner sees full
 arguments; other workspace members see a redacted summary in lists and events.
 Cross-workspace decisions are denied. Approvals are consumed before execution,
