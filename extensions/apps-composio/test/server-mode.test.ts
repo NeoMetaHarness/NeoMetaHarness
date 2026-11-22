@@ -118,7 +118,7 @@ try {
     endpoint: fake.endpoint, apiKey: 'fake-composio-second', allowPrivateNetwork: true,
   } });
   const connect = { toolkit: 'github', authConfigId: 'ac_test' };
-  assert.equal((await member.settings.get({ extension: 'apps-composio' })).values.apiKey.set, true);
+  assert.deepEqual((await member.settings.get({ extension: 'apps-composio' })).values.apiKey, { set: true });
   const accountA = await member.apps.connect(connect);
   const accountB = await ownerB.apps.connect(connect);
   assert.ok(fake.calls.some(c => c.path.endsWith('/connected_accounts/link') && c.credential === 'A'));
