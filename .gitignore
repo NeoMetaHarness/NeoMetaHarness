@@ -20,3 +20,6 @@ src-tauri/target/
 # Claude Code local files
 .claude/settings.local.json
 .claude/*.lock
+
+# Local release staging (scripts/release-manifest.mjs); never committed
+release-out/
