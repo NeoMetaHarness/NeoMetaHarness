@@ -195,15 +195,15 @@ export default defineExtension({
     ctx.effect(() => () => voice.dispose());
     ctx.health(() => ({ ok: true }));
     ctx.route('status', () => ({ providerId: 'xai', configured: Boolean(settings.apiKey?.trim()) }));
-    ctx.route('transcribe', ({ body }) => {
+    ctx.route('transcribe', ({ body, signal }) => {
       const request = body as { input: VoiceTranscribeInput; requesterId: string; workspaceId: string };
       if (!request?.input || !request.requesterId || !request.workspaceId) throw new Error('xAI Voice requires authenticated requester identity');
-      return voice.transcribe(request.input, request.requesterId, request.workspaceId);
+      return voice.transcribe(request.input, request.requesterId, request.workspaceId, signal);
     });
-    ctx.route('synthesize', ({ body }) => {
+    ctx.route('synthesize', ({ body, signal }) => {
       const request = body as { input: VoiceSynthesizeInput; requesterId: string; workspaceId: string };
       if (!request?.input || !request.requesterId || !request.workspaceId) throw new Error('xAI Voice requires authenticated requester identity');
-      return voice.synthesize(request.input, request.requesterId, request.workspaceId);
+      return voice.synthesize(request.input, request.requesterId, request.workspaceId, signal);
     });
   },
 });

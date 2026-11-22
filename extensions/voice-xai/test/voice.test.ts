@@ -21,10 +21,27 @@ const audio = Buffer.from('FAKE_MP3_BYTES');
 
 async function startFake() {
   const hits: string[] = [];
+  const pendingAborts = new Map<string, { started: () => void; closed: () => void }>();
+  const watchAbort = (kind: string) => {
+    let started!: () => void;
+    let closed!: () => void;
+    const startedPromise = new Promise<void>(resolve => { started = resolve; });
+    const closedPromise = new Promise<void>(resolve => { closed = resolve; });
+    pendingAborts.set(kind, { started, closed });
+    return { started: startedPromise, closed: closedPromise };
+  };
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
     const body = Buffer.concat(chunks).toString();
+    if (body.includes('ABORT_GATEWAY_TEST')) {
+      const kind = req.url === '/v1/stt' ? 'stt' : 'tts';
+      const pending = pendingAborts.get(kind);
+      if (!pending) throw new Error('Unexpected pending voice request');
+      res.once('close', pending.closed);
+      pending.started();
+      return;
+    }
     if (req.headers.authorization !== `Bearer ${key}`) {
       res.writeHead(401).end('No credential');
       return;
@@ -48,7 +65,7 @@ async function startFake() {
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
-  return { server, port: address.port, hits };
+  return { server, port: address.port, hits, watchAbort };
 }
 
 async function assertNativeMultipartStt(home: string): Promise<void> {
@@ -250,6 +267,25 @@ async function main() {
       audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg',
     });
     assert.deepEqual(fake.hits, ['stt', 'tts']);
+    for (const kind of ['stt', 'tts'] as const) {
+      const pending = fake.watchAbort(kind);
+      const controller = new AbortController();
+      const request = kind === 'stt'
+        ? rpc.x['voice-xai'].transcribe({ audioBase64: Buffer.from('ABORT_GATEWAY_TEST').toString('base64'), mimeType: 'audio/mpeg' }, { signal: controller.signal })
+        : rpc.x['voice-xai'].synthesize({ text: 'ABORT_GATEWAY_TEST' }, { signal: controller.signal });
+      const within = async (promise: Promise<unknown>, event: string) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([promise, new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`Timed out waiting for ${event}`)), 8_000);
+          })]);
+        } finally { if (timer) clearTimeout(timer); }
+      };
+      await within(pending.started, `${kind} upstream start`);
+      controller.abort();
+      await assert.rejects(request);
+      await within(pending.closed, `${kind} upstream disconnect`);
+    }
     assert.equal((await rpc.extensions.disable({ id: 'voice-xai' })).status, 'disabled');
     assert.equal((await fetch(`${base}/x/voice-xai/status`, { headers })).status, 404);
     assert.equal((await rpc.extensions.list()).find((ext) => ext.id === 'sample-ts')?.status, 'running');

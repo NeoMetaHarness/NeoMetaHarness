@@ -459,7 +459,7 @@ export class NeoKernel {
   }
 
   contributionIds(): string[] { return [...this.snapshot.contributions.keys()]; }
-  async invokeRoute(path: string, method: string, body?: unknown): Promise<unknown | undefined> {
+  async invokeRoute(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<unknown | undefined> {
     let route = this.snapshot.routes.get(path);
     if (!route) return undefined;
     // runInWorkspace preloads the generations active when the request began. A generation that became active
@@ -473,7 +473,7 @@ export class NeoKernel {
       if (!current) return undefined;
       route = current;
     }
-    return route.generation.invoke(route.handler, method, body);
+    return route.generation.invoke(route.handler, method, body, signal);
   }
   hasRoute(path: string): boolean { return this.snapshot.routes.has(path); }
   routesFor(id: string): string[] { return [...this.snapshot.routes.keys()].filter((route) => route.startsWith(`/x/${id}/`)); }

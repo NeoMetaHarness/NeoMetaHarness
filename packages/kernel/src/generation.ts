@@ -63,11 +63,12 @@ export class ExtensionGeneration {
     this.requests.add(pending);
     return () => { this.requests.delete(pending); release(); };
   }
-  async invoke(handler: RouteHandler, method: string, body?: unknown): Promise<unknown> {
+  async invoke(handler: RouteHandler, method: string, body?: unknown, callerSignal?: AbortSignal): Promise<unknown> {
     if (this.retiring) throw new Error('Extension generation is draining');
     const release = this.acquire();
     try {
-      const value = await handler({ method, body, signal: this.abort.signal });
+      const signal = callerSignal ? AbortSignal.any([this.abort.signal, callerSignal]) : this.abort.signal;
+      const value = await handler({ method, body, signal });
       if (value && typeof (value as AsyncIterable<unknown>)[Symbol.asyncIterator] === 'function') {
         const iterator = (value as AsyncIterable<unknown>)[Symbol.asyncIterator]();
         this.streams.add(iterator);
