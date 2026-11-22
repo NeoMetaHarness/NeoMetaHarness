@@ -74,6 +74,8 @@ try {
   assert.equal(fake.calls.length, beforeForeign, 'Cross-user/workspace requests never reach Composio');
   const executes = () => fake.calls.filter(c => c.path.includes('/execute/')).length;
   await owner.inbox.acceptMode.set({ mode: 'act' });
+  assert.deepEqual(JSON.parse(await readFile(join(home, 'extensions', 'engine-superagent', 'accept-mode.json'), 'utf8')).workspaces, { default: 'act' }, 'Desktop preserves the legacy accept-mode key shared with GitHub, upstream and dreams');
+  assert.deepEqual(await owner.inbox.acceptMode.get(), { mode: 'act' });
   assert.equal((await member.apps.run(request) as any).status, 'completed'); const count = executes();
   const destructive = { ...request, action: 'GITHUB_DELETE' };
   let pending = await member.apps.run(destructive) as any; assert.equal(pending.status, 'approval'); assert.equal(executes(), count);

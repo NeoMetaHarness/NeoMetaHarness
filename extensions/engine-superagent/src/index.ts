@@ -688,9 +688,9 @@ class SuperagentService {
   }
 
   private readonly appExecutions = new Map<string, () => Promise<unknown>>();
-  async submitApp(input: AppApproval): Promise<unknown> {
+  async submitApp(input: AppApproval, acceptModeWorkspace = input.actor.workspaceId): Promise<unknown> {
     if (this.closed) throw new Error('Inbox is disabled');
-    const mode = this.acceptModes.get(input.actor.workspaceId); const now = Date.now();
+    const mode = this.acceptModes.get(acceptModeWorkspace); const now = Date.now();
     const item: InboxItem = { id: randomUUID(), botId: 'neo-apps', source: 'neo/apps', workspace: input.actor.workspaceId,
       text: `${input.request.action}\nArgument keys: ${Object.keys(input.request.arguments).join(', ')}`, appAction: {
         provider: input.request.provider, accountId: input.request.accountId, action: input.request.action,
@@ -1029,7 +1029,8 @@ export default defineExtension({
     }
     await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
     const apps = ctx.inject<AppsRegistry>('appsRegistry');
-    const detachApps = apps?.attachGate({ submit: input => service.submitApp(input) });
+    const desktopAcceptMode = ctx.inject<string>('deploymentMode') === 'desktop';
+    const detachApps = apps?.attachGate({ submit: input => service.submitApp(input, desktopAcceptMode ? 'default' : input.actor.workspaceId) });
     ctx.effect(() => () => { detachApps?.(); });
     await github.start();
     // memory-honcho dreams report here; their apply/reject comes back through memory-honcho's service.
