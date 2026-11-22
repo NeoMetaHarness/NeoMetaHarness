@@ -43,21 +43,30 @@ export function validateMinisignPublicKey(pubkey) {
   let fileContent;
   try {
     const outerBytes = Buffer.from(outerClean, 'base64');
-    fileContent = outerBytes.toString('utf8');
+    fileContent = new TextDecoder('utf-8', { fatal: true }).decode(outerBytes);
   } catch (err) {
-    throw new Error('Failed to decode public key as UTF-8: ' + err.message);
+    throw new Error('updater public key decoded bytes are not valid UTF-8: ' + err.message);
   }
 
-  const lines = fileContent.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (lines.length < 2) {
-    throw new Error('Minisign public key file must have at least 2 lines (comment and key)');
+  let body = fileContent;
+  if (body.endsWith('\r\n')) {
+    body = body.slice(0, -2);
+  } else if (body.endsWith('\n')) {
+    body = body.slice(0, -1);
   }
 
-  if (!lines[0].startsWith('untrusted comment:')) {
+  const lines = body.split(/\r?\n/);
+  if (lines.length !== 2) {
+    throw new Error(`Minisign public key file must have exactly 2 lines, got ${lines.length}`);
+  }
+
+  const line1 = lines[0].trim();
+  if (!line1.startsWith('untrusted comment:')) {
     throw new Error('Minisign public key file must begin with "untrusted comment:"');
   }
 
-  const innerClean = lines[1].replace(/\s+/g, '');
+  const line2 = lines[1].trim();
+  const innerClean = line2.replace(/\s+/g, '');
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(innerClean) || innerClean.length % 4 !== 0) {
     throw new Error('Minisign public key line 2 is not valid base64');
   }

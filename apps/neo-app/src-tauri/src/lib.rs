@@ -528,21 +528,33 @@ pub fn validate_minisign_pubkey(pubkey: &str) -> Result<(), String> {
     let file_content = String::from_utf8(outer_bytes)
         .map_err(|e| format!("updater public key decoded bytes are not valid UTF-8: {}", e))?;
 
-    let lines: Vec<&str> = file_content
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
+    let body = if let Some(s) = file_content.strip_suffix("\r\n") {
+        s
+    } else if let Some(s) = file_content.strip_suffix('\n') {
+        s
+    } else {
+        file_content.as_str()
+    };
+
+    let lines: Vec<&str> = body
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
         .collect();
 
-    if lines.len() < 2 {
-        return Err("minisign public key file must have at least 2 lines (comment and key)".to_string());
+    if lines.len() != 2 {
+        return Err(format!(
+            "minisign public key file must have exactly 2 lines, got {}",
+            lines.len()
+        ));
     }
 
-    if !lines[0].starts_with("untrusted comment:") {
+    let line1 = lines[0].trim();
+    if !line1.starts_with("untrusted comment:") {
         return Err("minisign public key first line must start with 'untrusted comment:'".to_string());
     }
 
-    let key_bytes = base64_decode(lines[1])
+    let line2 = lines[1].trim();
+    let key_bytes = base64_decode(line2)
         .map_err(|e| format!("minisign public key line 2 is not valid base64: {}", e))?;
 
     if key_bytes.len() != 42 {
@@ -725,5 +737,19 @@ mod tests {
         let bad_len = "dW50cnVzdGVkIGNvbW1lbnQ6IHRlc3QKV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbz0K";
         let err = validate_minisign_pubkey(bad_len).unwrap_err();
         assert!(err.contains("must decode to exactly 42 bytes"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_third_line() {
+        let third_line = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldSVVJWTlVTMFZaTVZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEKZXh0cmEgdGhpcmQgbGluZQo=";
+        let err = validate_minisign_pubkey(third_line).unwrap_err();
+        assert!(err.contains("must have exactly 2 lines"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_invalid_utf8() {
+        let invalid_utf8 = "//79/A==";
+        let err = validate_minisign_pubkey(invalid_utf8).unwrap_err();
+        assert!(err.contains("not valid UTF-8"));
     }
 }

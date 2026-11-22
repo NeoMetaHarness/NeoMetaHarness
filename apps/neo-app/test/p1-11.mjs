@@ -124,6 +124,10 @@ const malformedSurfaceKey = Buffer.from('this is a surface-valid base64 string t
 const badAlgKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IHRlc3QKV0ZoVVJWTlVTMFZaTVZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEK';
 // Structurally malformed key: line 2 length is 32 bytes instead of 42 bytes
 const badLenKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IHRlc3QKV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbz0K';
+// Structurally malformed key: contains a third line
+const thirdLineKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldSVVJWTlVTMFZaTVZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEKZXh0cmEgdGhpcmQgbGluZQo=';
+// Structurally malformed key: outer base64 decodes to invalid UTF-8 bytes
+const invalidUtf8Key = '//79/A==';
 const dummyConfig = {
   plugins: {
     updater: {
@@ -190,6 +194,24 @@ assert.throws(
   }),
   /must decode to exactly 42 bytes/i,
   'installer-check must reject key line 2 with wrong byte length'
+);
+
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: thirdLineKey } } },
+  }),
+  /must have exactly 2 lines/i,
+  'installer-check must reject key with a third line'
+);
+
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: invalidUtf8Key } } },
+  }),
+  /not valid UTF-8/i,
+  'installer-check must reject key containing invalid UTF-8 bytes'
 );
 
 // Verify unrelated plugin override in TAURI_CONFIG leaves updater config intact (still failing on base placeholder)
@@ -279,6 +301,28 @@ assert.throws(
   }),
   /failed to run custom build command|Release build failed closed|exit code/i,
   'release cargo check must fail closed when key algorithm is not Ed'
+);
+
+// 5b. Verify cargo check --release FAILS when key has a third line
+assert.throws(
+  () => execFileSync(cargoBin, ['check', '--release'], {
+    cwd: srcTauriDir,
+    stdio: 'pipe',
+    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: thirdLineKey } } }) },
+  }),
+  /failed to run custom build command|Release build failed closed|exit code/i,
+  'release cargo check must fail closed when key has a third line'
+);
+
+// 5c. Verify cargo check --release FAILS when key has invalid UTF-8 bytes
+assert.throws(
+  () => execFileSync(cargoBin, ['check', '--release'], {
+    cwd: srcTauriDir,
+    stdio: 'pipe',
+    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: invalidUtf8Key } } }) },
+  }),
+  /failed to run custom build command|Release build failed closed|exit code/i,
+  'release cargo check must fail closed when key has invalid UTF-8 bytes'
 );
 
 // 6. Verify cargo check --release FAILS when TAURI_CONFIG only sets unrelated plugin (updater retained, base placeholder rejected)
