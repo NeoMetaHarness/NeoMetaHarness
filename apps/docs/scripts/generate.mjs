@@ -220,6 +220,15 @@ const docDefinitions = [
     description: 'Tauri 2 launcher shortcuts, tray controls, neo:// deep links, and updater configuration.',
   },
   {
+    id: 'deploy-release',
+    section: 'deploy',
+    sectionTitle: 'Deploy',
+    title: 'Releasing',
+    slug: '/deploy/release',
+    sourceFile: 'docs/release.md',
+    description: 'Local release runbook: version bump, signed builds, latest.json, one gh release, rollback by patch.',
+  },
+  {
     id: 'deploy-compose',
     section: 'deploy',
     sectionTitle: 'Deploy',

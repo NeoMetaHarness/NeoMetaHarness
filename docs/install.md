@@ -114,7 +114,7 @@ Release builds ignore all four. Release builds accept only the production endpoi
 
 #### Releasing
 
-Building signed updater artifacts, generating `latest.json` and publishing a release are covered by the release runbook, `docs/release.md` (task P7-11).
+Building signed updater artifacts, generating `latest.json` and publishing a release are covered by the release runbook, [Releasing](release.md).
 
 ## PWA
 
