@@ -457,6 +457,9 @@ runInstallerCheck({
 });
 console.log('Installer check verification passed (effective config merging, placeholder rejected, structural validation enforced, test key accepted).');
 
+console.log('Running update-state unit test (frontend renders only update_state; out-of-order replies dropped)...');
+execFileSync(process.execPath, ['--experimental-strip-types', join(appDir, 'test/p1-11-update-state.mjs')], { cwd: appDir, stdio: 'pipe' });
+
 console.log('Running cargo unit tests (verifying updater overrides and endpoint HTTPS enforcement)...');
 execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['test'], {
   cwd: join(appDir, 'src-tauri'), stdio: 'pipe',

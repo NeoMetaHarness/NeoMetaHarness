@@ -34,44 +34,132 @@ fn forward_deep_link(app: &tauri::AppHandle, url: &str) {
     }
 }
 
-/// The version `install_update` may install, plus a generation counter. Each manual check bumps the
-/// generation when it starts, and a check may only store its result while its generation is still current.
-/// So a late startup check (or an older manual check) never replaces what a newer manual check set or
-/// cleared.
+/// The single source of truth for updates. The frontend renders `snapshot()` (via `update_state`) and
+/// never a command reply or event payload.
+///
+/// - Every check (startup or manual) starts a new **generation**. Only the newest generation may store its
+///   result, so a late startup check or an older manual reply can never set or clear the candidate.
+/// - Every mutation bumps **revision**, so the frontend can drop an out-of-order `update_state` reply.
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct CandidateState {
     version: Option<String>,
     generation: u64,
+    revision: u64,
+    checking: bool,
+    installing: bool,
+    error: Option<String>,
 }
 
 impl CandidateState {
-    /// A manual check is starting: supersede every check already in flight.
-    pub fn begin_manual(&mut self) -> u64 {
+    /// A check is starting (startup or manual): it supersedes every check already in flight.
+    pub fn begin_check(&mut self) -> u64 {
         self.generation += 1;
+        self.revision += 1;
+        self.checking = true;
+        self.error = None;
         self.generation
     }
 
-    /// The generation a background (startup) check runs under; it does not supersede anything.
-    pub fn current_generation(&self) -> u64 {
-        self.generation
-    }
-
-    /// Store a finished check's result, only if no newer manual check has started. Returns whether it applied.
-    pub fn finish(&mut self, generation: u64, version: Option<String>) -> bool {
+    /// Store a finished check, only if it is still the newest. Returns whether it applied.
+    /// The state then describes that check: a new version, no update, or an error (no candidate).
+    pub fn finish_check(&mut self, generation: u64, result: Result<Option<String>, String>) -> bool {
         if generation != self.generation {
             return false;
         }
-        self.version = version;
+        self.revision += 1;
+        self.checking = false;
+        match result {
+            Ok(version) => {
+                self.version = version;
+                self.error = None;
+            }
+            Err(error) => {
+                self.version = None;
+                self.error = Some(error);
+            }
+        }
         true
+    }
+
+    /// Installing the current candidate. Returns it, or an error when there is none or one is running.
+    pub fn begin_install(&mut self) -> Result<String, String> {
+        if self.installing {
+            return Err("An update is already being installed".into());
+        }
+        let version = self.version.clone().ok_or("No update candidate available. Check for updates first.")?;
+        self.revision += 1;
+        self.installing = true;
+        self.error = None;
+        Ok(version)
+    }
+
+    pub fn fail_install(&mut self, error: String) {
+        self.revision += 1;
+        self.installing = false;
+        self.error = Some(format!("Installation failed: {error}"));
     }
 
     pub fn version(&self) -> Option<String> {
         self.version.clone()
     }
+
+    pub fn snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "generation": self.generation,
+            "revision": self.revision,
+            "available": self.version.is_some(),
+            "version": self.version,
+            "checking": self.checking,
+            "installing": self.installing,
+            "error": self.error,
+        })
+    }
 }
 
 #[derive(Default)]
 struct UpdateCandidate(Mutex<CandidateState>);
+
+pub const SHORTCUT_RETRY_DELAY: Duration = Duration::from_millis(400);
+
+/// Register the global launcher shortcut without ever failing setup: try, retry once after `retry_delay`,
+/// and on a second failure log and continue without the shortcut. Returns whether it is registered.
+pub fn register_shortcut_non_fatal(
+    mut register: impl FnMut() -> Result<(), String>,
+    retry_delay: Duration,
+    mut log: impl FnMut(String),
+) -> bool {
+    match register() {
+        Ok(()) => true,
+        Err(first) => {
+            log(format!("Launcher shortcut registration failed ({first}); retrying once"));
+            thread::sleep(retry_delay);
+            match register() {
+                Ok(()) => true,
+                Err(second) => {
+                    log(format!("Launcher shortcut unavailable ({second}); continuing without it"));
+                    false
+                }
+            }
+        }
+    }
+}
+
+/// Tell an open webview that the update state changed. No payload: it must call `update_state`.
+fn notify_update_state(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.eval("window.dispatchEvent(new Event('neo:update-state'))");
+    }
+}
+
+/// Run one check as a new generation and record its result in the shared state.
+async fn run_update_check(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<UpdateCandidate>() else { return };
+    let generation = state.0.lock().unwrap().begin_check();
+    notify_update_state(app);
+    let result = check_for_updates_internal(app).await;
+    state.0.lock().unwrap().finish_check(generation, result);
+    notify_update_state(app);
+}
 
 /// How to start the new version after a Linux update: the same executable selected for installation
 /// (the AppImage file, or the real deb executable). Tauri's `restart()` would use its cached APPIMAGE.
@@ -417,77 +505,46 @@ async fn check_for_updates_internal(app: &tauri::AppHandle) -> Result<Option<Str
     Ok(update.map(|candidate| candidate.version))
 }
 
+/// Start a manual check. The result goes into the shared state only; the reply carries nothing to render.
 #[tauri::command]
-async fn check_for_updates(app: tauri::AppHandle, window: tauri::Window) -> Result<Option<String>, String> {
+async fn check_for_updates(app: tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Updates can only be checked from the main window".into());
     }
-    let state = app.try_state::<UpdateCandidate>().ok_or("Update candidate state is not registered")?;
-    let generation = state.0.lock().unwrap().begin_manual();
-    let version = check_for_updates_internal(&app).await?;
-    state.0.lock().unwrap().finish(generation, version.clone());
-    Ok(version)
+    run_update_check(&app).await;
+    Ok(())
 }
 
-/// The startup check's result.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StartupResult {
-    pub result: Result<Option<String>, String>,
-    /// A manual check started meanwhile, so this result was not stored as the candidate.
-    pub superseded: bool,
-}
-
-/// The result of the one startup update check, cached so the frontend can read it whenever it
-/// subscribes (the webview may not exist yet when the check finishes). `None` while it is running.
-#[derive(Default)]
-struct StartupUpdateCheck(Mutex<Option<StartupResult>>);
-
-pub fn startup_update_status_json(cached: &Option<StartupResult>) -> serde_json::Value {
-    match cached {
-        None => serde_json::json!({ "done": false, "version": null, "error": null, "superseded": false }),
-        Some(StartupResult { result: Ok(version), superseded }) => {
-            serde_json::json!({ "done": true, "version": version, "error": null, "superseded": superseded })
-        }
-        Some(StartupResult { result: Err(error), superseded }) => {
-            serde_json::json!({ "done": true, "version": null, "error": error, "superseded": superseded })
-        }
-    }
-}
-
-/// Record the startup check under the generation it started with. Returns the cached entry.
-pub fn record_startup_result(
-    candidate: &Mutex<CandidateState>,
-    generation: u64,
-    result: Result<Option<String>, String>,
-) -> StartupResult {
-    let mut state = candidate.lock().unwrap();
-    let superseded = match &result {
-        Ok(version) => !state.finish(generation, version.clone()),
-        Err(_) => state.current_generation() != generation,
-    };
-    StartupResult { result, superseded }
-}
-
-/// Reads the cached startup check. Never contacts the network.
+/// The current update state, straight from UpdateCandidate. Never contacts the network.
 #[tauri::command]
-fn startup_update_status(app: tauri::AppHandle, window: tauri::Window) -> Result<serde_json::Value, String> {
+fn update_state(app: tauri::AppHandle, window: tauri::Window) -> Result<serde_json::Value, String> {
     if window.label() != "main" {
         return Err("Updates can only be read from the main window".into());
     }
-    let state = app.try_state::<StartupUpdateCheck>().ok_or("Startup update check is not registered")?;
-    let cached = state.0.lock().unwrap().clone();
-    Ok(startup_update_status_json(&cached))
+    let state = app.try_state::<UpdateCandidate>().ok_or("Update state is not registered")?;
+    let snapshot = state.0.lock().unwrap().snapshot();
+    Ok(snapshot)
 }
 
+/// Install the current candidate. Failures are recorded in the shared state for the frontend to render.
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Updates can only be installed from the main window".into());
     }
-    let candidate = app.try_state::<UpdateCandidate>()
-        .and_then(|state| state.0.lock().unwrap().version())
-        .ok_or_else(|| "No update candidate available. Check for updates first.".to_string())?;
+    let state = app.try_state::<UpdateCandidate>().ok_or("Update state is not registered")?;
+    let candidate = state.0.lock().unwrap().begin_install()?;
+    notify_update_state(&app);
+    let result = install_candidate(&app, candidate).await;
+    if let Err(error) = &result {
+        state.0.lock().unwrap().fail_install(error.clone());
+        notify_update_state(&app);
+    }
+    result
+}
 
+async fn install_candidate(app: &tauri::AppHandle, candidate: String) -> Result<(), String> {
+    let app = app.clone();
     let ConfiguredUpdater { builder, allowed_hosts, relaunch } = configure_updater_builder(&app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
     if let Some(update) = updater.check().await.map_err(|error| error.to_string())? {
@@ -616,7 +673,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![check_for_updates, startup_update_status, install_update])
+        .invoke_handler(tauri::generate_handler![check_for_updates, update_state, install_update])
         .setup(|app| {
             let data_dir = std::env::var_os("NMH_DESKTOP_DATA_DIR")
                 .map(PathBuf::from)
@@ -627,27 +684,14 @@ pub fn run() {
             app.manage(GatewayState(Mutex::new(Some(sidecar))));
             // Register every updater state before the startup check can finish.
             app.manage(UpdateCandidate::default());
-            app.manage(StartupUpdateCheck::default());
-            // The startup check runs under the current generation; any manual check started meanwhile
-            // supersedes it, so its late result never replaces a candidate a manual check set or cleared.
-            let startup_generation = app.state::<UpdateCandidate>().0.lock().unwrap().current_generation();
+            // The startup check takes its generation now, before any manual check can start, so every manual
+            // check supersedes it. Its result lands only in UpdateCandidate; the webview reads update_state.
+            let startup_generation = app.state::<UpdateCandidate>().0.lock().unwrap().begin_check();
             let app_handle_for_update = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let result = check_for_updates_internal(&app_handle_for_update).await;
-                let entry = record_startup_result(
-                    &app_handle_for_update.state::<UpdateCandidate>().0,
-                    startup_generation,
-                    result,
-                );
-                let status = startup_update_status_json(&Some(entry.clone()));
-                *app_handle_for_update.state::<StartupUpdateCheck>().0.lock().unwrap() = Some(entry);
-                // Best-effort push for an already-open window; the frontend also reads the cache when it
-                // subscribes (startup_update_status), so a missed event loses nothing.
-                if let Some(window) = app_handle_for_update.get_webview_window("main") {
-                    let _ = window.eval(&format!(
-                        "window.dispatchEvent(new CustomEvent('neo:startup-update', {{detail: {status}}}))"
-                    ));
-                }
+                app_handle_for_update.state::<UpdateCandidate>().0.lock().unwrap().finish_check(startup_generation, result);
+                notify_update_state(&app_handle_for_update);
             });
 
             let token = fs::read_to_string(data_dir.join("desktop.token")).unwrap_or_default().trim().to_string();
@@ -673,11 +717,21 @@ pub fn run() {
             let shortcut = std::env::var("NMH_LAUNCHER_SHORTCUT").ok()
                 .or_else(|| fs::read_to_string(data_dir.join("launcher-shortcut.txt")).ok())
                 .unwrap_or_else(|| "Ctrl+Shift+Space".to_owned());
-            app.global_shortcut().on_shortcut(shortcut.trim(), |app, _, event| {
-                if event.state() == ShortcutState::Pressed {
-                    focus_main(app);
-                }
-            })?;
+            // Non-fatal: after an update relaunch the old process may still hold the shortcut for a moment.
+            // Retry once, then run without the launcher shortcut rather than abort setup.
+            let shortcut_registered = register_shortcut_non_fatal(
+                || {
+                    app.global_shortcut()
+                        .on_shortcut(shortcut.trim(), |app, _, event| {
+                            if event.state() == ShortcutState::Pressed {
+                                focus_main(app);
+                            }
+                        })
+                        .map_err(|error| error.to_string())
+                },
+                SHORTCUT_RETRY_DELAY,
+                |message| eprintln!("{message}"),
+            );
 
             let app_handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
@@ -713,7 +767,7 @@ pub fn run() {
             if let Some(file) = std::env::var_os("NMH_DESKTOP_STATUS_FILE") {
                 fs::write(
                     file,
-                    serde_json::json!({ "port": port, "gatewayPid": gateway_pid, "appPid": std::process::id(), "trayReady": true, "deepLinks": ["neo://inbox/", "neo://coding/"], "shortcut": shortcut.trim() }).to_string(),
+                    serde_json::json!({ "port": port, "gatewayPid": gateway_pid, "appPid": std::process::id(), "trayReady": true, "deepLinks": ["neo://inbox/", "neo://coding/"], "shortcut": shortcut.trim(), "shortcutRegistered": shortcut_registered }).to_string(),
                 )?;
             }
             Ok(())
@@ -854,77 +908,123 @@ mod tests {
     }
 
     #[test]
-    fn test_startup_update_status_is_cached() {
-        let entry = |result: Result<Option<String>, String>, superseded| Some(StartupResult { result, superseded });
-        assert_eq!(
-            startup_update_status_json(&None),
-            serde_json::json!({ "done": false, "version": null, "error": null, "superseded": false })
-        );
-        assert_eq!(
-            startup_update_status_json(&entry(Ok(Some("1.2.4".into())), false)),
-            serde_json::json!({ "done": true, "version": "1.2.4", "error": null, "superseded": false })
-        );
-        assert_eq!(
-            startup_update_status_json(&entry(Ok(None), false)),
-            serde_json::json!({ "done": true, "version": null, "error": null, "superseded": false })
-        );
-        assert_eq!(
-            startup_update_status_json(&entry(Err("offline".into()), true)),
-            serde_json::json!({ "done": true, "version": null, "error": "offline", "superseded": true })
-        );
+    fn test_update_state_transitions() {
+        let mut state = CandidateState::default();
+        let snap = state.snapshot();
+        assert_eq!(snap["generation"], 0);
+        assert_eq!(snap["available"], false);
+        assert_eq!(snap["checking"], false);
+
+        // Check finds a version: checking, then available with that version.
+        let g = state.begin_check();
+        assert_eq!(state.snapshot()["checking"], true);
+        assert_eq!(state.snapshot()["generation"], 1);
+        assert!(state.finish_check(g, Ok(Some("1.2.4".into()))));
+        let snap = state.snapshot();
+        assert_eq!(snap["available"], true);
+        assert_eq!(snap["version"], "1.2.4");
+        assert_eq!(snap["checking"], false);
+
+        // A failed check clears the candidate and records the error.
+        let g = state.begin_check();
+        assert!(state.finish_check(g, Err("offline".into())));
+        assert_eq!(state.version(), None);
+        assert_eq!(state.snapshot()["error"], "offline");
+
+        // Install: only with a candidate, not twice, and a failure is recorded.
+        assert!(state.begin_install().is_err());
+        let g = state.begin_check();
+        state.finish_check(g, Ok(Some("1.2.5".into())));
+        assert_eq!(state.begin_install().unwrap(), "1.2.5");
+        assert_eq!(state.snapshot()["installing"], true);
+        assert!(state.begin_install().is_err(), "no second install while one runs");
+        state.fail_install("disk full".into());
+        let snap = state.snapshot();
+        assert_eq!(snap["installing"], false);
+        assert_eq!(snap["error"], "Installation failed: disk full");
+        assert_eq!(state.version(), Some("1.2.5".into()), "a failed install keeps the candidate");
+
+        // Every mutation bumps the revision.
+        let before = state.snapshot()["revision"].as_u64().unwrap();
+        state.begin_check();
+        assert!(state.snapshot()["revision"].as_u64().unwrap() > before);
     }
 
     #[test]
-    fn test_late_startup_check_never_overwrites_manual_candidate() {
-        // Manual check SETS a candidate while the startup check is still running.
-        let candidate = Mutex::new(CandidateState::default());
-        let startup = candidate.lock().unwrap().current_generation();
-        let manual = candidate.lock().unwrap().begin_manual();
-        assert!(candidate.lock().unwrap().finish(manual, Some("1.2.5".into())));
-        let late = record_startup_result(&candidate, startup, Ok(Some("1.2.4".into())));
-        assert!(late.superseded);
-        assert_eq!(candidate.lock().unwrap().version(), Some("1.2.5".into()));
-        // A late "no update" does not clear it either.
-        assert!(record_startup_result(&candidate, startup, Ok(None)).superseded);
-        assert_eq!(candidate.lock().unwrap().version(), Some("1.2.5".into()));
+    fn test_out_of_order_replies_never_restore_stale_state() {
+        // Startup check (g1) and two manual checks (g2, g3) all in flight; replies land in the worst order.
+        let mut state = CandidateState::default();
+        let startup = state.begin_check();
+        let older_manual = state.begin_check();
+        let newer_manual = state.begin_check();
+        assert!(state.finish_check(newer_manual, Ok(None)), "newest check applies: nothing to install");
+        assert!(!state.finish_check(older_manual, Ok(Some("1.2.5".into()))), "older manual reply cannot restore Install");
+        assert!(!state.finish_check(startup, Ok(Some("1.2.4".into()))), "late startup result cannot restore Install");
+        let snap = state.snapshot();
+        assert_eq!(snap["available"], false);
+        assert_eq!(snap["checking"], false);
+        assert_eq!(snap["generation"], 3);
+        assert!(state.begin_install().is_err());
 
-        // Manual check CLEARS the candidate; the late startup result can't restore one.
-        let candidate = Mutex::new(CandidateState::default());
-        let startup = candidate.lock().unwrap().current_generation();
-        let manual = candidate.lock().unwrap().begin_manual();
-        assert!(candidate.lock().unwrap().finish(manual, None));
-        assert!(record_startup_result(&candidate, startup, Ok(Some("1.2.4".into()))).superseded);
-        assert_eq!(candidate.lock().unwrap().version(), None);
+        // The reverse: the newest sets a candidate; a stale "no update" or error cannot clear it.
+        let mut state = CandidateState::default();
+        let startup = state.begin_check();
+        let manual = state.begin_check();
+        assert!(state.finish_check(manual, Ok(Some("1.2.6".into()))));
+        assert!(!state.finish_check(startup, Ok(None)));
+        assert!(!state.finish_check(startup, Err("timeout".into())));
+        assert_eq!(state.version(), Some("1.2.6".into()));
+        assert_eq!(state.snapshot()["error"], serde_json::Value::Null);
 
-        // Manual check still in flight when the startup check lands: startup is superseded, manual applies.
-        let candidate = Mutex::new(CandidateState::default());
-        let startup = candidate.lock().unwrap().current_generation();
-        let manual = candidate.lock().unwrap().begin_manual();
-        assert!(record_startup_result(&candidate, startup, Ok(Some("1.2.4".into()))).superseded);
-        assert_eq!(candidate.lock().unwrap().version(), None);
-        assert!(candidate.lock().unwrap().finish(manual, Some("1.2.6".into())));
-        assert_eq!(candidate.lock().unwrap().version(), Some("1.2.6".into()));
+        // A stale reply also leaves "checking" to the check that is still running.
+        let mut state = CandidateState::default();
+        let startup = state.begin_check();
+        let _running = state.begin_check();
+        assert!(!state.finish_check(startup, Ok(Some("1.2.4".into()))));
+        assert_eq!(state.snapshot()["checking"], true);
 
-        // An older manual check finishing after a newer one is ignored too.
-        let older = candidate.lock().unwrap().begin_manual();
-        let newer = candidate.lock().unwrap().begin_manual();
-        assert!(candidate.lock().unwrap().finish(newer, None));
-        assert!(!candidate.lock().unwrap().finish(older, Some("9.9.9".into())));
-        assert_eq!(candidate.lock().unwrap().version(), None);
-
-        // No manual check: the startup result becomes the candidate.
-        let candidate = Mutex::new(CandidateState::default());
-        let startup = candidate.lock().unwrap().current_generation();
-        let entry = record_startup_result(&candidate, startup, Ok(Some("1.2.4".into())));
-        assert!(!entry.superseded);
-        assert_eq!(candidate.lock().unwrap().version(), Some("1.2.4".into()));
-
-        // The manual command bumps the generation before its network check and stores under it.
+        // The manual command goes through a generation and replies with nothing to render.
         let lib_rs = include_str!("lib.rs");
         let manual_cmd = &lib_rs[lib_rs.find("async fn check_for_updates(").unwrap()..];
         let manual_cmd = &manual_cmd[..manual_cmd.find("\n}\n").unwrap()];
-        assert!(manual_cmd.find("begin_manual()").unwrap() < manual_cmd.find("check_for_updates_internal(&app)").unwrap());
-        assert!(manual_cmd.contains(".finish(generation, version.clone())"));
+        assert!(manual_cmd.contains("run_update_check(&app).await") && manual_cmd.contains("Result<(), String>"));
+        assert!(lib_rs.contains(concat!("generate_handler![check_for_updates, ", "update_state, install_update]")));
+    }
+
+    #[test]
+    fn test_shortcut_registration_is_non_fatal() {
+        let mut logs = Vec::new();
+        // Held by the old process on both attempts: setup continues without the shortcut.
+        let mut attempts = 0;
+        let registered = register_shortcut_non_fatal(
+            || {
+                attempts += 1;
+                Err("HotKey already registered".into())
+            },
+            Duration::from_millis(1),
+            |m| logs.push(m),
+        );
+        assert!(!registered);
+        assert_eq!(attempts, 2, "one retry");
+        assert!(logs.last().unwrap().contains("continuing without it"));
+
+        // Released by the old process before the retry: registered on the second attempt.
+        let mut attempts = 0;
+        let registered = register_shortcut_non_fatal(
+            || {
+                attempts += 1;
+                if attempts == 1 { Err("busy".into()) } else { Ok(()) }
+            },
+            Duration::from_millis(1),
+            |_| {},
+        );
+        assert!(registered);
+        assert_eq!(attempts, 2);
+
+        // Free: registered first time, nothing logged.
+        let mut logs = Vec::new();
+        assert!(register_shortcut_non_fatal(|| Ok(()), Duration::from_millis(1), |m| logs.push(m)));
+        assert!(logs.is_empty());
     }
 
     #[test]
@@ -996,10 +1096,15 @@ mod tests {
     fn test_startup_state_registered_before_check_and_exit_hook_cleans_up() {
         let lib_rs = include_str!("lib.rs");
         let setup = &lib_rs[lib_rs.find(".setup(|app|").unwrap()..];
-        let manage = setup.find("app.manage(StartupUpdateCheck::default())").unwrap();
         let candidate = setup.find("app.manage(UpdateCandidate::default())").unwrap();
+        let begin = setup.find(".begin_check();").unwrap();
         let spawn = setup.find("check_for_updates_internal(&app_handle_for_update)").unwrap();
-        assert!(manage < spawn && candidate < spawn, "updater state is managed before the startup check starts");
+        assert!(candidate < begin && begin < spawn, "state is managed and the startup generation taken before the check starts");
+        assert!(!lib_rs.contains(concat!("startup_update", "_status")), "the startup cache command is gone");
+        // Shortcut registration never aborts setup.
+        let registration = &setup[setup.find("register_shortcut_non_fatal(").unwrap()..];
+        let registration = &registration[..registration.find(");\n").unwrap()];
+        assert!(!registration.contains(")?"), "shortcut registration must not use ? in setup");
         let hook = &lib_rs[lib_rs.find("builder.on_before_exit(move ||").unwrap()..];
         let hook = &hook[..hook.find("});").unwrap()];
         assert!(hook.find("sidecar.stop()").unwrap() < hook.find("cleanup_before_exit()").unwrap());
