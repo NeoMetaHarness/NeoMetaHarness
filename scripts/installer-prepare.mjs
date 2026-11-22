@@ -1,12 +1,14 @@
 import { spawnSync, execFileSync } from 'node:child_process';
-import { copyFileSync, cpSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { copyFileSync, cpSync, chmodSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const tauri = join(root, 'apps', 'neo-app', 'src-tauri');
 const runtime = join(tauri, 'installer-payload');
 const binaries = join(tauri, 'binaries');
+const archiveDir = join(tauri, 'installer-runtime');
 const host = execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).match(/^host:\s*(.+)$/m)?.[1];
 const target = process.env.NMH_INSTALL_TARGET ?? host;
 if (!host || target !== host) {
@@ -107,4 +109,47 @@ const nodeLicense = licenses.find((path) => path && existsSync(path));
 if (!nodeLicense) throw new Error('Node distribution license missing. Set NMH_NODE_LICENSE to its path.');
 copyFileSync(nodeLicense, join(runtime, 'NODE-LICENSE.txt'));
 if (process.platform !== 'win32') chmodSync(sidecar, 0o755);
-console.log(`Installer payload ready for ${target}: gateway, extensions and Node sidecar in one hoisted runtime.`);
+// Bundle the payload as ONE uncompressed tar (Tauri resource installer-runtime/ -> runtime/). The shell unpacks it
+// into the user's local data dir on first launch, so installers carry one file instead of ~100k loose ones.
+// pnpm links packages (junctions on Windows, symlinks elsewhere). tar follows them (-h), as Tauri's resource copy
+// did, so each link must resolve inside the payload and must not loop.
+const payloadRoot = realpathSync(runtime);
+(function verify(directory, ancestors) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    const real = realpathSync(path);
+    if (real !== payloadRoot && !real.startsWith(payloadRoot + sep)) throw new Error(`Installer payload link leaves the payload: ${relative(runtime, path)}`);
+    const stats = statSync(path);
+    if (stats.isDirectory()) {
+      if (ancestors.has(real)) throw new Error(`Installer payload link loops: ${relative(runtime, path)}`);
+      verify(path, new Set(ancestors).add(real));
+    } else if (!stats.isFile()) {
+      throw new Error(`Installer payload has an unsupported file type: ${relative(runtime, path)}`);
+    }
+  }
+})(runtime, new Set([payloadRoot]));
+rmSync(archiveDir, { recursive: true, force: true });
+mkdirSync(archiveDir, { recursive: true });
+const archive = join(archiveDir, 'runtime.tar');
+// bsdtar ships with Windows 10+ in System32; pax records keep paths longer than 100/260 characters intact.
+const systemTar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+const tarCommand = process.platform === 'win32' && !existsSync(systemTar) ? 'tar' : systemTar;
+// Relative paths only: GNU tar would read "C:\..." as a remote host.
+const tarResult = spawnSync(tarCommand, ['--format=pax', '-h', '-cf', relative(tauri, archive), '-C', relative(tauri, runtime), '.'], { cwd: tauri, stdio: 'inherit' });
+if (tarResult.status !== 0) throw new Error(`tar failed: ${tarResult.error?.message ?? tarResult.status}`);
+const listing = spawnSync(tarCommand, ['-tvf', relative(tauri, archive)], { cwd: tauri, encoding: 'utf8', maxBuffer: 1 << 30 });
+if (listing.status !== 0) throw new Error(`tar listing failed: ${listing.error?.message ?? listing.stderr}`);
+const listed = listing.stdout.split(/\r?\n/).filter(Boolean);
+const entries = listed.length;
+// The shell accepts only files, directories and hard links within the runtime.
+const unsupported = listed.find((line) => !/^[-dh]/.test(line));
+if (unsupported) throw new Error(`Runtime archive has an unsupported entry: ${unsupported}`);
+const sha256 = await new Promise((done, fail) => {
+  const hash = createHash('sha256');
+  createReadStream(archive).on('error', fail).on('data', (chunk) => hash.update(chunk)).on('end', () => done(hash.digest('hex')));
+});
+const version = JSON.parse(readFileSync(join(tauri, 'tauri.conf.json'), 'utf8').replace(/^﻿/, '')).version;
+const size = statSync(archive).size;
+writeFileSync(join(archiveDir, 'runtime.json'), JSON.stringify({ version, sha256, size, entries }, null, 2) + '\n');
+console.log(`Installer payload ready for ${target}: gateway, extensions and Node sidecar.`);
+console.log(`Runtime archive: ${relative(root, archive)} (${size} bytes, ${entries} entries, sha256 ${sha256}).`);

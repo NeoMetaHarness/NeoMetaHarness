@@ -17,7 +17,7 @@
       "binaries/neo-gateway"
     ],
     "resources": {
-      "installer-payload/": "gateway/"
+      "installer-runtime/": "runtime/"
     }
   }
 }

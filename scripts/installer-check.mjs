@@ -314,14 +314,22 @@ export function runInstallerCheck(options = {}) {
     assert.ok(bundle.targets.includes(target), `missing installer target ${target}`);
   }
   assert.deepEqual(bundle.externalBin, ['binaries/neo-gateway'], 'gateway executable is bundled');
-  assert.equal(bundle.resources['installer-payload/'], 'gateway/', 'runtime resources are bundled');
+  assert.deepEqual(bundle.resources, { 'installer-runtime/': 'runtime/' }, 'only the runtime archive directory is bundled');
   assert.match(effectiveConfig.build.beforeBuildCommand ?? '', /installer:prepare/, 'installer stages runtime before packaging');
   assert.match(effectiveConfig.build.beforeBundleCommand ?? '', /installer-check/, 'installer runs installer-check before packaging bundles');
   assert.ok(existsSync(resolve(root, 'scripts/installer-prepare.mjs')), 'runtime preparation script');
 
   const launcher = load('apps/neo-app/src-tauri/src/lib.rs');
+  const unpacker = load('apps/neo-app/src-tauri/src/runtime.rs');
   assert.ok(launcher.includes('apps/gateway/src/main.ts'), 'preserves repository-relative gateway paths');
-  assert.match(launcher, /resource_dir\(\)\?\.join\("gateway"\)/, 'shell locates packaged runtime');
+  assert.match(launcher, /resource_dir\(\)\?\.join\("runtime"\)/, 'shell locates the bundled runtime archive');
+  assert.match(launcher, /app_local_data_dir\(\)\?\.join\("runtime"\)/, 'shell unpacks the runtime outside the install dir');
+  assert.match(launcher, /var_os\("NMH_RUNTIME_DIR"\)/, 'runtime dir override for tests');
+  assert.match(launcher, /runtime::ensure_runtime\(/, 'shell unpacks the runtime before launching the gateway');
+  assert.ok(launcher.indexOf('runtime::ensure_runtime(') < launcher.indexOf('recv_timeout(Duration::from_secs(25))'), 'unpacking happens before the gateway ready timer');
+  assert.match(unpacker, /pub const ARCHIVE_NAME: &str = "runtime\.tar";/, 'shell reads runtime.tar');
+  assert.match(unpacker, /pub const MANIFEST_NAME: &str = "runtime\.json";/, 'shell reads runtime.json');
+  assert.match(unpacker, /fn safe_relative_path/, 'shell refuses archive entries outside the runtime dir');
   assert.match(launcher, /with_file_name\(filename\)/, 'shell invokes packaged Node sidecar');
   assert.match(launcher, /\.env\("NEO_MODE", "desktop"\)/, 'gateway desktop auth');
 
@@ -382,9 +390,11 @@ export function runInstallerCheck(options = {}) {
   }
   assert.match(load('docs/install.md'), /cargo tauri build --config tauri\.bundle\.conf\.json/, 'installation docs select the bundle-only override');
   assert.match(load('.gitignore'), /apps\/neo-app\/src-tauri\/installer-payload/, 'generated runtime ignored');
+  assert.match(load('.gitignore'), /apps\/neo-app\/src-tauri\/installer-runtime/, 'generated runtime archive ignored');
+  assert.match(load('scripts/installer-prepare.mjs'), /'--format=pax'/, 'runtime archive keeps long paths (pax)');
   assert.match(load('.gitignore'), /apps\/neo-app\/src-tauri\/binaries\/neo-gateway-/, 'generated node sidecar ignored');
 
-  console.log(`PASS installer:check - identifiers, five installer targets, gateway sidecar, CSP, updater endpoints and allowed hosts, effective merged config enforcement, and secret hygiene`);
+  console.log(`PASS installer:check - identifiers, five installer targets, gateway sidecar, runtime archive, CSP, updater endpoints and allowed hosts, effective merged config enforcement, and secret hygiene`);
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
