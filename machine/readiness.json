@@ -319,9 +319,10 @@
     },
     "P2-11": {
       "title": "x-search optional extension",
-      "status": "in_progress",
+      "status": "done",
       "owner": "codex",
-      "note": "Returned 2026-11-20: DNS-rebinding gap (High), http allowed, no timeout/size cap; must use shared @neometaharness/egress (c7b3976)."
+      "note": "Returned 2026-11-20: DNS-rebinding gap (High), http allowed, no timeout/size cap; must use shared @neometaharness/egress (c7b3976).",
+      "evidence": "PM review 2026-11-22 on main a704ec6 (after P2-10) + work/codex-p211 (3d9db7f), rebased by PM onto P2-10 with union-only conflict resolutions in policy.ts, server.ts, contracts index (both sides append) and a regenerated lockfile identical to the author delta; content verified identical to the author branch (head b2940bc). x-search optional extension: bot-facing search contract, member policy for search, viewer for status, xAI credentials via workspace vault, shared egress guard, bounded outputs, per-requester rate limit mapped to TOO_MANY_REQUESTS. test:p2-11 PASS x2, app tsc, test:p1-14, test:p2-10, toggle, pnpm check, secret scan PASS; gateway suite timed out once under load, then PASS x2 (39/39). Full regression 48 OK; test:p1-8 PASS on serial rerun; test:p1-5 and test:p7-8 fail identically on main a704ec6 without P2-11 (desktop app does not exit after window close, EBUSY on temp sqlite at cleanup) - pre-existing environment issue, tracked separately."
     },
     "P2-12": {
       "title": "apps-composio and neo.apps interface",
