@@ -18,6 +18,7 @@ Set the date on the heading when the release is cut.
 - Signed desktop auto-updates from full GitHub releases, verified with the checked-in public key; stable versions only (P1-11).
 - The desktop Gateway sidecar never outlives the app: it shuts down when the app exits, crashes or fails to start (P1-15).
 - Installers carry the Gateway runtime (production dependencies only, one shared package folder) as a single archive that the app unpacks into its data folder on first launch and after each update (P7-14).
+- While it unpacks that archive the app shows a "Setting up Neo" screen instead of nothing (P7-15).
 
 ### Kernel, extensions and Gateway
 - Cordis kernel facade, oRPC contracts, Kysely/SQLite state, Gateway, and sample TypeScript and Python extensions (P1-1).
