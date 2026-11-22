@@ -176,7 +176,10 @@ async function trial(number) {
     view?.close();
     if (alive(desktop.pid)) spawnSync('taskkill.exe', ['/PID', String(desktop.pid), '/T', '/F'], { windowsHide: true });
     if (status && alive(status.gatewayPid)) spawnSync('taskkill.exe', ['/PID', String(status.gatewayPid), '/T', '/F'], { windowsHide: true });
-    await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 });
+    if (status?.gatewayPid) await eventually(() => !alive(status.gatewayPid), 'gateway exit before cleanup', 100).catch(() => {});
+    // Cleanup must never replace the real failure: an EBUSY here only means a process still held the temp dir.
+    await rm(directory, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 })
+      .catch((error) => console.warn(`P1-5 cleanup warning: ${error.message}`));
   }
 }
 

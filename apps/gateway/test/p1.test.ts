@@ -18,12 +18,14 @@ const cache = join(directory, '.cache');
 type Client = ContractRouterClient<typeof neoContract>;
 interface RunningGateway { port: number; token: string; child: ChildProcess; close(): Promise<void> }
 
-async function start(dbFile: string): Promise<RunningGateway> {
+async function start(dbFile: string, ownedByPipe = false): Promise<RunningGateway> {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: directory,
-    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    // stdin 'ignore' reads as an immediately closed stream, so the default runs also prove
+    // that a gateway without NMH_EXIT_ON_STDIN_CLOSE ignores stdin closing (server mode).
+    stdio: [ownedByPipe ? 'pipe' : 'ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
-    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
+    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1', ...(ownedByPipe ? { NMH_EXIT_ON_STDIN_CLOSE: '1' } : {}) },
   });
   let stderr = '';
   child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
@@ -153,6 +155,33 @@ async function trial(index: number): Promise<void> {
   }
 }
 
+// P1-15: when the desktop shell dies its end of the stdin pipe closes. The gateway must then
+// shut down cleanly and take its extension processes with it, so nothing holds neo.sqlite.
+async function ownerExit(): Promise<void> {
+  const temp = await mkdtemp(join(cache, 'owner-exit-'));
+  let gateway: RunningGateway | undefined;
+  try {
+    gateway = await start(join(temp, 'state.sqlite'), true);
+    const { socket, client } = connected(gateway.port, gateway.token);
+    let pid: number | undefined;
+    try {
+      pid = (await client.extensions.enable({ id: 'sample-py' })).health?.pid;
+      assert.ok(pid && alive(pid), 'Python process is alive');
+    } finally { socket.close(); }
+    const exited = new Promise<number | null>((done) => gateway!.child.once('exit', (code) => done(code)));
+    gateway.child.stdin!.destroy();
+    const code = await Promise.race([exited, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Gateway outlived its closed stdin')), 10000))]);
+    assert.equal(code, 0, 'gateway shut down cleanly after stdin closed');
+    await eventually(() => !alive(pid!), `Python process ${pid} exited with the gateway`);
+    await rm(temp, { recursive: true, force: true });
+    console.log('P1_OWNER_EXIT PASS stdin_closed=exit0 extension_processes=0 db_unlocked=true');
+  } finally {
+    await gateway?.close();
+    await rm(temp, { recursive: true, force: true });
+  }
+}
+
 await mkdir(cache, { recursive: true });
 for (let trialNumber = 1; trialNumber <= 2; trialNumber++) await trial(trialNumber);
 console.log('P1_LIFECYCLE PASS trials=2');
+await ownerExit();

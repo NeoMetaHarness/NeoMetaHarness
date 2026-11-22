@@ -28,6 +28,11 @@ async function close(): Promise<void> {
 process.on('SIGINT', () => { void close(); });
 process.on('SIGTERM', () => { void close(); });
 process.on('message', (message) => { if (message === 'shutdown') void close(); });
-createInterface({ input: process.stdin }).on('line', (line) => {
+const stdin = createInterface({ input: process.stdin });
+stdin.on('line', (line) => {
   if (line.trim() === 'shutdown') void close();
 });
+// The desktop shell owns this process through the stdin pipe. When the shell exits for any
+// reason (crash, kill, failed setup) the pipe closes, so the gateway must not outlive it.
+// Server deployments leave this unset, because their stdin may be /dev/null or a terminal.
+if (process.env.NMH_EXIT_ON_STDIN_CLOSE === '1') stdin.on('close', () => { void close(); });

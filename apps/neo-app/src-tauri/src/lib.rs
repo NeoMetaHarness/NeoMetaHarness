@@ -741,6 +741,8 @@ impl GatewaySidecar {
             .env("NMH_DB_PATH", data_dir.join("neo.sqlite"))
             .env("NMH_EXTENSIONS_DIR", extensions_dir)
             .env("NEO_MODE", "desktop")
+            // Gateway exits when this pipe closes, so it never outlives the shell.
+            .env("NMH_EXIT_ON_STDIN_CLOSE", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());

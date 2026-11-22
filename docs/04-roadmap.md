@@ -35,6 +35,7 @@ gantt
 - P1-10: a verified kernel-owned generation remains eligible to run when its bundled extension is absent.
 - Neo API contracts and event bus; workspaces, members, roles; vault.
 - P1-14: a deployment-level owner role, separate from the per-org `owner` role (decided 2026-11-21). Only the deployment owner sees and manages deployment-wide items (Hermes and channel bindings, kernel upgrades, org creation in server mode); in desktop mode the single user is the deployment owner.
+- P1-15: the desktop gateway sidecar never outlives the shell (decided 2026-11-22). The shell owns it through the stdin pipe, and the gateway shuts down cleanly when that pipe closes (crash, kill or failed setup); server mode is unaffected. Desktop test cleanup no longer masks the real failure.
 - `@neometaharness/ui` on Astryx + Neo theme (in NeoMetaHarness-design-system); slot runtime.
 - App shell: navigation, Inbox placeholder, **Extensions** page, schema-driven Settings, onboarding skeleton; Tauri 2 desktop (tray, global launcher, updater, deep links) + PWA; perf budgets wired into `pnpm check`.
 - **Exit:** install / enable / disable a sample TS and a sample Python extension live, without a restart.
