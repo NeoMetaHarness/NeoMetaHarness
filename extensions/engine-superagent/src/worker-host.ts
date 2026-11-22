@@ -68,7 +68,7 @@ export class PresetWorkerHost implements WorkerHost {
     this.computerProfiles.set(`${workspace ?? 'default'}:${computerProfile}`, workspace ?? 'default');
     const profileHome = join(this.home, createHash('sha256').update(`${workspace ?? 'default'}:${computerProfile}`).digest('hex'));
     const computerMcp = await this.computers?.ready('superagent', computerProfile, profileHome, workspace ?? 'default');
-    const appsMcp = await this.appsMcp?.ready('superagent', computerProfile, profileHome, workspace ?? 'default');
+    const appsMcp = await this.appsMcp?.ready('superagent', computerProfile, profileHome, workspace);
     // Every worker has its own model adapter, allowing concurrent assignments.
     const unregister = this.context.llm.registerAdapter([provider], adapter);
     let worker: Awaited<ReturnType<typeof this.context.agents.create>> | undefined;
@@ -126,10 +126,11 @@ export class PresetWorkerHost implements WorkerHost {
 
   async close(): Promise<void> {
     await Promise.allSettled([...this.active].map((worker) => worker.dispose()));
-    this.computerProfiles.set(`${workspace ?? 'default'}:${computerProfile}`, workspace ?? 'default');
-    const profileHome = join(this.home, createHash('sha256').update(`${workspace ?? 'default'}:${computerProfile}`).digest('hex'));
-    const computerMcp = await this.computers?.ready('superagent', computerProfile, profileHome, workspace ?? 'default');
-    const appsMcp = await this.appsMcp?.ready('superagent', computerProfile, profileHome, workspace ?? 'default');
+    for (const [key, workspace] of this.computerProfiles) {
+      const profile = key.slice(workspace.length + 1);
+      await this.computers?.forget('superagent', profile, workspace);
+      await this.appsMcp?.forget('superagent', profile);
+    }
     this.computerProfiles.clear();
     this.skills?.forgetDsh('superagent');
     await this.registration?.dispose();
