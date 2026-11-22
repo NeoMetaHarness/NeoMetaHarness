@@ -20,8 +20,8 @@ signed and checked locally, and published with one `gh release create`. Commands
   real key there is task P1-11; no release can be cut until it is merged.
 - Never commit a private key, a password or a `latest.json`.
 - **At most 20 GitHub writes per release** ([GitHub safety guardrails](policies/GITHUB-SAFETY-GUARDRAILS.md)).
-  A release normally takes 9: one push and one `gh release create` (1 release plus 1 upload per asset, for
-  7 assets). Stop on any 403 or 429.
+  A release normally takes 10: one push, and one `gh release create`, which makes 9 (it creates the
+  release as a draft, uploads the 7 assets, then publishes it). Stop on any 403 or 429.
 
 ## 1. Prepare
 
@@ -128,13 +128,17 @@ Each updater artifact gets a `.sig` file next to it under `apps/neo-app/src-taur
 | `windows-x86_64-msi` | `msi/Neo Meta Harness_X.Y.Z_x64_en-US.msi` |
 | `darwin-aarch64-app` (or `darwin-x86_64-app`) | `macos/Neo Meta Harness.app.tar.gz` |
 | `linux-x86_64-appimage` | `appimage/neo-meta-harness_X.Y.Z_amd64.AppImage` |
+| `linux-x86_64-deb` | `deb/neo-meta-harness_X.Y.Z_amd64.deb` |
 
 The macOS archive's name has no version. `release-manifest.mjs` reads the version from the bundle's
 `Info.plist` (`CFBundleShortVersionString`) inside the signed archive, so an older archive with a valid
 signature is refused.
 
-The `.dmg` (`dmg/Neo Meta Harness_X.Y.Z_aarch64.dmg`) and `.deb` (`deb/neo-meta-harness_X.Y.Z_amd64.deb`) are
-for manual installs, not updates. Publish them as plain assets.
+On Linux the installed app asks for `linux-x86_64-appimage` when it runs from an AppImage and for
+`linux-x86_64-deb` otherwise (task P1-11). Publish both: without the `.deb` entry, deb installs get no update.
+
+The `.dmg` (`dmg/Neo Meta Harness_X.Y.Z_aarch64.dmg`) is for manual installs, not updates. Publish it as a plain
+asset.
 
 Copy every artifact, together with its `.sig`, to the machine that publishes the release.
 
@@ -149,7 +153,8 @@ node scripts/release-manifest.mjs --version $v --out-dir release-out `
   --artifact "windows-x86_64-nsis=$bundle/nsis/Neo Meta Harness_${v}_x64-setup.exe" `
   --artifact "windows-x86_64-msi=$bundle/msi/Neo Meta Harness_${v}_x64_en-US.msi" `
   --artifact "darwin-aarch64-app=C:/release-inputs/Neo Meta Harness.app.tar.gz" `
-  --artifact "linux-x86_64-appimage=C:/release-inputs/neo-meta-harness_${v}_amd64.AppImage"
+  --artifact "linux-x86_64-appimage=C:/release-inputs/neo-meta-harness_${v}_amd64.AppImage" `
+  --artifact "linux-x86_64-deb=C:/release-inputs/neo-meta-harness_${v}_amd64.deb"
 ```
 
 The script writes `release-out/latest.json` and copies each artifact into `release-out/`, named as GitHub
@@ -160,7 +165,8 @@ will serve it (spaces become dots). For each platform, `latest.json` holds:
 - a `url` under `https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/vX.Y.Z/`;
 - a `signature`, copied from the `.sig` file.
 
-It also adds a plain `<os>-<arch>` entry for each platform.
+It also adds a plain `<os>-<arch>` entry for each platform, pointing at the preferred installer: NSIS on
+Windows, the AppImage on Linux.
 
 It refuses to write anything when:
 
@@ -179,30 +185,37 @@ It refuses to write anything when:
 `release-out/` is outside version control: never commit it.
 
 ```powershell
-Get-Content release-out/latest.json      # check version, notes and one entry per platform
+Get-Content release-out/latest.json -Raw -Encoding UTF8   # check version, notes and one entry per platform
 ```
 
 ## 6. Publish (the owner runs this; one push, one release)
 
-This is the only step that writes to GitHub. Count the writes: the push is 1, and `gh release create` is
-1 plus 1 per asset. The 7 assets are `latest.json`, the four updater artifacts, the `.dmg` and the `.deb`:
-8 writes for the release, 9 in total.
+This is the only step that writes to GitHub. Count the writes:
+
+- The push is 1.
+- `gh release create` with assets makes 9: it creates the release as a draft (1), uploads each asset (7), then
+  publishes it (1).
+- The 7 assets are everything in `release-out/` (`latest.json` and the five updater artifacts), plus the `.dmg`.
+
+That is 10 in total.
 
 ```powershell
 # The release page notes are the same CHANGELOG section as latest.json (no GitHub write).
 $notes = Join-Path ([IO.Path]::GetTempPath()) "neo-notes-$v.md"
-[IO.File]::WriteAllText($notes, (Get-Content release-out/latest.json -Raw | ConvertFrom-Json).notes)
+[IO.File]::WriteAllText($notes, (Get-Content release-out/latest.json -Raw -Encoding UTF8 | ConvertFrom-Json).notes)
+# Explicit file paths: gh does not expand globs on Windows, and PowerShell passes them through unexpanded.
+$assets = @((Get-ChildItem release-out -File).FullName) + "C:/release-inputs/Neo Meta Harness_${v}_aarch64.dmg"
+if ($assets.Count -ne 7) { throw "Expected 7 release assets, found $($assets.Count)" }
 
 git push origin main                                     # write 1: the release commit
 $sha = git rev-parse HEAD
-gh release create "v$v" --latest --target $sha --title "Neo Meta Harness v$v" --notes-file $notes `
-  release-out/latest.json release-out/*.exe release-out/*.msi release-out/*.tar.gz release-out/*.AppImage `
-  "C:/release-inputs/Neo Meta Harness_${v}_aarch64.dmg" `
-  "C:/release-inputs/neo-meta-harness_${v}_amd64.deb"     # writes 2..9: the release and its 7 assets
+gh release create "v$v" --latest --target $sha --title "Neo Meta Harness v$v" --notes-file $notes @assets
+# writes 2..10: draft release, 7 asset uploads, publish
 ```
 
 - `--latest` marks the release as the one `releases/latest` serves.
-- Never add `--prerelease` or `--draft`.
+- Never add `--prerelease` or `--draft`. gh's own draft step is internal; it publishes the release once the
+  uploads finish.
 - `gh` creates the `vX.Y.Z` tag on `$sha`; there is no separate tag push.
 
 Then check it with reads only:
@@ -229,7 +242,7 @@ app inherits them.
 
    ```powershell
    $env:NMH_UPDATER_ENDPOINT = 'https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json'
-   $env:NMH_UPDATER_PUBLIC_KEY = (Get-Content apps/neo-app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).plugins.updater.pubkey
+   $env:NMH_UPDATER_PUBLIC_KEY = (Get-Content apps/neo-app/src-tauri/tauri.conf.json -Raw -Encoding UTF8 | ConvertFrom-Json).plugins.updater.pubkey
    ```
 
    This is the public key only, the one checked in.

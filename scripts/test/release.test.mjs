@@ -114,6 +114,7 @@ function fakeBundles(root, version = '1.0.0') {
     'windows-x86_64-msi': [`Neo Meta Harness_${version}_x64_en-US.msi`, randomBytes(2048)],
     'darwin-aarch64-app': ['Neo Meta Harness.app.tar.gz', appTarGz(version)],
     'linux-x86_64-appimage': [`neo-meta-harness_${version}_amd64.AppImage`, randomBytes(2048)],
+    'linux-x86_64-deb': [`neo-meta-harness_${version}_amd64.deb`, randomBytes(2048)],
   };
   return Object.entries(files).map(([platform, [name, data]]) => ({ platform, file: signedArtifact(dir, name, data) }));
 }
@@ -134,10 +135,16 @@ test('release-manifest: builds latest.json from verified, signed bundles', async
     assert.equal(manifest.pub_date, '2027-03-23T10:00:00Z');
     assert.equal(manifest.notes, '### Added\n- Fake release notes.', 'notes come from the CHANGELOG entry only');
     assert.deepEqual(Object.keys(manifest.platforms), [
-      'darwin-aarch64', 'darwin-aarch64-app', 'linux-x86_64', 'linux-x86_64-appimage',
+      'darwin-aarch64', 'darwin-aarch64-app', 'linux-x86_64', 'linux-x86_64-appimage', 'linux-x86_64-deb',
       'windows-x86_64', 'windows-x86_64-msi', 'windows-x86_64-nsis',
     ]);
     assert.deepEqual(manifest.platforms['windows-x86_64'], manifest.platforms['windows-x86_64-nsis'], 'plain key prefers NSIS');
+    // P1-11: deb installs request linux-<arch>-deb, AppImage installs linux-<arch>-appimage. Both are signed entries.
+    const deb = manifest.platforms['linux-x86_64-deb'];
+    assert.equal(deb.url, 'https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v1.0.0/neo-meta-harness_1.0.0_amd64.deb');
+    assert.equal(deb.signature, readFileSync(`${artifacts[4].file}.sig`, 'utf8').trim(), 'deb signature is its own .sig');
+    assert.notEqual(deb.url, manifest.platforms['linux-x86_64-appimage'].url);
+    assert.deepEqual(manifest.platforms['linux-x86_64'], manifest.platforms['linux-x86_64-appimage'], 'plain key prefers the AppImage');
     const nsis = manifest.platforms['windows-x86_64-nsis'];
     assert.equal(nsis.url, 'https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v1.0.0/Neo.Meta.Harness_1.0.0_x64-setup.exe');
     assert.equal(nsis.signature, readFileSync(`${artifacts[0].file}.sig`, 'utf8').trim(), 'signature is the .sig content');
@@ -150,12 +157,12 @@ test('release-manifest: builds latest.json from verified, signed bundles', async
     assert.deepEqual(JSON.parse(readFileSync(written, 'utf8')), manifest);
     assert.deepEqual(readdirSync(out).sort(), [
       'Neo.Meta.Harness.app.tar.gz', 'Neo.Meta.Harness_1.0.0_x64-setup.exe', 'Neo.Meta.Harness_1.0.0_x64_en-US.msi',
-      'latest.json', 'neo-meta-harness_1.0.0_amd64.AppImage',
+      'latest.json', 'neo-meta-harness_1.0.0_amd64.AppImage', 'neo-meta-harness_1.0.0_amd64.deb',
     ], 'assets are staged under the names GitHub serves');
     assert.throws(() => writeRelease({ outDir: out, manifest, assets }), /not empty/, 'never mixes into an old output');
     assert.equal(githubAssetName('Neo Meta Harness_1.0.0_x64-setup.exe'), 'Neo.Meta.Harness_1.0.0_x64-setup.exe');
   } finally { rmSync(root, { recursive: true, force: true }); }
-  console.log('P7-11_MANIFEST PASS verified signatures, version, CHANGELOG notes, pub_date, per-platform url, GitHub asset names');
+  console.log('P7-11_MANIFEST PASS verified signatures, linux deb+appimage entries, version, CHANGELOG notes, pub_date, per-platform url, GitHub asset names');
 });
 
 test('release-manifest: fails closed on bad inputs', async () => {
