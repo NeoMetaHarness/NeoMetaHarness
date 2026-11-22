@@ -613,6 +613,12 @@
       "status": "done",
       "owner": "pm + helpers",
       "evidence": "Owner-approved 2026-11-22 after the first real Windows installer build stalled (~157k loose resource files, 1.9 GB; Tauri NSIS script generation ~30 min, then makensis failed on paths > 260 chars). work/payload (6 commits, reviewed as 9901e5c): installer:prepare deploys production dependencies only, through one hoisted node_modules for the gateway and all extensions (54k files; tsx moved to gateway dependencies; engine-superagent declares its runtime contracts import), then packs it as one pax tar (709 MB, 59,469 entries) plus runtime.json (version, sha256). The Tauri shell unpacks it into <app_local_data_dir>/runtime/<version>-<sha12> under a file lock (temp dir, marker, rename; traversal/symlink entries refused; old versions cleaned). Real archive unpack 56 s, reuse <1 ms. Unsigned NSIS installer built in 13 min (136 MB); install-test (silent install to temp dir, isolated data/runtime dirs): ready in 50 s, POST /extensions/list 200 with 28 extensions incl. engine-dsh, gateway exits on app close, uninstall clean. Review: installer:prepare+smoke+check x2, neo-app build, cargo test (57), test:p1-5, test:p7-8, test:p7-11, gateway, toggle, check, secret scan OK; full regression ok=70 fail=0."
+    },
+    "P7-15": {
+      "title": "Setup screen while the runtime unpacks",
+      "status": "done",
+      "owner": "helper (opus)",
+      "evidence": "Approved by the owner 2026-11-23 (overnight blanket approval; first launch showed nothing for ~50 s). review/p715 (2 commits, reviewed as 8bb6090): runtime::needs_unpack (marker-only check); when unpacking is needed the shell opens the main window on index.html?setup=1 (Astryx Heading/Text/ProgressBar/Banner, lazily loaded, no Gateway calls), unpacks and starts the Gateway on a background thread, then finish_setup navigates the same window to the app; otherwise startup is unchanged. Errors show on the setup page; a Gateway that becomes ready after exit started is stopped. Real install test of the unsigned NSIS installer: setup screen shown (shell log line), ready in 47 s, POST /extensions/list 200 with 28 extensions incl. engine-dsh, gateway exits on close, uninstall clean. Review: cargo test (59) x2, neo-app build, test:p1-5, test:p7-8, test:p1-11, gateway, toggle, check, secret scan OK; full regression ok=70 fail=0."
     }
   },
   "p6_tasks": {
