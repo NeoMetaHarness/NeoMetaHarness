@@ -13,4 +13,4 @@ Test role authorization, workspace scope, failure and retry behavior, extension-
 Record local command, exit status, fixture isolation, build version and a concise summary of what passed.
 
 ## Handoff
-Link the commit and identify any remaining blocker and the exact next action. The readiness file changes only from verified evidence.
+Link the commit and identify any remaining blocker and the exact next action. List any out-of-scope bugs, drift or TODOs you noticed; do not fix them in this task. `machine/readiness.json` changes only from verified evidence.

@@ -5,6 +5,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { checkPerfBudgets } from './perf-budgets.mjs'
+import { renderCapabilities } from './capabilities.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const failures = []
@@ -32,6 +33,10 @@ for (const f of walk(join(root, 'machine'), p => p.endsWith('.json'))) {
     if (typeof j.schema_version !== 'number') fail('machine', `${relative(root, f)} has no schema_version`)
   } catch (e) { fail('machine', `${relative(root, f)}: ${e.message}`) }
 }
+
+// 2b. The capability inventory matches the extension manifests.
+if (readFileSync(join(root, 'machine/capabilities.json'), 'utf8').replace(/\r\n/g, '\n') !== renderCapabilities())
+  fail('machine', 'machine/capabilities.json is out of date; run node scripts/capabilities.mjs')
 
 // 3. Relative markdown links resolve.
 for (const f of walk(root, p => p.endsWith('.md'))) {

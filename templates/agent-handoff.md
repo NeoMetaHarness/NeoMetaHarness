@@ -10,4 +10,4 @@ List branch, commit, files changed, tests executed, observations and open blocke
 Confirm source ownership, unmodified upstreams, extension lifecycle behavior, Astryx-only UI and local-only GitHub guardrails.
 
 ## Continuation
-State the next executable step and the commands needed to verify it. Route status to the owning machine record.
+State the next executable step and the commands needed to verify it. List any out-of-scope bugs, drift or TODOs you noticed; do not fix them in this task. Never record status here: `machine/readiness.json` is the only status source and changes only from verified evidence.

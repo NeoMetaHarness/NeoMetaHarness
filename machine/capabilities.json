@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "source": "extensions/*/neo.extension.json",
-  "source_revision": "123190d",
-  "note": "Manifest-derived inventory of local extensions. Categories describe declared kind and do not imply enabled, healthy or released status. Runtime readiness is tracked only in machine/readiness.json.",
-  "extension_count": 24,
+  "generated_by": "scripts/capabilities.mjs",
+  "note": "Generated from the extension manifests; do not edit by hand. Lists id, version, name, kind, runtime type and dependsOn only (settings and contributes stay in the manifests). Kinds do not imply enabled, healthy or released status; readiness is tracked only in machine/readiness.json.",
+  "extension_count": 28,
   "kinds": {
     "computer": [
+      "computer-boat",
       "computer-docker",
       "computer-hermes-screen",
       "computer-local",
@@ -40,13 +41,26 @@
       "backup"
     ],
     "tool": [
+      "apps-composio",
       "computers-mcp",
       "metrics",
       "models",
-      "models-router-panda"
+      "models-router-panda",
+      "voice-xai",
+      "x-search"
     ]
   },
   "extensions": [
+    {
+      "id": "apps-composio",
+      "version": "0.1.0",
+      "display_name": "Connected Apps (Composio)",
+      "kind": [
+        "tool"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/apps-composio/neo.extension.json"
+    },
     {
       "id": "backup",
       "version": "0.1.0",
@@ -65,10 +79,10 @@
         "integration"
       ],
       "runtime_type": "cordis",
-      "manifest": "extensions/channels/neo.extension.json",
-      "dependencies": {
+      "dependsOn": {
         "engine-hermes": "^0.1.0"
-      }
+      },
+      "manifest": "extensions/channels/neo.extension.json"
     },
     {
       "id": "coding-workflow",
@@ -78,10 +92,20 @@
         "feature"
       ],
       "runtime_type": "cordis",
-      "manifest": "extensions/coding-workflow/neo.extension.json",
-      "dependencies": {
+      "dependsOn": {
         "engine-t3": "^0.1.0"
-      }
+      },
+      "manifest": "extensions/coding-workflow/neo.extension.json"
+    },
+    {
+      "id": "computer-boat",
+      "version": "0.1.0",
+      "display_name": "Boat cloud and self-hosted computers",
+      "kind": [
+        "computer"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computer-boat/neo.extension.json"
     },
     {
       "id": "computer-docker",
@@ -261,10 +285,10 @@
         "tool"
       ],
       "runtime_type": "cordis",
-      "manifest": "extensions/models-router-panda/neo.extension.json",
-      "dependencies": {
+      "dependsOn": {
         "models": "*"
-      }
+      },
+      "manifest": "extensions/models-router-panda/neo.extension.json"
     },
     {
       "id": "sample-py",
@@ -295,6 +319,26 @@
       ],
       "runtime_type": "cordis",
       "manifest": "extensions/skills-registry/neo.extension.json"
+    },
+    {
+      "id": "voice-xai",
+      "version": "0.1.0",
+      "display_name": "xAI Voice",
+      "kind": [
+        "tool"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/voice-xai/neo.extension.json"
+    },
+    {
+      "id": "x-search",
+      "version": "0.1.0",
+      "display_name": "xAI X Search",
+      "kind": [
+        "tool"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/x-search/neo.extension.json"
     }
   ]
 }
