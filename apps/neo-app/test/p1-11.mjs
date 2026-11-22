@@ -348,6 +348,62 @@ assert.throws(
 );
 delete process.env.TAURI_ENV_CONFIG;
 
+// Verify release config with createUpdaterArtifacts: true is accepted
+runInstallerCheck({
+  configOverride: {
+    bundle: { createUpdaterArtifacts: true },
+    plugins: { updater: { pubkey: validReleaseKey } },
+  },
+  ignoreEnv: true,
+});
+
+// Verify non-boolean createUpdaterArtifacts fails installer-check
+assert.throws(
+  () => runInstallerCheck({
+    configOverride: {
+      bundle: { createUpdaterArtifacts: 'invalid' },
+      plugins: { updater: { pubkey: validReleaseKey } },
+    },
+    ignoreEnv: true,
+  }),
+  /bundle.createUpdaterArtifacts must be boolean/i,
+  'installer-check must reject non-boolean createUpdaterArtifacts'
+);
+
+// Verify unauthorized updater endpoint fails installer-check
+assert.throws(
+  () => runInstallerCheck({
+    configOverride: {
+      plugins: {
+        updater: {
+          pubkey: validReleaseKey,
+          endpoints: ['https://attacker.com/latest.json'],
+        },
+      },
+    },
+    ignoreEnv: true,
+  }),
+  /production updater endpoint must be exact GitHub Releases feed URL/i,
+  'installer-check must reject unauthorized updater endpoint'
+);
+
+// Verify unauthorized allowedHosts fail installer-check
+assert.throws(
+  () => runInstallerCheck({
+    configOverride: {
+      plugins: {
+        updater: {
+          pubkey: validReleaseKey,
+          allowedHosts: ['github.com', 'attacker.com'],
+        },
+      },
+    },
+    ignoreEnv: true,
+  }),
+  /production updater allowedHosts must match fixed GitHub asset hosts/i,
+  'installer-check must reject unauthorized allowedHosts'
+);
+
 // Verify explicitly empty TAURI_ENV_CONFIG is also rejected
 process.env.TAURI_ENV_CONFIG = '';
 assert.throws(

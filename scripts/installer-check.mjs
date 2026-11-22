@@ -305,6 +305,11 @@ export function runInstallerCheck(options = {}) {
   validateMinisignPublicKey(pubkey);
 
   assert.ok(Array.isArray(updater.endpoints) && updater.endpoints.length > 0, 'updater endpoint required');
+  assert.deepEqual(
+    updater.endpoints,
+    ['https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json'],
+    'production updater endpoint must be exact GitHub Releases feed URL'
+  );
   for (const endpoint of updater.endpoints) {
     const url = new URL(endpoint);
     assert.equal(url.protocol, 'https:', 'updater endpoint uses HTTPS');
@@ -315,12 +320,15 @@ export function runInstallerCheck(options = {}) {
   // Validate allowedHosts in updater config
   const allowedHosts = updater.allowedHosts;
   assert.ok(Array.isArray(allowedHosts) && allowedHosts.length > 0, 'updater allowedHosts must be configured');
-  assert.ok(
-    allowedHosts.includes('objects.githubusercontent.com') && allowedHosts.includes('release-assets.githubusercontent.com'),
-    'updater allowedHosts must include GitHub asset hosts for GitHub Releases feed'
+  const expectedAllowedHosts = ['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'];
+  assert.deepEqual(
+    [...allowedHosts].sort(),
+    [...expectedAllowedHosts].sort(),
+    'production updater allowedHosts must match fixed GitHub asset hosts'
   );
 
-  assert.equal(bundle.createUpdaterArtifacts, false, 'unsigned development builds do not produce updater assets');
+  assert.equal(typeof bundle.createUpdaterArtifacts, 'boolean', 'bundle.createUpdaterArtifacts must be boolean');
+  assert.equal(bundleConfigFile.bundle?.createUpdaterArtifacts, false, 'base bundle config defaults to false without explicit release flag');
 
   const tracked = execFileSync('git', ['ls-files', 'apps/neo-app/src-tauri', 'scripts/installer-prepare.mjs'], { cwd: root, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
   assert.ok(tracked.every((path) => !/(^|\/)(?:\.env(?:\.|$)|id_rsa|.*(?:private|secret).*\.(?:pem|key|p8|p12|pfx)$)/i.test(path)), 'no credential files committed');

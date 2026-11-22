@@ -37,13 +37,59 @@ fn forward_deep_link(app: &tauri::AppHandle, url: &str) {
 #[derive(Default)]
 struct UpdateCandidate(Mutex<Option<String>>);
 
-fn validate_updater_endpoint(endpoint: &str, is_debug: bool) -> Result<(), String> {
-    if !is_debug && !endpoint.starts_with("https://") {
-        return Err(format!("Release updater endpoint must use HTTPS: {endpoint}"));
+pub const PRODUCTION_UPDATER_ENDPOINT: &str =
+    "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json";
+
+pub const PRODUCTION_ALLOWED_HOSTS: &[&str] = &[
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+];
+
+pub fn is_valid_stable_update(current: &semver::Version, candidate: &semver::Version) -> bool {
+    candidate.pre.is_empty() && candidate > current
+}
+
+pub fn is_valid_stable_update_str(current: &str, candidate: &str) -> bool {
+    match (semver::Version::parse(current), semver::Version::parse(candidate)) {
+        (Ok(cur), Ok(cand)) => is_valid_stable_update(&cur, &cand),
+        _ => false,
     }
+}
+
+pub fn resolve_linux_target_for(arch: &str, is_appimage: bool) -> String {
+    let pkg = if is_appimage { "appimage" } else { "deb" };
+    format!("linux-{arch}-{pkg}")
+}
+
+pub fn resolve_linux_updater_target() -> String {
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else if cfg!(target_arch = "arm") {
+        "armv7"
+    } else if cfg!(target_arch = "x86") {
+        "i686"
+    } else {
+        "x86_64"
+    };
+    resolve_linux_target_for(arch, std::env::var_os("APPIMAGE").is_some())
+}
+
+fn validate_updater_endpoint(endpoint: &str, is_debug: bool) -> Result<(), String> {
     let trimmed = endpoint.trim();
     if trimmed.is_empty() {
         return Err("Updater endpoint cannot be empty".into());
+    }
+    if !is_debug {
+        if trimmed != PRODUCTION_UPDATER_ENDPOINT {
+            return Err(format!(
+                "Production updater endpoint must be '{PRODUCTION_UPDATER_ENDPOINT}', got '{trimmed}'"
+            ));
+        }
+    } else if !trimmed.starts_with("https://") && !trimmed.starts_with("http://127.0.0.1:") && !trimmed.starts_with("http://localhost:") {
+        return Err(format!("Updater endpoint must use HTTPS or loopback HTTP in debug builds: {endpoint}"));
     }
     Ok(())
 }
@@ -51,7 +97,11 @@ fn validate_updater_endpoint(endpoint: &str, is_debug: bool) -> Result<(), Strin
 fn resolve_allowed_hosts(
     endpoint_urls: &[url::Url],
     configured_hosts: &[String],
+    is_debug: bool,
 ) -> Vec<String> {
+    if !is_debug {
+        return PRODUCTION_ALLOWED_HOSTS.iter().map(|s| s.to_string()).collect();
+    }
     let mut hosts = Vec::new();
 
     for ep in endpoint_urls {
@@ -78,14 +128,11 @@ fn resolve_allowed_hosts(
         }
     }
 
-    #[cfg(debug_assertions)]
-    {
-        if let Ok(env_hosts) = std::env::var("NMH_UPDATER_ALLOWED_HOSTS") {
-            for h in env_hosts.split(',') {
-                let h_lower = h.trim().to_lowercase();
-                if !h_lower.is_empty() && !hosts.contains(&h_lower) {
-                    hosts.push(h_lower);
-                }
+    if let Ok(env_hosts) = std::env::var("NMH_UPDATER_ALLOWED_HOSTS") {
+        for h in env_hosts.split(',') {
+            let h_lower = h.trim().to_lowercase();
+            if !h_lower.is_empty() && !hosts.contains(&h_lower) {
+                hosts.push(h_lower);
             }
         }
     }
@@ -157,6 +204,36 @@ fn configure_updater_builder(
 ) -> Result<(tauri_plugin_updater::UpdaterBuilder, Vec<String>), String> {
     #[allow(unused_mut)]
     let mut builder = app.updater_builder();
+
+    // Linux package-specific target: linux-{arch}-deb or linux-{arch}-appimage
+    #[cfg(target_os = "linux")]
+    {
+        builder = builder.target(resolve_linux_updater_target());
+    }
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(target) = std::env::var("NMH_UPDATER_TARGET") {
+            if !target.trim().is_empty() {
+                builder = builder.target(target.trim());
+            }
+        }
+    }
+
+    // Version comparator: accept stable candidates with strictly greater SemVer precedence
+    builder = builder.version_comparator(|current, release| {
+        is_valid_stable_update(&current, &release.version)
+    });
+
+    // Windows / updater pre-exit callback: stop Gateway sidecar before installer launches
+    let app_handle_for_exit = app.clone();
+    builder = builder.on_before_exit(move || {
+        if let Some(state) = app_handle_for_exit.try_state::<GatewayState>() {
+            if let Some(mut sidecar) = state.0.lock().unwrap().take() {
+                sidecar.stop();
+            }
+        }
+    });
+
     let (override_endpoint, override_pubkey) = get_updater_overrides();
     let mut effective_endpoints = Vec::new();
 
@@ -194,7 +271,7 @@ fn configure_updater_builder(
         }
     }
 
-    let allowed_hosts = resolve_allowed_hosts(&effective_endpoints, &configured_allowed_hosts);
+    let allowed_hosts = resolve_allowed_hosts(&effective_endpoints, &configured_allowed_hosts, cfg!(debug_assertions));
 
     // Set Reqwest redirect policy: only HTTPS (in release) and target host in allowed_hosts
     let redirect_hosts = allowed_hosts.clone();
@@ -253,8 +330,19 @@ async fn install_update(app: tauri::AppHandle, window: tauri::Window) -> Result<
         if update.version != candidate {
             return Err(format!("Available update version ({}) does not match expected candidate ({candidate})", update.version));
         }
+        let current_ver = app.package_info().version.clone();
+        if let (Ok(cur), Ok(cand)) = (semver::Version::parse(&current_ver.to_string()), semver::Version::parse(&update.version)) {
+            if !is_valid_stable_update(&cur, &cand) {
+                return Err(format!("Update version {} is not a valid stable update over current version {}", update.version, current_ver));
+            }
+        }
         validate_update_download_url(&update.download_url, &allowed_hosts, cfg!(debug_assertions))?;
         update.download_and_install(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
+        if let Some(state) = app.try_state::<GatewayState>() {
+            if let Some(mut sidecar) = state.0.lock().unwrap().take() {
+                sidecar.stop();
+            }
+        }
         app.restart();
     }
     Err("No update available to install".into())
@@ -473,15 +561,23 @@ mod tests {
     #[test]
     fn test_endpoint_https_enforcement() {
         assert!(validate_updater_endpoint("http://insecure.example.com/latest.json", false).is_err());
-        assert!(validate_updater_endpoint("https://secure.example.com/latest.json", false).is_ok());
+        assert!(validate_updater_endpoint("https://secure.example.com/latest.json", false).is_err());
+        assert!(validate_updater_endpoint(PRODUCTION_UPDATER_ENDPOINT, false).is_ok());
         assert!(validate_updater_endpoint("http://127.0.0.1:8080/latest.json", true).is_ok());
         assert!(validate_updater_endpoint("", false).is_err());
     }
 
     #[test]
+    fn test_endpoint_production_pin() {
+        assert!(validate_updater_endpoint(PRODUCTION_UPDATER_ENDPOINT, false).is_ok());
+        assert!(validate_updater_endpoint("https://attacker.com/latest.json", false).is_err());
+        assert!(validate_updater_endpoint("https://github.com/OtherOrg/repo/releases/latest/download/latest.json", false).is_err());
+    }
+
+    #[test]
     fn test_resolve_allowed_hosts_github_defaults() {
         let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
-        let hosts = resolve_allowed_hosts(&ep, &[]);
+        let hosts = resolve_allowed_hosts(&ep, &[], true);
         assert!(hosts.contains(&"github.com".to_string()));
         assert!(hosts.contains(&"objects.githubusercontent.com".to_string()));
         assert!(hosts.contains(&"release-assets.githubusercontent.com".to_string()));
@@ -489,9 +585,42 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_allowed_hosts_production_pin() {
+        let ep = vec![url::Url::parse("https://evil.com/latest.json").unwrap()];
+        let evil_hosts = vec!["evil.com".to_string(), "attacker.com".to_string()];
+        let hosts = resolve_allowed_hosts(&ep, &evil_hosts, false);
+        assert_eq!(hosts, vec!["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"]);
+    }
+
+    #[test]
+    fn test_version_comparator() {
+        // Pre-release must be rejected over stable release
+        assert!(!is_valid_stable_update_str("0.1.0", "0.2.0-rc.1"));
+        assert!(!is_valid_stable_update_str("0.2.0", "0.2.0-rc.1"));
+        assert!(!is_valid_stable_update_str("0.1.0", "0.1.0-alpha"));
+        // Equal version must be rejected
+        assert!(!is_valid_stable_update_str("0.1.0", "0.1.0"));
+        // Lower version must be rejected
+        assert!(!is_valid_stable_update_str("0.1.0", "0.0.9"));
+        assert!(!is_valid_stable_update_str("1.0.0", "0.9.9"));
+        // Greater stable version must be accepted
+        assert!(is_valid_stable_update_str("0.1.0", "0.2.0"));
+        assert!(is_valid_stable_update_str("0.1.0", "0.1.1"));
+        assert!(is_valid_stable_update_str("0.1.0", "1.0.0"));
+    }
+
+    #[test]
+    fn test_linux_updater_targets() {
+        assert_eq!(resolve_linux_target_for("x86_64", true), "linux-x86_64-appimage");
+        assert_eq!(resolve_linux_target_for("x86_64", false), "linux-x86_64-deb");
+        assert_eq!(resolve_linux_target_for("aarch64", true), "linux-aarch64-appimage");
+        assert_eq!(resolve_linux_target_for("aarch64", false), "linux-aarch64-deb");
+    }
+
+    #[test]
     fn test_download_url_validation_with_allowed_hosts() {
         let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
-        let allowed_hosts = resolve_allowed_hosts(&ep, &["updates.custom.com".to_string()]);
+        let allowed_hosts = resolve_allowed_hosts(&ep, &["updates.custom.com".to_string()], true);
 
         // Disallowed scheme in release
         let http_url = url::Url::parse("http://objects.githubusercontent.com/asset.msi.zip").unwrap();
@@ -518,7 +647,7 @@ mod tests {
     #[test]
     fn test_redirect_policy_allowed_host_chain() {
         let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
-        let allowed_hosts = resolve_allowed_hosts(&ep, &[]);
+        let allowed_hosts = resolve_allowed_hosts(&ep, &[], false);
 
         // Initial request host: github.com
         let url0 = url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/app.zip").unwrap();
@@ -540,7 +669,7 @@ mod tests {
     #[test]
     fn test_redirect_policy_untrusted_host() {
         let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
-        let allowed_hosts = resolve_allowed_hosts(&ep, &[]);
+        let allowed_hosts = resolve_allowed_hosts(&ep, &[], false);
 
         // External attacker host
         let untrusted1 = url::Url::parse("https://attacker.com/fake-release.zip").unwrap();
@@ -555,7 +684,7 @@ mod tests {
     #[test]
     fn test_redirect_policy_http_enforcement() {
         let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
-        let allowed_hosts = resolve_allowed_hosts(&ep, &[]);
+        let allowed_hosts = resolve_allowed_hosts(&ep, &[], false);
 
         let http_url = url::Url::parse("http://objects.githubusercontent.com/asset.zip").unwrap();
         // In release builds, HTTP redirect must be rejected
@@ -567,7 +696,7 @@ mod tests {
     #[test]
     fn test_redirect_policy_more_than_5_hops() {
         let ep = vec![url::Url::parse("https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json").unwrap()];
-        let allowed_hosts = resolve_allowed_hosts(&ep, &[]);
+        let allowed_hosts = resolve_allowed_hosts(&ep, &[], false);
         let valid_url = url::Url::parse("https://objects.githubusercontent.com/asset.zip").unwrap();
 
         // 4 previous redirects (attempting 5th request) -> OK

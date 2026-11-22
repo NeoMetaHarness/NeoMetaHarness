@@ -16,9 +16,10 @@ The shell checks for updates on startup in the background and on demand when the
 clicks "Check for updates". When an update is available, Settings displays an "Update available"
 indicator and an "Install and restart" button.
 
-Endpoints come from configuration (`apps/neo-app/src-tauri/tauri.conf.json`). In custom
-deployments, `NMH_UPDATER_ENDPOINT` and `NMH_UPDATER_PUBLIC_KEY` may be supplied via the
-environment. The private updater signing key belongs in the owner's secret store (or CI
+Endpoints come from configuration (`apps/neo-app/src-tauri/tauri.conf.json`). For local
+testing and development, `NMH_UPDATER_ENDPOINT` and `NMH_UPDATER_PUBLIC_KEY` environment variable
+overrides are supported in debug builds only; release builds strictly enforce the configured GitHub
+Releases endpoint and verified public key. The private updater signing key belongs in the owner's secret store (or CI
 secrets), supplied to the Tauri bundler using `TAURI_SIGNING_PRIVATE_KEY` and optionally
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Do not place a private key or password in Git or
 desktop application configuration. See [Install and updates](install.md#updates-and-signing)

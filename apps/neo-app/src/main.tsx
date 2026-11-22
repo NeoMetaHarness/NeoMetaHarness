@@ -71,11 +71,6 @@ function NeoApp() {
   const [shellError, setShellError] = useState('');
   const [setupIncomplete, setSetupIncomplete] = useState(false);
   useEffect(() => {
-    if (inTauri) {
-      void checkForUpdates();
-    }
-  }, []);
-  useEffect(() => {
     const onPop = () => setPath(activePath());
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);

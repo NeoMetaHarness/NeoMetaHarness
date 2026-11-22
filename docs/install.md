@@ -67,8 +67,8 @@ To distribute an update:
    ```sh
    cargo tauri build --config tauri.bundle.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}'
    ```
-   Tauri compiles the release installer and produces a signature file (e.g., `<bundle>.msi.zip.sig`).
-2. Construct `latest.json` describing the release version, release notes, ISO 8601 publish timestamp, and platform-specific signatures and download URLs:
+   Tauri compiles the release installer and produces signature files for each target (e.g., `<bundle>.msi.zip.sig`, `<bundle>.AppImage.tar.gz.sig`, `<bundle>.deb.tar.gz.sig`).
+2. Construct `latest.json` describing the release version, release notes, ISO 8601 publish timestamp, and package-specific signatures and download URLs:
    ```json
    {
      "version": "0.2.0",
@@ -83,9 +83,13 @@ To distribute an update:
          "signature": "<contents of .tar.gz.sig>",
          "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app.app.tar.gz"
        },
-       "linux-x86_64": {
+       "linux-x86_64-appimage": {
          "signature": "<contents of .AppImage.tar.gz.sig>",
          "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app.AppImage.tar.gz"
+       },
+       "linux-x86_64-deb": {
+         "signature": "<contents of .deb.tar.gz.sig>",
+         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app.deb.tar.gz"
        }
      }
    }
