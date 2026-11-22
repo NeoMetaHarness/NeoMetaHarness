@@ -2162,6 +2162,7 @@ dependencies = [
  "tauri-plugin-deep-link",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-updater",
+ "tokio",
  "url",
 ]
 

@@ -72,28 +72,43 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 }
 
 // 4. Rendering is a pure function of the snapshot.
-assert.deepEqual(toUpdateInfo(snap(1, { generation: 0 })), { available: false, version: null, status: '', checking: false, error: null });
+assert.deepEqual(toUpdateInfo(snap(1, { generation: 0 })), { generation: 0, available: false, version: null, status: '', checking: false, error: null });
+assert.equal(toUpdateInfo(snap(1, { generation: 4, available: true, version: '1.2.4' })).generation, 4, 'rendered with its generation');
+
+// Settings captures the pair at render and passes it to installUpdate.
+{
+  const { readFileSync } = await import('node:fs');
+  const settings = readFileSync(new URL('../src/pages/Settings.tsx', import.meta.url), 'utf8');
+  assert.match(settings, /const shownCandidate =\s+updateInfo\.available && updateInfo\.version \? \{ generation: updateInfo\.generation, version: updateInfo\.version \}/);
+  assert.match(settings, /onClick=\{\(\) => void installUpdate\(shownCandidate\)\}/);
+  assert.ok(!/installUpdate\(\)/.test(settings), 'no install without the rendered pair');
+}
 assert.equal(toUpdateInfo(snap(1, { error: 'offline' })).status, 'offline');
 assert.equal(toUpdateInfo(snap(1, { available: true, version: '1.2.4', installing: true })).available, false, 'no second Install while installing');
 assert.equal(toUpdateInfo(snap(1, { available: true, version: '1.2.4', installing: true })).status, 'Installing update and restarting…');
 
-// 5. Install sends exactly the {generation, version} on screen, and nothing when no Install is shown.
+// 5. Install sends exactly the {generation, version} captured when the button rendered, even if the store
+//    has since moved on to a newer snapshot (the shell then refuses the stale pair).
 {
   const shell = fakeShell();
   const store = createUpdateStore(shell.invoke);
-  await store.install();
-  assert.deepEqual(shell.commands, [], 'no Install shown, nothing sent');
   const load = store.refresh();
   shell.pending[0](snap(4, { generation: 6, available: true, version: '1.2.5' }));
   await load;
-  const install = store.install();
+  const shown = { generation: store.get().generation, version: store.get().version };
+  const later = store.refresh();
+  shell.pending[1](snap(5, { generation: 7, available: true, version: '1.2.6' }));
+  await later;
+  assert.equal(store.get().generation, 7);
+  shell.pending.splice(0, 2);
+  const install = store.install(shown);
   await tick();
-  shell.pending[1](snap(5, { generation: 6, available: true, version: '1.2.5', installing: true }));
+  shell.pending[0](snap(6, { generation: 7, available: true, version: '1.2.6', error: 'Update state changed, check again' }));
   await tick();
-  shell.pending[2](snap(6, { generation: 6, available: true, version: '1.2.5', error: 'Update state changed, check again' }));
+  shell.pending[1](snap(6, { generation: 7, available: true, version: '1.2.6', error: 'Update state changed, check again' }));
   await install;
   assert.deepEqual(shell.commands, ['install_update']);
-  assert.deepEqual(shell.args, [{ generation: 6, version: '1.2.5' }]);
+  assert.deepEqual(shell.args, [{ generation: 6, version: '1.2.5' }], 'the rendered pair, not the latest state');
   assert.equal(store.get().status, 'Update state changed, check again', 'a refusal is shown from update_state');
 }
 

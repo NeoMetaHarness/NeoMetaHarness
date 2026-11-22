@@ -308,6 +308,9 @@ export default function Settings({ onOpen }: { onOpen: (path: '/settings/channel
   const [extensions, setExtensions] = useState<ExtensionStatus[]>([]);
   const latest = useRef(0);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>(getUpdateState);
+  // Captured at render: the Install click sends exactly this {generation, version}, never a later state.
+  const shownCandidate =
+    updateInfo.available && updateInfo.version ? { generation: updateInfo.generation, version: updateInfo.version } : null;
   const native = (window as unknown as { __TAURI_INTERNALS__?: {
     invoke: (name: string) => Promise<string | null>;
   } }).__TAURI_INTERNALS__;
@@ -420,8 +423,8 @@ export default function Settings({ onOpen }: { onOpen: (path: '/settings/channel
             <Button label="Check for updates" data-testid="settings-update-check" onClick={() => void checkForUpdates()}>
               Check for updates
             </Button>
-            {updateInfo.available && (
-              <Button label="Install and restart" data-testid="settings-update-install" onClick={() => void installUpdate()}>
+            {shownCandidate && (
+              <Button label="Install and restart" data-testid="settings-update-install" onClick={() => void installUpdate(shownCandidate)}>
                 Install and restart
               </Button>
             )}

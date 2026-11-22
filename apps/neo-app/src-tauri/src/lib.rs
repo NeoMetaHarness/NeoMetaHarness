@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
@@ -58,11 +58,15 @@ impl CandidateState {
         message.to_string()
     }
 
-    /// A check is starting (startup or manual): it supersedes every check already in flight.
-    /// Refused while an install runs: checks and installs never overlap.
+    /// A check is starting (startup or manual) as a new generation. Single-flight: refused while another
+    /// check runs, and while an install runs (checks and installs never overlap), so one request at a time
+    /// owns `checking`/`installing`.
     pub fn begin_check(&mut self) -> Result<u64, String> {
         if self.installing {
             return Err(self.refuse("An update is being installed; check again after it finishes"));
+        }
+        if self.checking {
+            return Err(self.refuse("A check for updates is already running"));
         }
         self.generation += 1;
         self.revision += 1;
@@ -147,7 +151,77 @@ impl CandidateState {
 }
 
 #[derive(Default)]
-struct UpdateCandidate(Mutex<CandidateState>);
+struct UpdateCandidate(Arc<Mutex<CandidateState>>);
+
+/// Deadline for one update check (feed request); also set as the updater's request timeout.
+pub const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Deadline for downloading the update package.
+pub const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// Lock the update state even if a panic poisoned it: the state stays consistent (every mutation is one
+/// short critical section), and the busy guard must still release its flag.
+fn lock_state(state: &Mutex<CandidateState>) -> MutexGuard<'_, CandidateState> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Owns the busy flag (`checking` or `installing`) of one request and always releases it: when finished,
+/// on an early return, or when a panic unwinds through it. Created only through `begin_check`/`begin_install`.
+pub struct UpdateBusy {
+    state: Arc<Mutex<CandidateState>>,
+    generation: u64,
+    install: bool,
+    armed: bool,
+}
+
+impl UpdateBusy {
+    pub fn check(state: Arc<Mutex<CandidateState>>) -> Result<Self, String> {
+        let generation = lock_state(&state).begin_check()?;
+        Ok(Self { state, generation, install: false, armed: true })
+    }
+
+    pub fn install(state: Arc<Mutex<CandidateState>>, generation: u64, version: &str) -> Result<(Self, String), String> {
+        let authorized = lock_state(&state).begin_install(generation, version)?;
+        Ok((Self { state, generation, install: true, armed: true }, authorized))
+    }
+
+    pub fn finish_check(mut self, result: Result<Option<String>, String>) -> bool {
+        self.armed = false;
+        lock_state(&self.state).finish_check(self.generation, result)
+    }
+
+    pub fn fail_install(mut self, error: String) {
+        self.armed = false;
+        lock_state(&self.state).fail_install(error);
+    }
+
+    /// The update is installed and the app is exiting: keep `installing` so nothing starts meanwhile.
+    pub fn installed(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for UpdateBusy {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut state = lock_state(&self.state);
+        if self.install {
+            state.fail_install("the install was interrupted".into());
+        } else {
+            state.finish_check(self.generation, Err("The update check was interrupted".into()));
+        }
+    }
+}
+
+/// Fail `work` with a timeout error once `limit` has passed (dropping it, which releases its guard).
+pub async fn with_deadline<T>(
+    work: impl std::future::Future<Output = Result<T, String>>,
+    limit: Duration,
+    what: &str,
+) -> Result<T, String> {
+    tokio::time::timeout(limit, work).await.unwrap_or_else(|_| Err(format!("{what} timed out after {limit:?}")))
+}
 
 pub const SHORTCUT_RETRY_DELAY: Duration = Duration::from_millis(400);
 
@@ -184,11 +258,11 @@ fn notify_update_state(app: &tauri::AppHandle) {
 /// Run one check as a new generation and record its result in the shared state.
 async fn run_update_check(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.try_state::<UpdateCandidate>().ok_or("Update state is not registered")?;
-    let begun = state.0.lock().unwrap().begin_check();
+    let begun = UpdateBusy::check(state.0.clone());
     notify_update_state(app);
-    let generation = begun?;
-    let result = check_for_updates_internal(app).await;
-    state.0.lock().unwrap().finish_check(generation, result);
+    let busy = begun?;
+    let result = with_deadline(check_for_updates_internal(app), UPDATE_CHECK_TIMEOUT, "Checking for updates").await;
+    busy.finish_check(result);
     notify_update_state(app);
     Ok(())
 }
@@ -427,6 +501,8 @@ fn configure_updater_builder(app: &tauri::AppHandle) -> Result<ConfiguredUpdater
     let mut builder = app.updater_builder();
     #[allow(unused_mut)]
     let mut relaunch = None;
+    // Every feed request has a deadline; the download gets its own (see install_candidate).
+    builder = builder.timeout(UPDATE_CHECK_TIMEOUT);
 
     // Linux package-specific target (linux-{arch}-appimage or linux-{arch}-deb) and the executable to
     // replace. The plugin's default trusts APPIMAGE alone; override both from the running executable.
@@ -570,22 +646,33 @@ async fn install_update(
         return Err("Updates can only be installed from the main window".into());
     }
     let state = app.try_state::<UpdateCandidate>().ok_or("Update state is not registered")?;
-    let authorized = state.0.lock().unwrap().begin_install(generation, &version);
+    let begun = UpdateBusy::install(state.0.clone(), generation, &version);
     notify_update_state(&app);
-    let authorized = authorized?;
-    let result = install_candidate(&app, generation, authorized).await;
-    if let Err(error) = &result {
-        state.0.lock().unwrap().fail_install(error.clone());
-        notify_update_state(&app);
+    let (busy, authorized) = begun?;
+    match install_candidate(&app, generation, authorized).await {
+        Ok(()) => {
+            busy.installed();
+            Ok(())
+        }
+        Err(error) => {
+            busy.fail_install(error.clone());
+            notify_update_state(&app);
+            Err(error)
+        }
     }
-    result
 }
 
 async fn install_candidate(app: &tauri::AppHandle, generation: u64, candidate: String) -> Result<(), String> {
     let app = app.clone();
     let ConfiguredUpdater { builder, allowed_hosts, relaunch } = configure_updater_builder(&app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
-    if let Some(update) = updater.check().await.map_err(|error| error.to_string())? {
+    let checked = with_deadline(
+        async { updater.check().await.map_err(|error| error.to_string()) },
+        UPDATE_CHECK_TIMEOUT,
+        "Checking for updates",
+    )
+    .await?;
+    if let Some(mut update) = checked {
         if update.version != candidate {
             return Err(format!("Update state changed, check again: the feed now offers {} instead of {candidate}", update.version));
         }
@@ -597,7 +684,13 @@ async fn install_candidate(app: &tauri::AppHandle, generation: u64, candidate: S
         }
         validate_update_download_url(&update.download_url, &allowed_hosts, cfg!(debug_assertions))?;
         // Download, re-verify against the authorized version and the shared state, then install.
-        let bytes = update.download(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
+        update.timeout = Some(UPDATE_DOWNLOAD_TIMEOUT);
+        let bytes = with_deadline(
+            async { update.download(|_, _| {}, || {}).await.map_err(|error| error.to_string()) },
+            UPDATE_DOWNLOAD_TIMEOUT,
+            "Downloading the update",
+        )
+        .await?;
         app.state::<UpdateCandidate>().0.lock().unwrap().confirm_download(generation, &candidate, &update.version)?;
         update.install(bytes).map_err(|error| error.to_string())?;
         if let Some(state) = app.try_state::<GatewayState>() {
@@ -725,14 +818,19 @@ pub fn run() {
             app.manage(GatewayState(Mutex::new(Some(sidecar))));
             // Register every updater state before the startup check can finish.
             app.manage(UpdateCandidate::default());
-            // The startup check takes its generation now, before any manual check can start, so every manual
-            // check supersedes it. Its result lands only in UpdateCandidate; the webview reads update_state.
-            // (A fresh state has no install running, so this cannot be refused.)
-            let startup_generation = app.state::<UpdateCandidate>().0.lock().unwrap().begin_check()?;
+            // The startup check takes the busy flag now, before the webview can start a manual check (which
+            // is then refused until it finishes). Its result lands only in UpdateCandidate; the webview reads
+            // update_state. (A fresh state has nothing running, so this cannot be refused.)
+            let startup_check = UpdateBusy::check(app.state::<UpdateCandidate>().0.clone())?;
             let app_handle_for_update = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let result = check_for_updates_internal(&app_handle_for_update).await;
-                app_handle_for_update.state::<UpdateCandidate>().0.lock().unwrap().finish_check(startup_generation, result);
+                let result = with_deadline(
+                    check_for_updates_internal(&app_handle_for_update),
+                    UPDATE_CHECK_TIMEOUT,
+                    "Checking for updates",
+                )
+                .await;
+                startup_check.finish_check(result);
                 notify_update_state(&app_handle_for_update);
             });
 
@@ -994,36 +1092,18 @@ mod tests {
 
     #[test]
     fn test_out_of_order_replies_never_restore_stale_state() {
-        // Startup check (g1) and two manual checks (g2, g3) all in flight; replies land in the worst order.
+        // A reply from an older generation never applies: it cannot set, clear or end a newer check.
         let mut state = CandidateState::default();
-        let startup = state.begin_check().unwrap();
-        let older_manual = state.begin_check().unwrap();
-        let newer_manual = state.begin_check().unwrap();
-        assert!(state.finish_check(newer_manual, Ok(None)), "newest check applies: nothing to install");
-        assert!(!state.finish_check(older_manual, Ok(Some("1.2.5".into()))), "older manual reply cannot restore Install");
-        assert!(!state.finish_check(startup, Ok(Some("1.2.4".into()))), "late startup result cannot restore Install");
-        let snap = state.snapshot();
-        assert_eq!(snap["available"], false);
-        assert_eq!(snap["checking"], false);
-        assert_eq!(snap["generation"], 3);
-        assert!(state.begin_install(3, "1.2.5").is_err(), "nothing to install");
-
-        // The reverse: the newest sets a candidate; a stale "no update" or error cannot clear it.
-        let mut state = CandidateState::default();
-        let startup = state.begin_check().unwrap();
-        let manual = state.begin_check().unwrap();
-        assert!(state.finish_check(manual, Ok(Some("1.2.6".into()))));
-        assert!(!state.finish_check(startup, Ok(None)));
-        assert!(!state.finish_check(startup, Err("timeout".into())));
+        let old = state.begin_check().unwrap();
+        assert!(state.finish_check(old, Ok(None)));
+        let current = state.begin_check().unwrap();
+        assert!(!state.finish_check(old, Ok(Some("1.2.5".into()))), "stale reply cannot restore Install");
+        assert_eq!(state.snapshot()["checking"], true, "checking stays with the running check");
+        assert!(state.finish_check(current, Ok(Some("1.2.6".into()))));
+        assert!(!state.finish_check(old, Ok(None)));
+        assert!(!state.finish_check(old, Err("timeout".into())));
         assert_eq!(state.version(), Some("1.2.6".into()));
         assert_eq!(state.snapshot()["error"], serde_json::Value::Null);
-
-        // A stale reply also leaves "checking" to the check that is still running.
-        let mut state = CandidateState::default();
-        let startup = state.begin_check().unwrap();
-        let _running = state.begin_check().unwrap();
-        assert!(!state.finish_check(startup, Ok(Some("1.2.4".into()))));
-        assert_eq!(state.snapshot()["checking"], true);
 
         // The manual command goes through a generation and replies with nothing to render.
         let lib_rs = include_str!("lib.rs");
@@ -1099,7 +1179,145 @@ mod tests {
         assert!(download < confirm && confirm < apply);
         assert!(!install.contains("download_and_install"));
         let command = &lib_rs[lib_rs.find("async fn install_update(").unwrap()..];
-        assert!(command[..command.find("\n}\n").unwrap()].contains(".begin_install(generation, &version)"));
+        assert!(command[..command.find("\n}\n").unwrap()].contains("UpdateBusy::install(state.0.clone(), generation, &version)"));
+    }
+
+    #[test]
+    fn test_checks_are_single_flight() {
+        let mut state = CandidateState::default();
+        let running = state.begin_check().unwrap();
+        let refused = state.begin_check().unwrap_err();
+        assert!(refused.contains("already running"), "{refused}");
+        let snap = state.snapshot();
+        assert_eq!(snap["generation"], running, "a refused check takes no generation");
+        assert_eq!(snap["checking"], true, "the running check still owns checking");
+        assert!(state.finish_check(running, Ok(Some("1.2.5".into()))));
+        assert_eq!(state.snapshot()["checking"], false);
+        // Once it finishes, the next check may start.
+        assert_eq!(state.begin_check().unwrap(), running + 1);
+
+        // Through the guard too: a second guard is refused while the first is held.
+        let shared = Arc::new(Mutex::new(CandidateState::default()));
+        let first = UpdateBusy::check(shared.clone()).unwrap();
+        assert!(UpdateBusy::check(shared.clone()).is_err());
+        assert!(first.finish_check(Ok(None)));
+        assert!(UpdateBusy::check(shared.clone()).is_ok());
+    }
+
+    #[test]
+    fn test_busy_guard_released_on_panic_and_early_return() {
+        let panics = |shared: &Arc<Mutex<CandidateState>>, install: bool| {
+            let shared = shared.clone();
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _busy = if install {
+                    let generation = lock_state(&shared).snapshot()["generation"].as_u64().unwrap();
+                    UpdateBusy::install(shared, generation, "1.2.5").unwrap().0
+                } else {
+                    UpdateBusy::check(shared).unwrap()
+                };
+                panic!("updater blew up");
+            }))
+            .is_err()
+        };
+
+        // Check: a panic unwinding through the guard releases checking and records why.
+        let shared = Arc::new(Mutex::new(CandidateState::default()));
+        assert!(panics(&shared, false));
+        let snap = lock_state(&shared).snapshot();
+        assert_eq!(snap["checking"], false);
+        assert_eq!(snap["error"], "The update check was interrupted");
+
+        // Install: same for installing; the candidate is kept and a new check can start.
+        let shared = Arc::new(Mutex::new(CandidateState::default()));
+        UpdateBusy::check(shared.clone()).unwrap().finish_check(Ok(Some("1.2.5".into())));
+        assert!(panics(&shared, true));
+        let snap = lock_state(&shared).snapshot();
+        assert_eq!(snap["installing"], false);
+        assert_eq!(snap["error"], "Installation failed: the install was interrupted");
+        assert_eq!(snap["version"], "1.2.5");
+        assert!(UpdateBusy::check(shared.clone()).is_ok());
+
+        // Early return (`?`) drops the guard the same way.
+        let shared = Arc::new(Mutex::new(CandidateState::default()));
+        let early = |shared: Arc<Mutex<CandidateState>>| -> Result<(), String> {
+            let _busy = UpdateBusy::check(shared)?;
+            Err::<(), String>("bail".into())?;
+            Ok(())
+        };
+        assert!(early(shared.clone()).is_err());
+        assert_eq!(lock_state(&shared).snapshot()["checking"], false);
+
+        // A poisoned mutex does not stop the guard releasing its flag.
+        let shared = Arc::new(Mutex::new(CandidateState::default()));
+        let busy = UpdateBusy::check(shared.clone()).unwrap();
+        let poison = shared.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = poison.lock().unwrap();
+            panic!("poison");
+        })
+        .join();
+        drop(busy);
+        assert_eq!(lock_state(&shared).snapshot()["checking"], false);
+
+        // A successful install keeps installing (the app is exiting); the commands use the guard.
+        let shared = Arc::new(Mutex::new(CandidateState::default()));
+        UpdateBusy::check(shared.clone()).unwrap().finish_check(Ok(Some("1.2.5".into())));
+        UpdateBusy::install(shared.clone(), 1, "1.2.5").unwrap().0.installed();
+        assert_eq!(lock_state(&shared).snapshot()["installing"], true);
+        let lib_rs = include_str!("lib.rs");
+        let run_check = &lib_rs[lib_rs.find("async fn run_update_check(").unwrap()..];
+        assert!(run_check[..run_check.find("\n}\n").unwrap()].contains("UpdateBusy::check(state.0.clone())"));
+        let install = &lib_rs[lib_rs.find("async fn install_update(").unwrap()..];
+        assert!(install[..install.find("\n}\n").unwrap()].contains("UpdateBusy::install(state.0.clone(), generation, &version)"));
+    }
+
+    #[test]
+    fn test_timeout_releases_busy() {
+        // A feed that never answers: the deadline fails the check and the guard releases checking.
+        let shared = Arc::new(Mutex::new(CandidateState::default()));
+        let busy = UpdateBusy::check(shared.clone()).unwrap();
+        let result = tauri::async_runtime::block_on(with_deadline(
+            std::future::pending::<Result<Option<String>, String>>(),
+            Duration::from_millis(50),
+            "Checking for updates",
+        ));
+        assert!(busy.finish_check(result));
+        let snap = lock_state(&shared).snapshot();
+        assert_eq!(snap["checking"], false);
+        assert_eq!(snap["error"], "Checking for updates timed out after 50ms");
+        assert!(UpdateBusy::check(shared.clone()).is_ok(), "the next check may start");
+
+        // A download that never finishes: the install fails with the timeout and releases installing.
+        let shared = Arc::new(Mutex::new(CandidateState::default()));
+        UpdateBusy::check(shared.clone()).unwrap().finish_check(Ok(Some("1.2.5".into())));
+        let (busy, _) = UpdateBusy::install(shared.clone(), 1, "1.2.5").unwrap();
+        let error = tauri::async_runtime::block_on(with_deadline(
+            std::future::pending::<Result<Vec<u8>, String>>(),
+            Duration::from_millis(50),
+            "Downloading the update",
+        ))
+        .unwrap_err();
+        busy.fail_install(error);
+        let snap = lock_state(&shared).snapshot();
+        assert_eq!(snap["installing"], false);
+        assert_eq!(snap["error"], "Installation failed: Downloading the update timed out after 50ms");
+
+        // Work that finishes in time is passed through.
+        let ok = tauri::async_runtime::block_on(with_deadline(async { Ok::<_, String>(7) }, Duration::from_secs(5), "x"));
+        assert_eq!(ok, Ok(7));
+
+        // The real feed and download carry these deadlines.
+        assert_eq!(UPDATE_CHECK_TIMEOUT, Duration::from_secs(30));
+        assert!(UPDATE_DOWNLOAD_TIMEOUT >= Duration::from_secs(600));
+        let lib_rs = include_str!("lib.rs");
+        assert!(lib_rs.contains("builder = builder.timeout(UPDATE_CHECK_TIMEOUT);"));
+        let install = &lib_rs[lib_rs.find("async fn install_candidate(").unwrap()..];
+        let install = &install[..install.find("\nstruct GatewaySidecar").unwrap()];
+        assert!(install.contains("update.timeout = Some(UPDATE_DOWNLOAD_TIMEOUT);"));
+        assert!(install.contains("UPDATE_DOWNLOAD_TIMEOUT,\n            \"Downloading the update\""));
+        assert!(install.contains("UPDATE_CHECK_TIMEOUT,\n        \"Checking for updates\""));
+        let run_check = &lib_rs[lib_rs.find("async fn run_update_check(").unwrap()..];
+        assert!(run_check[..run_check.find("\n}\n").unwrap()].contains("UPDATE_CHECK_TIMEOUT"));
     }
 
     #[test]
@@ -1208,8 +1426,9 @@ mod tests {
         let lib_rs = include_str!("lib.rs");
         let setup = &lib_rs[lib_rs.find(".setup(|app|").unwrap()..];
         let candidate = setup.find("app.manage(UpdateCandidate::default())").unwrap();
-        let begin = setup.find(".begin_check()?;").unwrap();
+        let begin = setup.find("UpdateBusy::check(app.state::<UpdateCandidate>().0.clone())?;").unwrap();
         let spawn = setup.find("check_for_updates_internal(&app_handle_for_update)").unwrap();
+        assert!(setup[spawn..].find("startup_check.finish_check(result)").is_some());
         assert!(candidate < begin && begin < spawn, "state is managed and the startup generation taken before the check starts");
         assert!(!lib_rs.contains(concat!("startup_update", "_status")), "the startup cache command is gone");
         // Shortcut registration never aborts setup.

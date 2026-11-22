@@ -1,4 +1,6 @@
 export interface UpdateInfo {
+  /** The shell generation this was rendered from; Install sends it with `version`. */
+  generation: number;
   available: boolean;
   version: string | null;
   status: string;
@@ -23,7 +25,13 @@ export interface UpdateSnapshot {
 
 type Invoke = (name: string, args?: Record<string, unknown>) => Promise<unknown>;
 
-const EMPTY: UpdateInfo = { available: false, version: null, status: '', checking: false, error: null };
+/** What an Install click authorizes: exactly the pair on screen when the button was rendered. */
+export interface UpdateCandidate {
+  generation: number;
+  version: string;
+}
+
+const EMPTY: UpdateInfo = { generation: 0, available: false, version: null, status: '', checking: false, error: null };
 
 /** What Settings shows for a snapshot. Pure. */
 export function toUpdateInfo(snapshot: UpdateSnapshot): UpdateInfo {
@@ -35,6 +43,7 @@ export function toUpdateInfo(snapshot: UpdateSnapshot): UpdateInfo {
   else if (available) status = `Update available: Version ${snapshot.version} is available`;
   else if (snapshot.generation > 0) status = 'No newer version found';
   return {
+    generation: snapshot.generation,
     available: available && !snapshot.installing,
     version: available ? snapshot.version : null,
     status,
@@ -50,8 +59,6 @@ export function toUpdateInfo(snapshot: UpdateSnapshot): UpdateInfo {
 export function createUpdateStore(invoke: Invoke | null) {
   let state: UpdateInfo = EMPTY;
   let revision = -1;
-  /** The snapshot behind what is on screen; Install authorizes exactly its {generation, version}. */
-  let rendered: UpdateSnapshot | null = null;
   const listeners = new Set<(state: UpdateInfo) => void>();
 
   const notify = () => {
@@ -74,7 +81,6 @@ export function createUpdateStore(invoke: Invoke | null) {
     }
     if (!snapshot || typeof snapshot.revision !== 'number' || snapshot.revision < revision) return;
     revision = snapshot.revision;
-    rendered = snapshot;
     state = toUpdateInfo(snapshot);
     notify();
   };
@@ -104,14 +110,11 @@ export function createUpdateStore(invoke: Invoke | null) {
     refresh,
     check: () => command('check_for_updates'),
     /**
-     * Install the candidate on screen. The shell refuses ("Update state changed, check again") if its
-     * generation or version moved on since this was rendered.
+     * Install exactly the candidate the caller rendered (never the store's latest state). The shell refuses
+     * ("Update state changed, check again") if its generation or version moved on since.
      */
-    install: async (): Promise<void> => {
-      const shown = rendered;
-      if (!state.available || !shown?.version) return;
-      await command('install_update', { generation: shown.generation, version: shown.version });
-    },
+    install: (candidate: UpdateCandidate) =>
+      command('install_update', { generation: candidate.generation, version: candidate.version }),
   };
 }
 
@@ -136,8 +139,8 @@ export async function checkForUpdates(): Promise<string | null> {
   return store.get().version;
 }
 
-export async function installUpdate(): Promise<void> {
-  await store.install();
+export async function installUpdate(candidate: UpdateCandidate): Promise<void> {
+  await store.install(candidate);
 }
 
 if (typeof window !== 'undefined') {
