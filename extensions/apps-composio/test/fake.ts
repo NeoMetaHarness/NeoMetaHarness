@@ -1,14 +1,14 @@
 import { createServer } from 'node:http';
 export async function fakeComposio() {
-  const calls: { path: string; method: string; body?: any }[] = [];
+  const calls: { path: string; method: string; body?: any; credential?: 'A' | 'B' | 'other' }[] = [];
   let fail = false;
   let connectionCount = 0;
   const connectedIds = new Set<string>();
   const server = createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
-    const path = req.url!; calls.push({ path, method: req.method!, body });
-    if (req.headers['x-api-key'] !== 'fake-composio-only') { res.writeHead(401).end(); return; }
+    const path = req.url!; const credential = req.headers['x-api-key'] === 'fake-composio-only' ? 'A' : req.headers['x-api-key'] === 'fake-composio-second' ? 'B' : 'other'; calls.push({ path, method: req.method!, body, credential });
+    if (credential === 'other') { res.writeHead(401).end(); return; }
     if (fail) { res.writeHead(503).end('fake-composio-only'); return; }
     let result: unknown;
     if (path.startsWith('/api/v3.1/toolkits?')) result = { items: [{ slug: 'github', name: 'GitHub' }] };

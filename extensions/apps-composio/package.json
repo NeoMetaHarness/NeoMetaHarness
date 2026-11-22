@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx test/composio.test.ts",
-    "test:p2-12": "tsx test/gateway.test.ts"
+    "test:p2-12": "tsx test/gateway.test.ts && tsx test/server-mode.test.ts"
   },
   "dependencies": {
     "@neometaharness/contracts": "workspace:*",
