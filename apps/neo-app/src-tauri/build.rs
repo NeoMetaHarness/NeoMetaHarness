@@ -58,7 +58,7 @@ fn validate_release_config() {
         let p = std::path::Path::new(&manifest_dir).join(alt);
         if p.exists() {
             panic!(
-                "Release build failed closed: alternate config file {} exists but is not supported for release validation; merge into tauri.conf.json or pass via TAURI_CONFIG",
+                "Release build failed closed: alternate config file {} exists but is not supported for release validation; merge into tauri.conf.json or pass a release --config file",
                 alt
             );
         }

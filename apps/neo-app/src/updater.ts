@@ -113,18 +113,45 @@ export async function installUpdate(): Promise<void> {
   }
 }
 
+/** The shell's cached result of its single startup check (read without a network request). */
+interface StartupUpdateStatus {
+  done: boolean;
+  version: string | null;
+  error: string | null;
+}
+
+let startupApplied = false;
+
+function applyStartupStatus(status: StartupUpdateStatus | null | undefined) {
+  // Apply once, and never over a manual check that is running or has finished.
+  if (!status?.done || startupApplied || currentState.checking || currentState.status) return;
+  startupApplied = true;
+  if (status.version) {
+    currentState = {
+      available: true,
+      version: status.version,
+      status: `Update available: Version ${status.version} is available`,
+      checking: false,
+      error: null,
+    };
+  } else if (status.error) {
+    currentState = { ...currentState, status: status.error, error: status.error };
+  } else {
+    currentState = { ...currentState, status: 'No newer version found' };
+  }
+  notify();
+}
+
 if (typeof window !== 'undefined') {
-  window.addEventListener('neo:update-available', (event: Event) => {
-    const version = (event as CustomEvent<string>).detail;
-    if (version) {
-      currentState = {
-        available: true,
-        version,
-        status: `Update available: Version ${version} is available`,
-        checking: false,
-        error: null,
-      };
-      notify();
-    }
+  // Listen first, then read the cache: whichever arrives first wins, and the event can never be lost
+  // to the webview starting after the check finished.
+  window.addEventListener('neo:startup-update', (event: Event) => {
+    applyStartupStatus((event as CustomEvent<StartupUpdateStatus>).detail);
   });
+  const native = (window as unknown as {
+    __TAURI_INTERNALS__?: { invoke: (name: string) => Promise<StartupUpdateStatus> };
+  }).__TAURI_INTERNALS__;
+  if (native) {
+    native.invoke('startup_update_status').then(applyStartupStatus, () => {});
+  }
 }

@@ -47,13 +47,19 @@ This command outputs:
 #### Secret hygiene and private key storage
 The private signing key is owned solely by the application owner and **MUST NEVER be committed to Git or stored inside the repository**:
 - On local release machines, keep the private key in a secure directory outside the repository (e.g. `~/.tauri/neo.key`).
-- In automated release environments or CI, store the private key in CI secrets and provide it via the `TAURI_SIGNING_PRIVATE_KEY` environment variable (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if password-protected).
+- There is no CI release (no GitHub Actions). For a release build, the owner sets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the build shell only, from their own shell or secret store.
 - Never commit private key files, `.pem`, `.env`, or credentials to Git. `pnpm installer:check` enforces secret hygiene across build files and configuration.
 
 #### Public key configuration
-Before building a production release or installer, the owner places the generated base64 public key in `apps/neo-app/src-tauri/tauri.conf.json` under `plugins.updater.pubkey` (replacing the placeholder `REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY`).
+The owner's base64 public key is **checked in** to `apps/neo-app/src-tauri/tauri.conf.json` under `plugins.updater.pubkey`, replacing the placeholder `REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY`. It is a public key, so committing it is safe. Release builds use that checked-in key. A release `--config` file passed to `cargo tauri build` can also carry it, but the release runbook (`docs/release.md`, task P7-11) keeps the checked-in key and never overrides it.
 
-The release build path strictly enforces valid public key configuration inside the bundling pipeline via Tauri's `beforeBundleCommand` in `tauri.bundle.conf.json` and `tauri.conf.json` (`node ../../scripts/installer-check.mjs`) as well as in `build.rs`. Both checks inspect the effective merged configuration (including overrides passed via Tauri's `--config` or the `TAURI_CONFIG` environment variable) and fail closed: any error resolving the configuration, malformed JSON, or a missing, empty, or placeholder key fails the release build immediately. Debug builds may skip. Development and test builds may use a clearly marked fake test key fixture (e.g. a sample base64 Minisign public key). In debug builds, `NMH_UPDATER_PUBLIC_KEY` and `NMH_UPDATER_ENDPOINT` environment variables can also override the configuration for local testing.
+Don't supply the key through the `TAURI_CONFIG` environment variable alone. `tauri build --config ...` replaces `TAURI_CONFIG` with its merged `--config` arguments, so an environment-only key never reaches the build. Run on its own, `pnpm installer:check` refuses such a key.
+
+The release build fails closed on the key in two places:
+- **`beforeBundleCommand`** (`node ../../scripts/installer-check.mjs`, set in `tauri.conf.json` and `tauri.bundle.conf.json`). As a Tauri hook it validates the effective configuration: the checked-in files plus the `--config` arguments, which Tauri hands to the hook in `TAURI_CONFIG`.
+- **`build.rs`**. It validates the configuration Tauri compiles into the app: the checked-in file plus the same `--config` merge.
+
+Either check fails the release build on an unresolvable or malformed configuration, or on a missing, empty, placeholder or test key. Debug builds skip them. Development and test builds may use a clearly marked fake test key fixture. In debug builds only, `NMH_UPDATER_PUBLIC_KEY` and `NMH_UPDATER_ENDPOINT` can override the configuration for local testing; release builds ignore both.
 
 #### Updater redirect policy, HTTPS enforcement, allowed hosts, and binary download validation
 - **HTTPS endpoint and redirect policy:** The updater endpoint URL is strictly required to use HTTPS in production release builds. The Tauri updater plugin builder (`UpdaterBuilder::configure_client`) configures Reqwest's redirect policy (`Policy::custom`) to enforce that redirects only follow HTTPS (in release builds) and strictly targets trusted hosts in the allowlist.
@@ -63,39 +69,54 @@ The release build path strictly enforces valid public key configuration inside t
 
 #### Publishing latest.json
 To distribute an update:
-1. Build signed release bundles with updater artifacts enabled (override `createUpdaterArtifacts: true` in the release environment):
+1. Build signed release bundles with updater artifacts enabled. The signing key comes from `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the build shell. The public key is the checked-in one:
    ```sh
    cargo tauri build --config tauri.bundle.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}'
    ```
-   Tauri compiles the release installer and produces signature files for each target (e.g., `<bundle>.msi.zip.sig`, `<bundle>.AppImage.tar.gz.sig`, `<bundle>.deb.tar.gz.sig`).
-2. Construct `latest.json` describing the release version, release notes, ISO 8601 publish timestamp, and package-specific signatures and download URLs:
+   With `createUpdaterArtifacts: true`, Tauri v2 signs each installer **as built** and writes a `.sig` next to it under `target/release/bundle/`. Only the macOS app is an archive. Nothing else is zipped or tarred: the updater installs the raw `.exe`, `.msi`, `.AppImage` and `.deb`, and rejects a gzipped `.deb`.
+
+   | Platform key | Updater artifact | Signature |
+   |---|---|---|
+   | `windows-x86_64-nsis` | `nsis/Neo Meta Harness_X.Y.Z_x64-setup.exe` | `nsis/Neo Meta Harness_X.Y.Z_x64-setup.exe.sig` |
+   | `windows-x86_64-msi` | `msi/Neo Meta Harness_X.Y.Z_x64_en-US.msi` | `msi/Neo Meta Harness_X.Y.Z_x64_en-US.msi.sig` |
+   | `darwin-aarch64-app` | `macos/Neo Meta Harness.app.tar.gz` | `macos/Neo Meta Harness.app.tar.gz.sig` |
+   | `linux-x86_64-appimage` | `appimage/neo-meta-harness_X.Y.Z_amd64.AppImage` | `appimage/neo-meta-harness_X.Y.Z_amd64.AppImage.sig` |
+   | `linux-x86_64-deb` | `deb/neo-meta-harness_X.Y.Z_amd64.deb` | `deb/neo-meta-harness_X.Y.Z_amd64.deb.sig` |
+
+   The `.dmg` is for manual installs only. On Linux the app asks for `linux-<arch>-appimage` when it runs from an AppImage, and `linux-<arch>-deb` otherwise.
+2. Generate `latest.json` with `scripts/release-manifest.mjs` from the release runbook (task P7-11). Don't write it by hand. The script verifies each `.sig` against its artifact with the checked-in public key. In each URL, GitHub serves the asset name with spaces replaced by dots. For version 0.2.0 the result looks like this:
    ```json
    {
      "version": "0.2.0",
-     "notes": "Release notes for version 0.2.0",
+     "notes": "The CHANGELOG.md section for 0.2.0",
      "pub_date": "2026-11-20T12:00:00Z",
      "platforms": {
-       "windows-x86_64": {
-         "signature": "<contents of .msi.zip.sig>",
-         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app-0.2.0-x64-setup.nsis.zip"
+       "windows-x86_64-nsis": {
+         "signature": "<contents of Neo Meta Harness_0.2.0_x64-setup.exe.sig>",
+         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/Neo.Meta.Harness_0.2.0_x64-setup.exe"
        },
-       "darwin-aarch64": {
-         "signature": "<contents of .tar.gz.sig>",
-         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app.app.tar.gz"
+       "windows-x86_64-msi": {
+         "signature": "<contents of Neo Meta Harness_0.2.0_x64_en-US.msi.sig>",
+         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/Neo.Meta.Harness_0.2.0_x64_en-US.msi"
+       },
+       "darwin-aarch64-app": {
+         "signature": "<contents of Neo Meta Harness.app.tar.gz.sig>",
+         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/Neo.Meta.Harness.app.tar.gz"
        },
        "linux-x86_64-appimage": {
-         "signature": "<contents of .AppImage.tar.gz.sig>",
-         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app.AppImage.tar.gz"
+         "signature": "<contents of neo-meta-harness_0.2.0_amd64.AppImage.sig>",
+         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-meta-harness_0.2.0_amd64.AppImage"
        },
        "linux-x86_64-deb": {
-         "signature": "<contents of .deb.tar.gz.sig>",
-         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-app.deb.tar.gz"
+         "signature": "<contents of neo-meta-harness_0.2.0_amd64.deb.sig>",
+         "url": "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/v0.2.0/neo-meta-harness_0.2.0_amd64.deb"
        }
      }
    }
    ```
-3. Upload `latest.json` along with the update archives and signatures to the release assets at `https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json`.
-4. When desktop clients start up or when the user checks for updates in Settings, the app fetches `latest.json`. If a newer version is announced, Settings displays an "Update available" badge with the version and an "Install and restart" button using Astryx components.
+   The script also adds plain `<os>-<arch>` entries (`windows-x86_64`, `darwin-aarch64`, `linux-x86_64`), which point at the preferred installer.
+3. Upload `latest.json` and the updater artifacts to a full (not pre-release, not draft) GitHub release, so that `https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json` serves it. The signatures live inside `latest.json`, so the `.sig` files need not be uploaded.
+4. The desktop app checks `latest.json` once at startup and caches the result; Settings shows it without another request. Users can also check again from Settings. If a newer stable version is announced, Settings shows an "Update available" badge with the version and an "Install and restart" button, using Astryx components.
 
 ## PWA
 

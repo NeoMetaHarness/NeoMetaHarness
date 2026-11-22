@@ -195,7 +195,7 @@ export function validateMinisignPublicKey(pubkey) {
   const keyIdBytes = rawKey.subarray(2, 10);
   const isTestKeyId = keyIdBytes.equals(Buffer.from('TESTKEY1', 'utf8'));
   if (isTestKeyId || line1 === 'untrusted comment: NEO TEST KEY - DO NOT SHIP') {
-    throw new Error("test public key with ID 'TESTKEY1' must not ship in a release build! Provide owner key via --config or TAURI_CONFIG.");
+    throw new Error("test public key with ID 'TESTKEY1' must not ship in a release build! Check the owner key in to tauri.conf.json or pass a release --config file.");
   }
 
   return true;
@@ -240,18 +240,32 @@ export function runInstallerCheck(options = {}) {
   assert.deepEqual(baseConfig.plugins?.['deep-link']?.desktop?.schemes, ['neo'], 'desktop deep link survives config merge');
 
   // 2. Resolve the effective merged configuration
-  // Hierarchy: base config -> tauri.bundle.conf.json -> env (TAURI_CONFIG) -> CLI args (--config) -> options overrides
+  // Hierarchy: base config -> tauri.bundle.conf.json -> TAURI_CONFIG (hook only) -> CLI args (--config) -> options overrides
+  //
+  // `tauri build --config ...` replaces TAURI_CONFIG with its merged --config arguments before it compiles and
+  // runs hooks, so an environment-only TAURI_CONFIG never reaches a release. TAURI_CONFIG therefore counts only
+  // when this script runs as Tauri's beforeBundleCommand (Tauri sets TAURI_ENV_* for hooks): it then holds the
+  // release --config. Run standalone, a TAURI_CONFIG updater key is refused instead of trusted.
   let envConfig = {};
   if (!options.ignoreEnv) {
     if ('TAURI_ENV_CONFIG' in process.env || process.env.TAURI_ENV_CONFIG !== undefined) {
-      throw new Error('Release installer packaging failed closed: TAURI_ENV_CONFIG is not supported by Tauri; use TAURI_CONFIG instead.');
+      throw new Error('Release installer packaging failed closed: TAURI_ENV_CONFIG is not supported by Tauri; pass the release config with --config.');
     }
+    const runByTauri = options.runByTauri ?? Boolean(process.env.TAURI_ENV_PLATFORM);
     const rawEnv = options.envConfig ?? process.env.TAURI_CONFIG;
     if (rawEnv) {
+      let parsed;
       try {
-        envConfig = typeof rawEnv === 'object' ? rawEnv : JSON.parse(rawEnv);
+        parsed = typeof rawEnv === 'object' ? rawEnv : JSON.parse(rawEnv);
       } catch (err) {
         throw new Error(`Failed to parse TAURI_CONFIG from environment: ${err.message}`);
+      }
+      if (runByTauri) {
+        envConfig = parsed;
+      } else if (parsed?.plugins?.updater?.pubkey !== undefined) {
+        throw new Error(
+          'Release installer packaging failed closed: an updater public key set only in TAURI_CONFIG is replaced by `tauri build --config` and never reaches the release. Check the key in to apps/neo-app/src-tauri/tauri.conf.json or pass a release --config file.'
+        );
       }
     }
   }

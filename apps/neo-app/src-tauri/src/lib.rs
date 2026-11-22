@@ -46,8 +46,10 @@ pub const PRODUCTION_ALLOWED_HOSTS: &[&str] = &[
     "release-assets.githubusercontent.com",
 ];
 
+/// A stable candidate with strictly higher SemVer precedence. Build metadata is ignored, so
+/// `1.2.3+1` is not newer than `1.2.3` (`>` on `semver::Version` would order build metadata).
 pub fn is_valid_stable_update(current: &semver::Version, candidate: &semver::Version) -> bool {
-    candidate.pre.is_empty() && candidate > current
+    candidate.pre.is_empty() && candidate.cmp_precedence(current).is_gt()
 }
 
 pub fn is_valid_stable_update_str(current: &str, candidate: &str) -> bool {
@@ -62,8 +64,40 @@ pub fn resolve_linux_target_for(arch: &str, is_appimage: bool) -> String {
     format!("linux-{arch}-{pkg}")
 }
 
-pub fn resolve_linux_updater_target() -> String {
-    let arch = if cfg!(target_arch = "x86_64") {
+/// The AppImage file to replace, only when this process really runs from it. The AppImage runtime
+/// sets `APPIMAGE` (the image file) and `APPDIR` (its mount point) and starts the app from inside
+/// `APPDIR`. An inherited or unrelated `APPIMAGE` (for example from a parent process started by an
+/// AppImage) does not make a deb install an AppImage install.
+pub fn appimage_for_exe(
+    appimage: Option<&std::path::Path>,
+    appdir: Option<&std::path::Path>,
+    exe: &std::path::Path,
+) -> Option<PathBuf> {
+    let appimage = appimage.filter(|path| path.is_absolute())?;
+    let appdir = appdir.filter(|path| path.is_absolute() && path.parent().is_some())?;
+    if exe.starts_with(appdir) && !appimage.starts_with(appdir) {
+        Some(appimage.to_path_buf())
+    } else {
+        None
+    }
+}
+
+/// The Linux updater target and the executable the updater replaces: the AppImage file when the
+/// running executable belongs to it, otherwise the real executable (deb).
+pub fn resolve_linux_install(
+    arch: &str,
+    appimage: Option<&std::path::Path>,
+    appdir: Option<&std::path::Path>,
+    exe: &std::path::Path,
+) -> (String, PathBuf) {
+    match appimage_for_exe(appimage, appdir, exe) {
+        Some(image) => (resolve_linux_target_for(arch, true), image),
+        None => (resolve_linux_target_for(arch, false), exe.to_path_buf()),
+    }
+}
+
+pub fn linux_updater_arch() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
         "x86_64"
     } else if cfg!(target_arch = "aarch64") {
         "aarch64"
@@ -73,8 +107,7 @@ pub fn resolve_linux_updater_target() -> String {
         "i686"
     } else {
         "x86_64"
-    };
-    resolve_linux_target_for(arch, std::env::var_os("APPIMAGE").is_some())
+    }
 }
 
 fn validate_updater_endpoint(endpoint: &str, is_debug: bool) -> Result<(), String> {
@@ -205,10 +238,16 @@ fn configure_updater_builder(
     #[allow(unused_mut)]
     let mut builder = app.updater_builder();
 
-    // Linux package-specific target: linux-{arch}-deb or linux-{arch}-appimage
+    // Linux package-specific target (linux-{arch}-appimage or linux-{arch}-deb) and the executable to
+    // replace. The plugin's default trusts APPIMAGE alone; override both from the running executable.
     #[cfg(target_os = "linux")]
     {
-        builder = builder.target(resolve_linux_updater_target());
+        let exe = tauri::utils::platform::current_exe().map_err(|error| error.to_string())?;
+        let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|path| path.is_file());
+        let appdir = std::env::var_os("APPDIR").map(PathBuf::from);
+        let (target, executable) =
+            resolve_linux_install(linux_updater_arch(), appimage.as_deref(), appdir.as_deref(), &exe);
+        builder = builder.target(target).executable_path(executable);
     }
     #[cfg(debug_assertions)]
     {
@@ -224,7 +263,8 @@ fn configure_updater_builder(
         is_valid_stable_update(&current, &release.version)
     });
 
-    // Windows / updater pre-exit callback: stop Gateway sidecar before installer launches
+    // Windows / updater pre-exit callback: stop the Gateway sidecar before the installer launches, then
+    // run the app's own cleanup (tray, webviews), which this hook replaces from the plugin's default.
     let app_handle_for_exit = app.clone();
     builder = builder.on_before_exit(move || {
         if let Some(state) = app_handle_for_exit.try_state::<GatewayState>() {
@@ -232,6 +272,7 @@ fn configure_updater_builder(
                 sidecar.stop();
             }
         }
+        app_handle_for_exit.cleanup_before_exit();
     });
 
     let (override_endpoint, override_pubkey) = get_updater_overrides();
@@ -313,6 +354,30 @@ async fn check_for_updates(app: tauri::AppHandle, window: tauri::Window) -> Resu
         return Err("Updates can only be checked from the main window".into());
     }
     check_for_updates_internal(&app).await
+}
+
+/// The result of the one startup update check, cached so the frontend can read it whenever it
+/// subscribes (the webview may not exist yet when the check finishes). `None` while it is running.
+#[derive(Default)]
+struct StartupUpdateCheck(Mutex<Option<Result<Option<String>, String>>>);
+
+pub fn startup_update_status_json(cached: &Option<Result<Option<String>, String>>) -> serde_json::Value {
+    match cached {
+        None => serde_json::json!({ "done": false, "version": null, "error": null }),
+        Some(Ok(version)) => serde_json::json!({ "done": true, "version": version, "error": null }),
+        Some(Err(error)) => serde_json::json!({ "done": true, "version": null, "error": error }),
+    }
+}
+
+/// Reads the cached startup check. Never contacts the network.
+#[tauri::command]
+fn startup_update_status(app: tauri::AppHandle, window: tauri::Window) -> Result<serde_json::Value, String> {
+    if window.label() != "main" {
+        return Err("Updates can only be read from the main window".into());
+    }
+    let state = app.try_state::<StartupUpdateCheck>().ok_or("Startup update check is not registered")?;
+    let cached = state.0.lock().unwrap().clone();
+    Ok(startup_update_status_json(&cached))
 }
 
 #[tauri::command]
@@ -443,28 +508,31 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![check_for_updates, install_update])
+        .invoke_handler(tauri::generate_handler![check_for_updates, startup_update_status, install_update])
         .setup(|app| {
             let data_dir = std::env::var_os("NMH_DESKTOP_DATA_DIR")
                 .map(PathBuf::from)
                 .map(Ok)
                 .unwrap_or_else(|| app.path().app_data_dir())?;
             let (sidecar, port) = GatewaySidecar::launch(app.handle(), data_dir.clone())?;
-            let app_handle_for_update = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Ok(Some(version)) = check_for_updates_internal(&app_handle_for_update).await {
-                    if let Some(window) = app_handle_for_update.get_webview_window("main") {
-                        if let Ok(payload) = serde_json::to_string(&version) {
-                            let _ = window.eval(&format!(
-                                "window.dispatchEvent(new CustomEvent('neo:update-available', {{detail: {payload}}}))"
-                            ));
-                        }
-                    }
-                }
-            });
             let gateway_pid = sidecar.child.id();
             app.manage(GatewayState(Mutex::new(Some(sidecar))));
+            // Register every updater state before the startup check can finish.
             app.manage(UpdateCandidate::default());
+            app.manage(StartupUpdateCheck::default());
+            let app_handle_for_update = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let result = check_for_updates_internal(&app_handle_for_update).await;
+                let status = startup_update_status_json(&Some(result.clone()));
+                *app_handle_for_update.state::<StartupUpdateCheck>().0.lock().unwrap() = Some(result);
+                // Best-effort push for an already-open window; the frontend also reads the cache when it
+                // subscribes (startup_update_status), so a missed event loses nothing.
+                if let Some(window) = app_handle_for_update.get_webview_window("main") {
+                    let _ = window.eval(&format!(
+                        "window.dispatchEvent(new CustomEvent('neo:startup-update', {{detail: {status}}}))"
+                    ));
+                }
+            });
 
             let token = fs::read_to_string(data_dir.join("desktop.token")).unwrap_or_default().trim().to_string();
             let mut url = if token.is_empty() {
@@ -607,6 +675,99 @@ mod tests {
         assert!(is_valid_stable_update_str("0.1.0", "0.2.0"));
         assert!(is_valid_stable_update_str("0.1.0", "0.1.1"));
         assert!(is_valid_stable_update_str("0.1.0", "1.0.0"));
+    }
+
+    #[test]
+    fn test_version_comparator_ignores_build_metadata() {
+        // Build metadata has no precedence: same version, different build is not an update.
+        assert!(!is_valid_stable_update_str("1.2.3", "1.2.3+1"));
+        assert!(!is_valid_stable_update_str("1.2.3", "1.2.3+build.99"));
+        assert!(!is_valid_stable_update_str("1.2.3+5", "1.2.3+1"));
+        assert!(!is_valid_stable_update_str("1.2.3+1", "1.2.3"));
+        assert!(!is_valid_stable_update_str("1.2.3", "1.2.2+999"));
+        // A real increase still passes, with or without metadata.
+        assert!(is_valid_stable_update_str("1.2.3", "1.2.4+1"));
+        assert!(is_valid_stable_update_str("1.2.3+7", "1.2.4"));
+        assert!(!is_valid_stable_update_str("1.2.3", "1.2.4-rc.1+1"));
+    }
+
+    #[test]
+    fn test_linux_install_appimage_only_when_exe_is_inside_it() {
+        use std::path::{Path, PathBuf};
+        // Absolute on every host OS (the logic runs on Linux; tests also run on Windows).
+        let abs = |p: &str| PathBuf::from(if cfg!(windows) { format!("C:{p}") } else { p.to_string() });
+        let image = &abs("/home/u/Apps/Neo.AppImage");
+        let mount = &abs("/tmp/.mount_NeoAbc");
+        let mounted_exe = &abs("/tmp/.mount_NeoAbc/usr/bin/neo-meta-harness");
+        let deb_exe = &abs("/usr/bin/neo-meta-harness");
+
+        // Running from the AppImage: AppImage target, replace the image file.
+        assert_eq!(
+            resolve_linux_install("x86_64", Some(image), Some(mount), mounted_exe),
+            ("linux-x86_64-appimage".to_string(), image.to_path_buf())
+        );
+        // Inherited APPIMAGE/APPDIR from another AppImage: the deb exe is not inside the mount.
+        assert_eq!(
+            resolve_linux_install("x86_64", Some(image), Some(mount), deb_exe),
+            ("linux-x86_64-deb".to_string(), deb_exe.to_path_buf())
+        );
+        // APPIMAGE alone (no APPDIR) is not enough.
+        assert_eq!(
+            resolve_linux_install("x86_64", Some(image), None, deb_exe),
+            ("linux-x86_64-deb".to_string(), deb_exe.to_path_buf())
+        );
+        assert_eq!(appimage_for_exe(Some(image), None, mounted_exe), None);
+        // No AppImage variables at all: deb with the real executable.
+        assert_eq!(
+            resolve_linux_install("aarch64", None, None, deb_exe),
+            ("linux-aarch64-deb".to_string(), deb_exe.to_path_buf())
+        );
+        // Relative or root paths, or an image inside its own mount, are rejected.
+        assert_eq!(appimage_for_exe(Some(Path::new("Neo.AppImage")), Some(mount), mounted_exe), None);
+        assert_eq!(appimage_for_exe(Some(image), Some(abs("/").as_path()), deb_exe), None);
+        assert_eq!(appimage_for_exe(Some(image), Some(Path::new(".mount_NeoAbc")), mounted_exe), None);
+        assert_eq!(
+            appimage_for_exe(Some(abs("/tmp/.mount_NeoAbc/x.AppImage").as_path()), Some(mount), mounted_exe),
+            None
+        );
+        // A sibling directory that only shares a name prefix is not the mount.
+        assert_eq!(
+            appimage_for_exe(Some(image), Some(mount), abs("/tmp/.mount_NeoAbcd/usr/bin/neo-meta-harness").as_path()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_startup_update_status_is_cached() {
+        assert_eq!(
+            startup_update_status_json(&None),
+            serde_json::json!({ "done": false, "version": null, "error": null })
+        );
+        assert_eq!(
+            startup_update_status_json(&Some(Ok(Some("1.2.4".into())))),
+            serde_json::json!({ "done": true, "version": "1.2.4", "error": null })
+        );
+        assert_eq!(
+            startup_update_status_json(&Some(Ok(None))),
+            serde_json::json!({ "done": true, "version": null, "error": null })
+        );
+        assert_eq!(
+            startup_update_status_json(&Some(Err("offline".into()))),
+            serde_json::json!({ "done": true, "version": null, "error": "offline" })
+        );
+    }
+
+    #[test]
+    fn test_startup_state_registered_before_check_and_exit_hook_cleans_up() {
+        let lib_rs = include_str!("lib.rs");
+        let setup = &lib_rs[lib_rs.find(".setup(|app|").unwrap()..];
+        let manage = setup.find("app.manage(StartupUpdateCheck::default())").unwrap();
+        let candidate = setup.find("app.manage(UpdateCandidate::default())").unwrap();
+        let spawn = setup.find("check_for_updates_internal(&app_handle_for_update)").unwrap();
+        assert!(manage < spawn && candidate < spawn, "updater state is managed before the startup check starts");
+        let hook = &lib_rs[lib_rs.find("builder.on_before_exit(move ||").unwrap()..];
+        let hook = &hook[..hook.find("});").unwrap()];
+        assert!(hook.find("sidecar.stop()").unwrap() < hook.find("cleanup_before_exit()").unwrap());
     }
 
     #[test]

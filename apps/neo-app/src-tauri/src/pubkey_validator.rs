@@ -85,7 +85,7 @@ pub fn validate_minisign_pubkey(pubkey: &str) -> Result<(), String> {
     }
     if pubkey == "REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY" {
         return Err(
-            "placeholder updater public key REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY must not ship in a release build! Provide owner key via --config or TAURI_CONFIG."
+            "placeholder updater public key REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY must not ship in a release build! Check the owner key in to tauri.conf.json or pass a release --config file."
                 .to_string(),
         );
     }
@@ -136,7 +136,7 @@ pub fn validate_minisign_pubkey(pubkey: &str) -> Result<(), String> {
     let key_id = &key_bytes[2..10];
     if key_id == b"TESTKEY1" || line1 == "untrusted comment: NEO TEST KEY - DO NOT SHIP" {
         return Err(
-            "test public key with ID 'TESTKEY1' must not ship in a release build! Provide owner key via --config or TAURI_CONFIG."
+            "test public key with ID 'TESTKEY1' must not ship in a release build! Check the owner key in to tauri.conf.json or pass a release --config file."
                 .to_string(),
         );
     }

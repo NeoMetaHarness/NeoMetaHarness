@@ -413,7 +413,20 @@ assert.throws(
 );
 delete process.env.TAURI_ENV_CONFIG;
 
-// Verify that TAURI_CONFIG in environment is merged and validated
+// Run standalone, an env-only TAURI_CONFIG key is refused: `tauri build --config` replaces TAURI_CONFIG with its
+// merged --config arguments, so such a key never reaches the release.
+delete process.env.TAURI_ENV_PLATFORM;
+process.env.TAURI_CONFIG = JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } });
+assert.throws(
+  () => runInstallerCheck(),
+  /public key set only in TAURI_CONFIG is replaced by `tauri build --config`/,
+  "installer-check must refuse an env-only TAURI_CONFIG key when run standalone"
+);
+delete process.env.TAURI_CONFIG;
+
+// As Tauri's beforeBundleCommand (TAURI_ENV_* set), TAURI_CONFIG holds the release --config merge.
+process.env.TAURI_ENV_PLATFORM = "windows";
+// Verify that the hook TAURI_CONFIG (the --config merge) is merged and validated
 process.env.TAURI_CONFIG = JSON.stringify({
   plugins: {
     updater: {
@@ -461,6 +474,8 @@ process.env.TAURI_CONFIG = JSON.stringify({
 });
 runInstallerCheck();
 delete process.env.TAURI_CONFIG;
+
+delete process.env.TAURI_ENV_PLATFORM;
 
 // Verify that CLI --config argument override is merged and validated
 runInstallerCheck({
