@@ -68,7 +68,4 @@ Set the date on the heading when the release is cut.
 - Self-hosted Docker Compose stack and deploy docs (P3-5).
 - Encrypted backup and restore drill (P7-3).
 - Static docs site and user docs; docs reconciled with the code (P7-7, P7-10, P7-13).
-
-### Not in this section yet
-Tasks still `in_progress` in `machine/readiness.json` when this was written, and not listed above:
-the org repositories (P0-1). Move it up when it is done, before the release is cut.
+- GitHub org repositories with a shared router, templates and a generated extension capability inventory checked by `pnpm check` (P0-1).
