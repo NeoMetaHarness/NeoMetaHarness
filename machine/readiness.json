@@ -584,7 +584,10 @@
     },
     "P7-11": {
       "title": "v1.0 public release",
-      "status": "not_started"
+      "status": "in_progress",
+      "owner": "opus",
+      "evidence": "Release tooling merged 2026-11-22 after PM review (review/p711 rebased onto P1-11 main as 9ca9cff): local latest.json generator, release preflight (signature verification, version binding, CHANGELOG-only notes, checked-in key match), signed linux-x86_64-deb entry, productName bundle names, macOS app bundle, docs/release.md runbook and v1.0.0 CHANGELOG. test:p7-11 PASS x2; gateway, toggle, check, secret scan OK; full regression ok=70 fail=0.",
+      "remaining": "Publishing v1.0 is the owner's decision: the owner sets TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD locally and runs the docs/release.md runbook. CHANGELOG still lists P0-1 as not yet in the section."
     },
     "P7-12": {
       "title": "PRD success metrics measured in the running product",
