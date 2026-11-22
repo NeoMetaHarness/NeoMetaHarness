@@ -19,11 +19,18 @@ if (gateway.setupToken) {
 }
 console.log('GATEWAY_READY ' + JSON.stringify({ port: gateway.port }));
 let closing = false;
-async function close(): Promise<void> {
+async function close(ownerGone = false): Promise<void> {
   if (closing) return;
   closing = true;
-  // Nothing outside may be left to kill a stuck gateway (the shell may be gone), so cap shutdown.
-  setTimeout(() => process.exit(1), 15000).unref();
+  // When the owning shell is gone nothing outside is left to kill a stuck gateway, so cap that
+  // shutdown. Other callers (shell stop(), signals, IPC) keep their own deadlines and fallbacks;
+  // engine extensions can legitimately take tens of seconds to stop.
+  if (ownerGone) {
+    setTimeout(() => {
+      console.error('Gateway shutdown exceeded 60 s after its owner exited; forcing exit');
+      process.exit(1);
+    }, 60000).unref();
+  }
   try {
     await gateway.close();
   } catch (error) {
@@ -43,4 +50,4 @@ stdin.on('line', (line) => {
 // The desktop shell owns this process through the stdin pipe. When the shell exits for any
 // reason (crash, kill, failed setup) the pipe closes, so the gateway must not outlive it.
 // Server deployments leave this unset, because their stdin may be /dev/null or a terminal.
-if (process.env.NMH_EXIT_ON_STDIN_CLOSE === '1') stdin.on('close', () => { void close(); });
+if (process.env.NMH_EXIT_ON_STDIN_CLOSE === '1') stdin.on('close', () => { void close(true); });
