@@ -299,7 +299,7 @@ export function authorize(path: string, context?: GatewayAuthContext, { workspac
   }
   // The handler checks the settings or vault scope once it has the input.
   if (!workspaceOnly && context?.deploymentMode === 'server'
-    && (path === 'settings.set' || path.startsWith('vault.')) && canSeeDeploymentItems(context)) return;
+    && (path === 'settings.get' || path === 'settings.set' || path.startsWith('vault.')) && canSeeDeploymentItems(context)) return;
 
   switch (level) {
     case 'viewer':
@@ -335,13 +335,15 @@ export function authorize(path: string, context?: GatewayAuthContext, { workspac
 
 // These extensions serve one deployment-wide runtime or registry. Kernel settings
 // secrets use the same extension ID as the engine vault subject.
+// Superagent shares one GitHub source, upstream routine, and deployment accept mode.
+// Keep its settings scope aligned with those services if it adds a schema.
 const DEPLOYMENT_SCOPED_EXTENSIONS = new Set(['engine-hermes', 'channels', 'engine-superagent', 'skills-registry']);
 
 export function hasDeploymentSettings(extension: string): boolean {
   return DEPLOYMENT_SCOPED_EXTENSIONS.has(extension);
 }
 
-export function authorizeDeploymentSettingsWrite(extension: string | undefined, context?: GatewayAuthContext): boolean {
+export function authorizeDeploymentSettings(extension: string | undefined, context?: GatewayAuthContext): boolean {
   if (context?.deploymentMode !== 'server' || !extension || !hasDeploymentSettings(extension)) return false;
   requireDeploymentOwner(context);
   return true;

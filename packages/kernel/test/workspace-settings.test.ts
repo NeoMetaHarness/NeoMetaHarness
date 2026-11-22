@@ -23,6 +23,22 @@ for (const version of [1, 2, 3, 4]) {
     ctx.route('hello', () => ({ version: ${version}, label: settings.label, apiKey: settings.apiKey ?? null }));
   } };`);
 }
+const deploymentId = 'sample-deployment';
+const deploymentUpgrade = join(root, 'deployment-v2');
+for (const [version, directory] of [[1, join(installed, deploymentId)], [2, deploymentUpgrade]] as const) {
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, 'neo.extension.json'), JSON.stringify({
+    id: deploymentId, version: `${version}.0.0`, displayName: 'deployment settings fixture',
+    runtime: { type: 'cordis', entry: './index.mjs' },
+    settings: { type: 'object', properties: { label: { type: 'string', default: 'unset' }, apiKey: { type: 'string', secret: true } } },
+  }));
+  await writeFile(join(directory, 'index.mjs'), `export default { activate(ctx) {
+    const settings = ctx.inject('settings');
+    const settingsFor = ctx.inject('settingsFor');
+    ctx.route('label', () => ({ version: ${version}, label: settings.label, apiKey: settings.apiKey }));
+    ctx.route('other', () => settingsFor('org-other'));
+  } };`);
+}
 const secrets = new Map<string, string>();
 const key = (scope: { workspaceId: string; subjectId?: string }, name: string) => `${scope.workspaceId}/${scope.subjectId}/${name}`;
 // A gate that holds one workspace's secret read open (to stretch a settings load across a generation switch).
@@ -39,15 +55,18 @@ const db = new SqliteDatabaseProvider(join(root, 'gateway.db'));
 let firstWorkspace: string | undefined;
 // Server mode: no fallback workspace; the bootstrap workspace does not exist yet when the kernel starts.
 const kernel = new NeoKernel(db, { vault, extensionDataDir: join(root, 'data') }, root, undefined,
-  { fallbackWorkspace: null, legacyWorkspace: async () => firstWorkspace });
+  { fallbackWorkspace: null, legacyWorkspace: async () => firstWorkspace, deploymentSettings: (id) => id === deploymentId });
 try {
   // An upgraded deployment: settings stored before P1-13, with no workspace.
   await db.migrate();
   await db.setExtensionSettings('sample-ws', { label: 'legacy' });
   secrets.set('default/sample-ws/SEC_APIKEY', 'legacy-key');
+  await db.setExtensionSettings(deploymentId, { label: 'legacy deployment' });
+  secrets.set('default/sample-deployment/SEC_APIKEY', 'deployment-key');
   await kernel.discover(installed);
-  assert.equal((await db.listLegacyExtensionSettings()).length, 1, 'no workspace yet: legacy rows are kept');
+  assert.equal((await db.listLegacyExtensionSettings()).length, 2, 'no workspace yet: legacy rows are kept');
   await kernel.enable('sample-ws');
+  await kernel.enable(deploymentId);
 
   // The first workspace is created later; the first access to it runs the migration (no restart needed).
   firstWorkspace = 'org-first';
@@ -57,6 +76,21 @@ try {
   assert.equal(secrets.get('default/sample-ws/SEC_APIKEY'), undefined, 'legacy secret moved');
   assert.equal((await kernel.getSettings('sample-ws', 'org-other')).values.label, 'unset', 'other workspaces do not inherit them');
   console.log('P1-13_LAZY_MIGRATION PASS legacy settings move into the first workspace when it appears');
+
+  assert.deepEqual(await db.getWorkspaceSettings('sample-ws', 'org-first'), { label: 'legacy' });
+  assert.deepEqual(await db.getWorkspaceSettings(deploymentId, 'default'), { label: 'legacy deployment' });
+  assert.equal(await db.getWorkspaceSettings(deploymentId, 'org-first'), undefined);
+  assert.equal(secrets.get('default/sample-deployment/SEC_APIKEY'), 'deployment-key');
+
+  await kernel.saveSettings(deploymentId, { label: 'updated deployment' }, 'org-first');
+  const deploymentUpgradeResult = await kernel.upgrade(deploymentId, deploymentUpgrade,
+    { integrity: await extensionIntegrity(deploymentUpgrade) });
+  assert.equal(deploymentUpgradeResult.upgraded, true, deploymentUpgradeResult.reason);
+  const deploymentValues = { label: 'updated deployment', apiKey: 'deployment-key' };
+  assert.deepEqual(await kernel.runInWorkspace('org-first', () => kernel.invokeRoute('/x/sample-deployment/label', 'GET')),
+    { version: 2, ...deploymentValues });
+  assert.deepEqual(await kernel.invokeRoute('/x/sample-deployment/other', 'GET'), deploymentValues);
+  console.log('P1-14_DEPLOYMENT_SETTINGS PASS migration and upgrades retain the default settings for all workspaces');
 
   // A request in workspace A preloads A's snapshot, then the extension switches generation before the route runs.
   await kernel.saveSettings('sample-ws', { label: 'alpha', apiKey: 'alpha-key' }, 'org-a');

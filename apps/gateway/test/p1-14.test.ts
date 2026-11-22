@@ -277,6 +277,31 @@ test('P1-14 desktop: the bootstrapped owner keeps Inbox and kernel access', asyn
   } finally { await fixture.cleanup(); }
 });
 
+test('P1-14 desktop: a workspace admin can read and write listed settings and secrets', async () => {
+  const fixture = await prepareFixture('desktop', true);
+  try {
+    const gateway = await fixture.start();
+    assert.ok(gateway.desktopToken);
+    const workspace = await gateway.auth.kysely!.selectFrom('organization').select('id').executeTakeFirstOrThrow();
+    // Desktop blocks HTTP sign-up. Seed the extra identity through the auth fixture.
+    const admin = await gateway.auth.api.signUpEmail({ body: {
+      email: 'admin@desktop-settings.test', name: 'Desktop admin fixture', password: 'Test-fixture-only-123!',
+    } });
+    assert.ok(admin.token);
+    await gateway.auth.api.addMember({
+      body: { organizationId: workspace.id, userId: admin.user.id, role: 'admin' },
+      headers: new Headers(bearer(gateway.desktopToken)),
+    });
+    assert.equal((await fixture.authPost('organization/set-active', { organizationId: workspace.id }, admin.token)).status, 200);
+    const client = fixture.client(admin.token);
+    assert.equal((await client.settings.set({ extension: 'channels', values: { label: 'desktop' } })).values.label, 'desktop');
+    assert.equal((await client.settings.get({ extension: 'channels' })).values.label, 'desktop');
+    const scope = { kind: 'engine' as const, workspaceId: workspace.id, subjectId: 'channels' };
+    await client.vault.put({ scope, name: 'SEC_APIKEY', value: 'desktop-fixture-secret' });
+    assert.equal(await gateway.vault.get(scope, 'SEC_APIKEY'), 'desktop-fixture-secret');
+  } finally { await fixture.cleanup(); }
+});
+
 test('P1-14 server: deployment routes work with a workspace viewer role', async () => {
   const fixture = await prepareFixture('server', true);
   try {
@@ -294,6 +319,16 @@ test('P1-14 server: deployment routes work with a workspace viewer role', async 
       });
       assert.equal((await fixture.authPost('organization/set-active', { organizationId: workspace.id }, user.token)).status, 200);
     }
+    const secondResponse = await fixture.createOrg('WorkspaceEvents', founder.token);
+    assert.equal(secondResponse.status, 200);
+    const secondWorkspace = await secondResponse.json() as { id: string };
+    const secondAdmin = await fixture.signup('admin@workspace-events.test');
+    await gateway.auth.api.addMember({
+      body: { organizationId: secondWorkspace.id, userId: secondAdmin.user.id, role: 'admin' },
+      headers: new Headers(bearer(founder.token)),
+    });
+    assert.equal((await fixture.authPost('organization/set-active', { organizationId: secondWorkspace.id }, secondAdmin.token)).status, 200);
+    assert.equal((await fixture.authPost('organization/set-active', { organizationId: workspace.id }, founder.token)).status, 200);
     const setup = fixture.client(founder.token);
     const workspaceAdmin = fixture.client(admin.token);
     const deployment = fixture.client(owner.token);
@@ -328,10 +363,18 @@ test('P1-14 server: deployment routes work with a workspace viewer role', async 
     assert.equal((await deployment.extensions.enable({ id: 'channels' })).status, 'running');
     console.log('P1-14_LIFECYCLE PASS only the deployment owner can enable or disable server extensions');
 
+    const channelScope = { kind: 'engine' as const, workspaceId: 'default', subjectId: 'channels' };
+    await assert.rejects(setup.settings.set({ extension: 'channels', values: { label: 'blocked' } }), forbidden);
+    await assert.rejects(setup.vault.put({ scope: channelScope, name: 'SEC_APIKEY', value: 'blocked' }), forbidden);
+    const wrongBucket = (error: unknown) => {
+      const rpc = error as { code?: string; message?: string };
+      return rpc.code === 'BAD_REQUEST' && /workspaceId 'default'/.test(rpc.message ?? '');
+    };
     for (const extension of ['channels', 'engine-hermes', 'engine-superagent', 'skills-registry']) {
       const input = { extension, values: { label: 'deployment fixture', apiKey: 'fixture-setting-secret' } };
       await assert.rejects(workspaceAdmin.settings.set(input), forbidden);
-      assert.deepEqual((await workspaceAdmin.settings.get({ extension })).values, { label: 'initial', apiKey: { set: false } });
+      await assert.rejects(workspaceAdmin.settings.get({ extension }), forbidden);
+      assert.deepEqual((await deployment.settings.get({ extension })).values, { label: 'initial', apiKey: { set: false } });
       assert.deepEqual((await deployment.settings.set(input)).values, { label: 'deployment fixture', apiKey: { set: true } });
       const scope = { kind: 'engine' as const, workspaceId: 'default', subjectId: extension };
       assert.equal(await gateway.vault.get(scope, 'SEC_APIKEY'), 'fixture-setting-secret');
@@ -345,6 +388,13 @@ test('P1-14 server: deployment routes work with a workspace viewer role', async 
         await assert.rejects(deployment.vault.put({ ...memoryToken, value: 'f'.repeat(64) }), forbidden);
         await assert.rejects(deployment.vault.rotate({ ...memoryToken, value: 'f'.repeat(64) }), forbidden);
         await assert.rejects(deployment.vault.delete(memoryToken), forbidden);
+        if (workspaceId !== 'default') {
+          await assert.rejects(deployment.vault.put(secret), wrongBucket);
+          await assert.rejects(deployment.vault.rotate(secret), wrongBucket);
+          await assert.rejects(deployment.vault.delete(selector), wrongBucket);
+          assert.equal(await gateway.vault.get(selector.scope, selector.name), undefined);
+          continue;
+        }
         await deployment.vault.put(secret);
         await deployment.vault.rotate({ ...secret, value: 'fixture-rotated-secret' });
         assert.equal(await gateway.vault.get(selector.scope, selector.name), 'fixture-rotated-secret');
@@ -358,6 +408,29 @@ test('P1-14 server: deployment routes work with a workspace viewer role', async 
     assert.equal((await workspaceAdmin.settings.set(workspaceSettings)).values.label, 'workspace admin fixture');
     await assert.rejects(deployment.settings.set(workspaceSettings), forbidden);
     console.log('P1-14_SETTINGS PASS deployment settings and matching vault mutations require deployment ownership');
+
+    const otherWorkspace = fixture.client(secondAdmin.token);
+    await otherWorkspace.settings.set({ ...workspaceSettings, values: { label: 'other workspace fixture' } });
+    await deployment.extensions.disable({ id: 'sample-settings' });
+    const settingsEvents = async (client: typeof deployment) => {
+      const events: [string, unknown][] = [];
+      const signal = AbortSignal.timeout(5_000);
+      for await (const event of await client.events.subscribe({ since: 0 }, { signal })) {
+        if (event.type === 'settings.change') events.push([event.extension, event.values.label]);
+        if (event.type === 'extension.state' && event.extensionId === 'sample-settings'
+          && event.status === 'disabled' && events.length > 0) return events;
+      }
+      throw new Error('Expected the extension state event after the settings writes');
+    };
+    const [deploymentEvents, adminEvents, otherEvents] = await Promise.all(
+      [deployment, workspaceAdmin, otherWorkspace].map(settingsEvents));
+    assert.deepEqual(deploymentEvents, [
+      ...['channels', 'engine-hermes', 'engine-superagent', 'skills-registry'].map((id) => [id, 'deployment fixture']),
+      ['sample-settings', 'workspace admin fixture'],
+    ]);
+    assert.deepEqual(adminEvents, [['sample-settings', 'workspace admin fixture']]);
+    assert.deepEqual(otherEvents, [['sample-settings', 'other workspace fixture']]);
+    console.log('P1-14_SETTINGS_EVENTS PASS deployment and workspace settings events respect their audience');
 
     const channels = deployment.x.channels;
     const whatsapp = { profile: notify.profile, platform: 'whatsapp' } as const;

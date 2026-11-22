@@ -60,7 +60,7 @@ import {
   authorize,
   canSeeDeploymentItems,
   authorizeInboxAction,
-  authorizeDeploymentSettingsWrite,
+  authorizeDeploymentSettings,
   hasDeploymentSettings,
   requireDeploymentOwner,
   getPolicy,
@@ -367,11 +367,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     // Settings secrets use a bare extension ID. Profile credentials in the
     // deployment vault are covered by the instance-scope check below.
     const deploymentSettingsWrite = operation !== 'list' && scope?.kind === 'engine'
-      && authorizeDeploymentSettingsWrite(scope.subjectId, context);
+      && authorizeDeploymentSettings(scope.subjectId, context);
     // An extension's secret settings live at its engine scope (P1-13). Writing them is changing that extension's
     // settings, so it needs settings.set (admin) in the scope's workspace, whatever vault.put allows elsewhere.
     const settingsSecret = operation !== 'list' && scope?.kind === 'engine' && !!scope.subjectId
       && kernel.hasExtension(scope.subjectId);
+    if (deploymentSettingsWrite && scope.workspaceId !== DEPLOYMENT_CONFIG) {
+      throw new ORPCError('BAD_REQUEST', { message: "Deployment settings secrets require workspaceId 'default'" });
+    }
     if (!deploymentSettingsWrite && scope?.workspaceId) {
       const kysely = auth.kysely;
       const target = await kysely.selectFrom('organization').select('id')
@@ -1379,12 +1382,13 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     },
     settings: {
       get: os.settings.get.handler(async ({ input, context }) => {
-        authorize('settings.get', context);
+        const deploymentSettingsRead = authorizeDeploymentSettings(input?.extension, context);
+        if (!deploymentSettingsRead) authorize('settings.get', context, { workspaceOnly: true });
         if (!input?.extension) throw new ORPCError('BAD_REQUEST', { message: 'extension required' });
         if (!kernel.hasExtension(input.extension)) {
           throw new ORPCError('NOT_FOUND', { message: `Extension ${input.extension} not found` });
         }
-        const { sanitized, schema } = await kernel.getSettings(input.extension, settingsWorkspace(context));
+        const { sanitized, schema } = await kernel.getSettings(input.extension, deploymentSettingsRead ? DEPLOYMENT_CONFIG : settingsWorkspace(context));
         return {
           extension: input.extension,
           schema,
@@ -1392,7 +1396,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         };
       }),
       set: os.settings.set.handler(async ({ input, context }) => {
-        const deploymentSettingsWrite = authorizeDeploymentSettingsWrite(input?.extension, context);
+        const deploymentSettingsWrite = authorizeDeploymentSettings(input?.extension, context);
         if (!deploymentSettingsWrite) {
           authorize('settings.set', context, { workspaceOnly: true });
         }
@@ -1400,8 +1404,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         if (!kernel.hasExtension(input.extension)) {
           throw new ORPCError('NOT_FOUND', { message: `Extension ${input.extension} not found` });
         }
-        const workspace = settingsWorkspace(context);
-        if (!workspace && !deploymentSettingsWrite) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
+        const workspace = deploymentSettingsWrite ? DEPLOYMENT_CONFIG : settingsWorkspace(context);
+        if (!workspace) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
         let sanitized: Record<string, unknown>;
         try {
           sanitized = await kernel.saveSettings(input.extension, input.values, workspace);
