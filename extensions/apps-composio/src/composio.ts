@@ -15,7 +15,8 @@ export class ComposioProvider implements AppsProvider {
   private readonly approvals = new WeakMap<object, { fingerprint: string; version: string }>();
   private readonly http: typeof fetch;
   constructor(private readonly settings: () => ComposioSettings, private readonly file: string,
-    http?: typeof fetch, private readonly callbackOrigin: () => string = () => { throw new Error('Neo callback origin required'); }) {
+    http?: typeof fetch, private readonly callbackOrigin: () => string = () => { throw new Error('Neo callback origin required'); },
+    private readonly runInWorkspace: <T>(workspace: string, work: () => T | Promise<T>) => Promise<T> = async (_workspace, work) => work()) {
     this.accounts = new AccountStore(file); this.http = createEgressFetch(() => this.settings().allowPrivateNetwork === true, http);
   }
   load() { return this.accounts.load(); }
@@ -79,12 +80,15 @@ export class ComposioProvider implements AppsProvider {
     this.approvals.set(input, { fingerprint, version: tool.version });
     return { destructive, summary: `${input.action} on ${account.toolkit} account ${account.id}`, ownerUserId: account.ownerUserId };
   }
-  async execute(input: AppAction, signal: AbortSignal) {
-    // Settings changes invalidate queued approvals before any remote action.
-    const approval = this.approvals.get(input);
-    if (!approval || approval.fingerprint !== this.fingerprint()) throw new Error('Composio settings changed; request approval again');
-    this.approvals.delete(input);
-    return this.request('tools/execute/' + encodeURIComponent(input.action), { connected_account_id: input.accountId, version: approval.version, arguments: input.arguments }, signal);
+  async execute(input: AppAction, signal: AbortSignal, actor: AppsActor) {
+    return this.runInWorkspace(actor.workspaceId, async () => {
+      this.accounts.authorize(input.accountId, actor);
+      // Settings changes invalidate queued approvals before any remote action.
+      const approval = this.approvals.get(input);
+      if (!approval || approval.fingerprint !== this.fingerprint()) throw new Error('Composio settings changed; request approval again');
+      this.approvals.delete(input);
+      return this.request('tools/execute/' + encodeURIComponent(input.action), { connected_account_id: input.accountId, version: approval.version, arguments: input.arguments }, signal);
+    });
   }
   close() { this.active = false; this.shutdown.abort(); }
 }

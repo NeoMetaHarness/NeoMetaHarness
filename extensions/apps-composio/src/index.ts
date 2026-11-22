@@ -11,7 +11,7 @@ export default defineExtension({
     const home = ctx.inject<string>('extensionDataDir');
     if (!apps || !bridge || !vault || !gateway || !home || !runInWorkspace) throw new Error('Connected apps require Gateway registry, vault and MCP services');
     const provider = new ComposioProvider(() => ctx.inject<ComposioSettings>('settings') ?? {},
-      join(home, 'apps-composio', 'accounts'), ctx.inject<typeof fetch>('appsHttpClient'), gateway);
+      join(home, 'apps-composio', 'accounts'), ctx.inject<typeof fetch>('appsHttpClient'), gateway, runInWorkspace);
     await provider.load();
     for (const binding of provider.accounts.bindings()) await bridge.bindWorkspace(binding.engine, binding.profile, binding.workspaceId);
     const unregister = apps.register(provider); const projection = new AppsProjection(vault, apps, gateway, runInWorkspace);
