@@ -195,39 +195,67 @@ export function validateMinisignPublicKey(pubkey) {
   const keyIdBytes = rawKey.subarray(2, 10);
   const isTestKeyId = keyIdBytes.equals(Buffer.from('TESTKEY1', 'utf8'));
   if (isTestKeyId || line1 === 'untrusted comment: NEO TEST KEY - DO NOT SHIP') {
-    throw new Error("test public key with ID 'TESTKEY1' must not ship in a release build! Check the owner key in to tauri.conf.json or pass a release --config file.");
+    throw new Error("test public key with ID 'TESTKEY1' must not ship in a release build! Put the real public key in apps/neo-app/src-tauri/tauri.conf.json.");
   }
 
   return true;
 }
 
-export function parseCliConfig(args = process.argv) {
-  let merged = {};
+function parseConfigPatch(text, source) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text.replace(/^﻿/, ''));
+  } catch (err) {
+    throw new Error(`Release installer packaging failed closed: invalid JSON in ${source}: ${err.message}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Release installer packaging failed closed: ${source} must be a JSON object`);
+  }
+  return parsed;
+}
+
+// Returns the --config / -c arguments as an ordered list of JSON merge patches. Patches are not pre-merged: a
+// `null` in a later patch has to delete a key from the real base config, which merging into {} would discard.
+// Any value that cannot be read or parsed is a hard failure, matching build.rs for TAURI_CONFIG.
+export function parseCliConfigPatches(args = process.argv) {
+  const patches = [];
   for (let i = 0; i < args.length; i++) {
+    let val;
     if (args[i] === '--config' || args[i] === '-c') {
-      const val = args[i + 1];
-      if (val) {
-        try {
-          if (val.trim().startsWith('{')) {
-            merged = deepMerge(merged, JSON.parse(val));
-          } else if (existsSync(val)) {
-            merged = deepMerge(merged, JSON.parse(readFileSync(val, 'utf8').replace(/^\uFEFF/, '')));
-          }
-        } catch {}
+      val = args[i + 1];
+      i++;
+      if (val === undefined) {
+        throw new Error(`Release installer packaging failed closed: ${args[i - 1]} requires a value`);
       }
+    } else if (typeof args[i] === 'string' && args[i].startsWith('--config=')) {
+      val = args[i].slice('--config='.length);
+    } else {
+      continue;
+    }
+    if (val.trim().startsWith('{')) {
+      patches.push(parseConfigPatch(val, '--config argument'));
+    } else {
+      let text;
+      try {
+        text = readFileSync(val, 'utf8');
+      } catch (err) {
+        throw new Error(`Release installer packaging failed closed: cannot read --config file ${val}: ${err.message}`);
+      }
+      patches.push(parseConfigPatch(text, `--config file ${val}`));
     }
   }
-  return merged;
+  return patches;
+}
+
+export function parseCliConfig(args = process.argv) {
+  return parseCliConfigPatches(args).reduce((merged, patch) => deepMerge(merged, patch), {});
 }
 
 export function runInstallerCheck(options = {}) {
   const root = options.root ? resolve(options.root) : resolve(fileURLToPath(new URL('..', import.meta.url)));
   const load = (path) => readFileSync(resolve(root, path), 'utf8').replace(/^\uFEFF/, '');
   const baseConfig = JSON.parse(load('apps/neo-app/src-tauri/tauri.conf.json'));
-  let bundleConfigFile = {};
-  try {
-    bundleConfigFile = JSON.parse(load('apps/neo-app/src-tauri/tauri.bundle.conf.json'));
-  } catch {}
+  const bundleConfigFile = parseConfigPatch(load('apps/neo-app/src-tauri/tauri.bundle.conf.json'), 'tauri.bundle.conf.json');
 
   // 1. Validate the default file directly for repository baseline sanity
   assert.match(baseConfig.identifier, /^[a-z][a-z0-9]*(\.[a-z][a-z0-9-]*){2,}$/i, 'valid reverse-DNS identifier');
@@ -250,28 +278,28 @@ export function runInstallerCheck(options = {}) {
   // Release builds run with TAURI_CONFIG unset; `tauri build --config ...` sets it from its --config arguments for
   // the compile and its hooks. Neither build.rs nor this hook can tell those arguments from an inherited
   // TAURI_CONFIG, so whatever it holds is merged and the resulting key must still equal the checked-in key.
-  let envConfig = {};
+  // Patches are applied in Tauri's order onto the real base config, each with JSON merge patch semantics (null
+  // deletes a key). Anything unparsable fails closed, as build.rs does for TAURI_CONFIG.
+  const patches = [];
   if (!options.ignoreEnv) {
     if ('TAURI_ENV_CONFIG' in process.env || process.env.TAURI_ENV_CONFIG !== undefined) {
       throw new Error('Release installer packaging failed closed: TAURI_ENV_CONFIG is not supported by Tauri; pass the release config with --config.');
     }
     const rawEnv = options.envConfig ?? process.env.TAURI_CONFIG;
-    if (rawEnv) {
-      try {
-        envConfig = typeof rawEnv === 'object' ? rawEnv : JSON.parse(rawEnv);
-      } catch (err) {
-        throw new Error(`Failed to parse TAURI_CONFIG from environment: ${err.message}`);
-      }
+    if (rawEnv !== undefined) {
+      patches.push(typeof rawEnv === 'object' ? rawEnv : parseConfigPatch(rawEnv, 'TAURI_CONFIG'));
     }
   }
-
-  const cliConfig = options.cliConfig ?? parseCliConfig(options.cliArgs ?? process.argv);
+  if (options.cliConfig !== undefined) {
+    patches.push(options.cliConfig);
+  } else {
+    patches.push(...parseCliConfigPatches(options.cliArgs ?? process.argv));
+  }
 
   let effectiveConfig = deepMerge(checkedInConfig, bundleConfigFile);
   // The test seam stands for the checked-in files, so it applies before TAURI_CONFIG and --config.
   if (options.configOverride) effectiveConfig = deepMerge(effectiveConfig, options.configOverride);
-  effectiveConfig = deepMerge(effectiveConfig, envConfig);
-  effectiveConfig = deepMerge(effectiveConfig, cliConfig);
+  for (const patch of patches) effectiveConfig = deepMerge(effectiveConfig, patch);
 
   if (options.installerConfigOverride) {
     effectiveConfig = deepMerge(effectiveConfig, options.installerConfigOverride);
@@ -307,7 +335,10 @@ export function runInstallerCheck(options = {}) {
 
   const updater = effectiveConfig.plugins?.updater;
   assert.ok(updater, 'updater config is present');
-  const pubkey = updater.pubkey ?? '';
+  const pubkey = updater.pubkey;
+  if (typeof pubkey !== 'string') {
+    throw new Error('Release installer packaging failed closed: plugins.updater.pubkey is missing from the effective config; the checked-in key in apps/neo-app/src-tauri/tauri.conf.json must not be deleted.');
+  }
 
   // Enforce check inside release build path with no bypass on effective merged config
   validateMinisignPublicKey(pubkey);

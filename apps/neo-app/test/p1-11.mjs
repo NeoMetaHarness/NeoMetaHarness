@@ -455,6 +455,97 @@ runInstallerCheck({
   configOverride: { plugins: { updater: { pubkey: validReleaseKey } } },
   cliArgs: ['--config', JSON.stringify({ bundle: { createUpdaterArtifacts: true }, plugins: { updater: { pubkey: validReleaseKey } } })],
 });
+// Standalone --config patches apply onto the real base config in order with JSON-merge-patch semantics, and
+// anything unparsable fails closed (matching build.rs for TAURI_CONFIG).
+const checkedInKeyOverride = { plugins: { updater: { pubkey: validReleaseKey } } };
+const otherValidKey = acceptedCrlfKey;
+assert.notEqual(otherValidKey, validReleaseKey, 'fixture keys differ');
+// The checked-in key, with no patches, is accepted.
+runInstallerCheck({ ignoreEnv: true, configOverride: checkedInKeyOverride, cliArgs: [] });
+// A null patch deletes the checked-in key: refused, not silently discarded.
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: checkedInKeyOverride,
+    cliArgs: ['--config', JSON.stringify({ plugins: { updater: { pubkey: null } } })],
+  }),
+  /plugins\.updater\.pubkey is missing/,
+  '--config null patch deleting the pubkey is refused'
+);
+// Same deletion delivered through TAURI_CONFIG.
+assert.throws(
+  () => runInstallerCheck({
+    configOverride: checkedInKeyOverride,
+    envConfig: JSON.stringify({ plugins: { updater: { pubkey: null } } }),
+    cliArgs: [],
+  }),
+  /plugins\.updater\.pubkey is missing/,
+  'TAURI_CONFIG null patch deleting the pubkey is refused'
+);
+// Malformed JSON is a hard failure, even when the checked-in key is valid.
+assert.throws(
+  () => runInstallerCheck({ ignoreEnv: true, configOverride: checkedInKeyOverride, cliArgs: ['--config', '{not json'] }),
+  /invalid JSON in --config argument/,
+  '--config with malformed inline JSON is refused'
+);
+assert.throws(
+  () => runInstallerCheck({ ignoreEnv: true, configOverride: checkedInKeyOverride, cliArgs: ['--config', join(tmpdir(), 'neo-no-such-config-file.json')] }),
+  /cannot read --config file/,
+  '--config pointing at a missing file is refused'
+);
+assert.throws(
+  () => runInstallerCheck({ ignoreEnv: true, configOverride: checkedInKeyOverride, cliArgs: ['--config'] }),
+  /requires a value/,
+  '--config without a value is refused'
+);
+assert.throws(
+  () => runInstallerCheck({ configOverride: checkedInKeyOverride, envConfig: '{not json', cliArgs: [] }),
+  /invalid JSON in TAURI_CONFIG/,
+  'malformed TAURI_CONFIG is refused'
+);
+const malformedConfigDir = await mkdtemp(join(tmpdir(), 'neo-installer-check-'));
+try {
+  const malformedConfigFile = join(malformedConfigDir, 'bad.json');
+  writeFileSync(malformedConfigFile, '{"plugins": ');
+  assert.throws(
+    () => runInstallerCheck({ ignoreEnv: true, configOverride: checkedInKeyOverride, cliArgs: ['--config', malformedConfigFile] }),
+    /invalid JSON in --config file/,
+    '--config with a malformed JSON file is refused'
+  );
+} finally {
+  await rm(malformedConfigDir, { recursive: true, force: true });
+}
+// A valid but different key is refused.
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: checkedInKeyOverride,
+    cliArgs: ['--config', JSON.stringify({ plugins: { updater: { pubkey: otherValidKey } } })],
+  }),
+  differs,
+  '--config patch with a valid but different key is refused'
+);
+// A later patch cannot be hidden by an earlier one: delete, then restore the same key is fine; order matters.
+runInstallerCheck({
+  ignoreEnv: true,
+  configOverride: checkedInKeyOverride,
+  cliArgs: [
+    '--config', JSON.stringify({ plugins: { updater: { pubkey: null } } }),
+    '--config', JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }),
+  ],
+});
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: checkedInKeyOverride,
+    cliArgs: [
+      '--config', JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }),
+      '--config', JSON.stringify({ plugins: { updater: { pubkey: null } } }),
+    ],
+  }),
+  /plugins\.updater\.pubkey is missing/,
+  'a later null patch wins over an earlier restore'
+);
 console.log('Installer check verification passed (effective config merging, placeholder rejected, structural validation enforced, test key accepted).');
 
 console.log('Running update-state unit test (frontend renders only update_state; out-of-order replies dropped)...');
