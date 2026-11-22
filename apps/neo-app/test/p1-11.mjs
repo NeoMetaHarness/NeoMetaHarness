@@ -115,8 +115,15 @@ assert.throws(
   'installer-check must reject an empty public key'
 );
 
-// Verify well-formed dummy test key fixture is accepted
-const dummyTestKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldUTVBERFVMWVNZTkRFUkZBS0VLRVkxMjM0NTY3ODkwMTI=';
+// Test fixtures for Minisign public key validation
+// Valid 42-byte Minisign public key fixture (outer base64 of 2-line minisign pubkey file, line 2 decodes to 'Ed' + 8-byte id + 32-byte key)
+const dummyTestKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldSVVJWTlVTMFZaTVZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEK';
+// Structurally malformed key: surface-valid base64 (>40 chars) but not a minisign file
+const malformedSurfaceKey = Buffer.from('this is a surface-valid base64 string that is not a minisign key at all').toString('base64');
+// Structurally malformed key: line 2 algorithm is 'XX' instead of 'Ed'
+const badAlgKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IHRlc3QKV0ZoVVJWTlVTMFZaTVZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEK';
+// Structurally malformed key: line 2 length is 32 bytes instead of 42 bytes
+const badLenKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IHRlc3QKV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbz0K';
 const dummyConfig = {
   plugins: {
     updater: {
@@ -157,7 +164,58 @@ runInstallerCheck({
   ignoreEnv: true,
   cliArgs: ['--config', JSON.stringify({ plugins: { updater: { pubkey: dummyTestKey } } })],
 });
-console.log('Installer check verification passed (effective config merging, placeholder rejected, test key accepted).');
+// Verify that structurally malformed keys fail installer-check
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: malformedSurfaceKey } } },
+  }),
+  /Minisign public key file must/i,
+  'installer-check must reject surface-valid base64 key lacking minisign file structure'
+);
+
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: badAlgKey } } },
+  }),
+  /algorithm ID must be "Ed"/i,
+  'installer-check must reject key with wrong algorithm ID'
+);
+
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: badLenKey } } },
+  }),
+  /must decode to exactly 42 bytes/i,
+  'installer-check must reject key line 2 with wrong byte length'
+);
+
+// Verify unrelated plugin override in TAURI_CONFIG leaves updater config intact (still failing on base placeholder)
+process.env.TAURI_CONFIG = JSON.stringify({
+  plugins: {
+    unrelatedPlugin: { enabled: true },
+  },
+});
+assert.throws(
+  () => runInstallerCheck(),
+  /release installer packaging requires a valid owner minisign public key/,
+  'installer-check must retain updater config and reject base placeholder when unrelated plugin is configured'
+);
+delete process.env.TAURI_CONFIG;
+
+// Verify unrelated plugin override + valid updater key succeeds
+process.env.TAURI_CONFIG = JSON.stringify({
+  plugins: {
+    unrelatedPlugin: { enabled: true },
+    updater: { pubkey: dummyTestKey },
+  },
+});
+runInstallerCheck();
+delete process.env.TAURI_CONFIG;
+
+console.log('Installer check verification passed (effective config merging, placeholder rejected, structural validation enforced, test key accepted).');
 
 console.log('Running cargo unit tests (verifying updater overrides and endpoint HTTPS enforcement)...');
 execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['test'], {
@@ -201,7 +259,50 @@ assert.throws(
   'release cargo check must fail closed when building with placeholder key'
 );
 
-// 4. Verify cargo check --release SUCCEEDS when valid test key is supplied via TAURI_CONFIG
+// 4. Verify cargo check --release FAILS when key is surface-valid base64 but structurally malformed
+assert.throws(
+  () => execFileSync(cargoBin, ['check', '--release'], {
+    cwd: srcTauriDir,
+    stdio: 'pipe',
+    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: malformedSurfaceKey } } }) },
+  }),
+  /failed to run custom build command|Release build failed closed|exit code/i,
+  'release cargo check must fail closed when key lacks minisign structure'
+);
+
+// 5. Verify cargo check --release FAILS when key has wrong algorithm ID
+assert.throws(
+  () => execFileSync(cargoBin, ['check', '--release'], {
+    cwd: srcTauriDir,
+    stdio: 'pipe',
+    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: badAlgKey } } }) },
+  }),
+  /failed to run custom build command|Release build failed closed|exit code/i,
+  'release cargo check must fail closed when key algorithm is not Ed'
+);
+
+// 6. Verify cargo check --release FAILS when TAURI_CONFIG only sets unrelated plugin (updater retained, base placeholder rejected)
+assert.throws(
+  () => execFileSync(cargoBin, ['check', '--release'], {
+    cwd: srcTauriDir,
+    stdio: 'pipe',
+    env: { ...process.env, TAURI_CONFIG: JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true } } }) },
+  }),
+  /failed to run custom build command|Release build failed closed|exit code/i,
+  'release cargo check must fail closed when unrelated plugin is overridden without replacing placeholder pubkey'
+);
+
+// 7. Verify cargo check --release SUCCEEDS when unrelated plugin AND valid test key are supplied
+execFileSync(cargoBin, ['check', '--release'], {
+  cwd: srcTauriDir,
+  stdio: 'pipe',
+  env: {
+    ...process.env,
+    TAURI_CONFIG: JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true }, updater: { pubkey: dummyTestKey } } }),
+  },
+});
+
+// 8. Verify cargo check --release SUCCEEDS when valid test key is supplied via TAURI_CONFIG
 execFileSync(cargoBin, ['check', '--release'], {
   cwd: srcTauriDir,
   stdio: 'pipe',
@@ -210,7 +311,7 @@ execFileSync(cargoBin, ['check', '--release'], {
     TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: dummyTestKey } } }),
   },
 });
-console.log('PASS build.rs release fail-closed verification (unresolvable config and placeholder fail, valid test config passes)');
+console.log('PASS build.rs release fail-closed verification (unresolvable config, placeholder, malformed keys, and unrelated plugin override verified; valid test config passes)');
 
 console.log('Building desktop binary with Cargo (debug)...');
 execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['build'], {

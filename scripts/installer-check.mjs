@@ -4,19 +4,74 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export function deepMerge(target, source) {
-  if (!source || typeof source !== 'object' || Array.isArray(source)) {
-    return source !== undefined ? source : target;
-  }
-  const result = { ...target };
-  for (const [key, value] of Object.entries(source)) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      result[key] = deepMerge(result[key] ?? {}, value);
-    } else {
-      result[key] = value;
+export function jsonMergePatch(target, patch) {
+  if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+    const result = (target && typeof target === 'object' && !Array.isArray(target))
+      ? { ...target }
+      : {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) {
+        delete result[key];
+      } else {
+        result[key] = jsonMergePatch(result[key], value);
+      }
     }
+    return result;
   }
-  return result;
+  return patch;
+}
+
+export const deepMerge = jsonMergePatch;
+
+export function validateMinisignPublicKey(pubkey) {
+  if (typeof pubkey !== 'string') {
+    throw new Error('Public key must be a string');
+  }
+  const trimmed = pubkey.trim();
+  if (!trimmed) {
+    throw new Error('release installer packaging requires a valid owner minisign public key, not a placeholder or empty string');
+  }
+  if (trimmed === 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY') {
+    throw new Error('release installer packaging requires a valid owner minisign public key, not a placeholder or empty string');
+  }
+
+  const outerClean = trimmed.replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(outerClean) || outerClean.length % 4 !== 0) {
+    throw new Error('Public key is not valid base64');
+  }
+
+  let fileContent;
+  try {
+    const outerBytes = Buffer.from(outerClean, 'base64');
+    fileContent = outerBytes.toString('utf8');
+  } catch (err) {
+    throw new Error('Failed to decode public key as UTF-8: ' + err.message);
+  }
+
+  const lines = fileContent.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) {
+    throw new Error('Minisign public key file must have at least 2 lines (comment and key)');
+  }
+
+  if (!lines[0].startsWith('untrusted comment:')) {
+    throw new Error('Minisign public key file must begin with "untrusted comment:"');
+  }
+
+  const innerClean = lines[1].replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(innerClean) || innerClean.length % 4 !== 0) {
+    throw new Error('Minisign public key line 2 is not valid base64');
+  }
+
+  const rawKey = Buffer.from(innerClean, 'base64');
+  if (rawKey.length !== 42) {
+    throw new Error('Minisign public key must decode to exactly 42 bytes, got ' + rawKey.length);
+  }
+
+  if (rawKey[0] !== 0x45 || rawKey[1] !== 0x64) {
+    throw new Error('Minisign public key algorithm ID must be "Ed", got 0x' + rawKey.subarray(0, 2).toString('hex'));
+  }
+
+  return true;
 }
 
 export function parseCliConfig(args = process.argv) {
@@ -117,11 +172,7 @@ export function runInstallerCheck(options = {}) {
   const pubkey = (updater.pubkey ?? '').trim();
 
   // Enforce check inside release build path with no bypass on effective merged config
-  assert.ok(
-    pubkey !== '' && pubkey !== 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY',
-    'release installer packaging requires a valid owner minisign public key, not a placeholder or empty string'
-  );
-  assert.match(pubkey, /^[A-Za-z0-9+/=\s]{40,}$/, 'valid base64 minisign public key required for release installer');
+  validateMinisignPublicKey(pubkey);
 
   assert.ok(Array.isArray(updater.endpoints) && updater.endpoints.length > 0, 'updater endpoint required');
   for (const endpoint of updater.endpoints) {
