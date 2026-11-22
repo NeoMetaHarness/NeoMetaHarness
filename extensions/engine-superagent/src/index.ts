@@ -687,8 +687,8 @@ class SuperagentService {
   private readonly appExecutions = new Map<string, () => Promise<unknown>>();
   async submitApp(input: AppApproval): Promise<unknown> {
     if (this.closed) throw new Error('Inbox is disabled');
-    const mode = this.acceptModes.get(); const now = Date.now();
-    const item: InboxItem = { id: randomUUID(), botId: 'neo-apps', source: 'neo/apps',
+    const mode = this.acceptModes.get(input.actor.workspaceId); const now = Date.now();
+    const item: InboxItem = { id: randomUUID(), botId: 'neo-apps', source: 'neo/apps', workspace: input.actor.workspaceId,
       text: `${input.request.action}\nArgument keys: ${Object.keys(input.request.arguments).join(', ')}`, appAction: {
         provider: input.request.provider, accountId: input.request.accountId, action: input.request.action,
         workspaceId: input.actor.workspaceId, ownerUserId: input.ownerUserId, arguments: structuredClone(input.request.arguments) },
