@@ -1,16 +1,3 @@
-fn trim_ascii(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    let mut start = 0;
-    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
-        start += 1;
-    }
-    let mut end = bytes.len();
-    while end > start && bytes[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-    &s[start..end]
-}
-
 pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     let bytes = input.as_bytes();
     if bytes.is_empty() {
@@ -93,49 +80,37 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
 }
 
 pub fn validate_minisign_pubkey(pubkey: &str) -> Result<(), String> {
-    let trimmed = trim_ascii(pubkey);
-    if trimmed.is_empty() {
+    if pubkey.is_empty() {
         return Err("updater public key cannot be empty in a release build".to_string());
     }
-    if trimmed == "REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY" {
+    if pubkey == "REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY" {
         return Err(
             "placeholder updater public key REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY must not ship in a release build! Provide owner key via --config or TAURI_CONFIG."
                 .to_string(),
         );
     }
 
-    let outer_bytes = base64_decode(trimmed)
+    let outer_bytes = base64_decode(pubkey)
         .map_err(|e| format!("updater public key is not valid base64: {}", e))?;
 
     let file_content = String::from_utf8(outer_bytes)
         .map_err(|e| format!("updater public key decoded bytes are not valid UTF-8: {}", e))?;
 
-    let body = if let Some(s) = file_content.strip_suffix("\r\n") {
-        s
-    } else if let Some(s) = file_content.strip_suffix('\n') {
-        s
-    } else {
-        file_content.as_str()
-    };
-
-    let lines: Vec<&str> = body
-        .split('\n')
-        .map(|l| l.strip_suffix('\r').unwrap_or(l))
-        .collect();
-
-    if lines.len() != 2 {
-        return Err(format!(
-            "minisign public key file must have exactly 2 lines, got {}",
-            lines.len()
-        ));
+    let mut lines = file_content.lines();
+    let line1 = lines.next().ok_or_else(|| {
+        "minisign public key file must have exactly 2 lines, got 0".to_string()
+    })?;
+    let line2 = lines.next().ok_or_else(|| {
+        "minisign public key file must have exactly 2 lines, got 1".to_string()
+    })?;
+    if lines.next().is_some() {
+        return Err("minisign public key file must have exactly 2 lines".to_string());
     }
 
-    let line1 = trim_ascii(lines[0]);
     if !line1.starts_with("untrusted comment:") {
         return Err("minisign public key first line must start with 'untrusted comment:'".to_string());
     }
 
-    let line2 = trim_ascii(lines[1]);
     if line2.is_empty() {
         return Err("minisign public key line 2 is empty".to_string());
     }

@@ -681,6 +681,36 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_minisign_pubkey_trailing_newline_rejected() {
+        let valid_key = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQo=";
+        let trailing_nl = format!("{}\n", valid_key);
+        let err = validate_minisign_pubkey(&trailing_nl).unwrap_err();
+        assert!(err.contains("invalid character in base64"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_leading_whitespace_rejected() {
+        let valid_key = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQo=";
+        let leading_space = format!(" {}", valid_key);
+        let err_space = validate_minisign_pubkey(&leading_space).unwrap_err();
+        assert!(err_space.contains("invalid character in base64"));
+
+        let leading_tab = format!("\t{}", valid_key);
+        let err_tab = validate_minisign_pubkey(&leading_tab).unwrap_err();
+        assert!(err_tab.contains("invalid character in base64"));
+    }
+
+    #[test]
+    fn test_validate_minisign_pubkey_space_before_key_line_rejected() {
+        // Line 2 has leading space inside decoded file
+        let space_before_key = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQogUldSUFYwNUZVa3RGV1ZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEK";
+        let err = validate_minisign_pubkey(space_before_key).unwrap_err();
+        assert!(err.contains("minisign public key line 2 is not valid base64"));
+        assert!(err.contains("invalid character in base64"));
+    }
+
+
+    #[test]
     fn test_validate_minisign_pubkey_placeholder() {
         assert!(validate_minisign_pubkey("REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY").is_err());
     }

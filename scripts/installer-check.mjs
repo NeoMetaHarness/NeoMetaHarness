@@ -134,17 +134,16 @@ export function validateMinisignPublicKey(pubkey) {
   if (typeof pubkey !== 'string') {
     throw new Error('Public key must be a string');
   }
-  const trimmed = trimAscii(pubkey);
-  if (!trimmed) {
+  if (!pubkey) {
     throw new Error('release installer packaging requires a valid owner minisign public key, not a placeholder or empty string');
   }
-  if (trimmed === 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY') {
+  if (pubkey === 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY') {
     throw new Error('release installer packaging requires a valid owner minisign public key, not a placeholder or empty string');
   }
 
   let outerBytes;
   try {
-    outerBytes = base64Decode(trimmed);
+    outerBytes = base64Decode(pubkey);
   } catch (err) {
     throw new Error('updater public key is not valid base64: ' + err.message);
   }
@@ -168,12 +167,12 @@ export function validateMinisignPublicKey(pubkey) {
     throw new Error(`Minisign public key file must have exactly 2 lines, got ${lines.length}`);
   }
 
-  const line1 = trimAscii(lines[0]);
+  const line1 = lines[0];
   if (!line1.startsWith('untrusted comment:')) {
     throw new Error('Minisign public key file must begin with "untrusted comment:"');
   }
 
-  const line2 = trimAscii(lines[1]);
+  const line2 = lines[1];
   if (!line2) {
     throw new Error('Minisign public key line 2 is empty');
   }

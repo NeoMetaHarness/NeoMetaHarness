@@ -144,6 +144,14 @@ const unusedBitsOuterKey = `${validReleaseKey.slice(0, -4)}YQp=`;
 const unusedBitsInnerKey = 'dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwPQo=';
 // Leading vertical tab (Rust is_ascii_whitespace excludes \v, so it is preserved and rejected as base64)
 const vtKey = `\x0b${validReleaseKey}`;
+// Probe 1: Trailing newline on outer pubkey
+const trailingNewlineOuterKey = `${validReleaseKey}\n`;
+// Probe 2: Leading space on outer pubkey
+const leadingSpaceOuterKey = ` ${validReleaseKey}`;
+// Probe 2b: Leading tab on outer pubkey
+const leadingTabOuterKey = `\t${validReleaseKey}`;
+// Probe 3: Space before decoded key line (line 2)
+const spaceBeforeKeyLine = 'dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQogUldSUFYwNUZVa3RGV1ZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGEK';
 
 // Key fixture with high-bit key ID: in ascii toString it would mask to TESTKEY1, but raw byte compare distinguishes it
 const highBitKeyBytes = Buffer.concat([
@@ -284,6 +292,45 @@ assert.throws(
   }),
   /invalid character in base64/i,
   'installer-check must reject key with leading vertical tab'
+);
+
+// Probe 1 test: Trailing newline on outer pubkey must be rejected
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: trailingNewlineOuterKey } } },
+  }),
+  /invalid character in base64/i,
+  'installer-check must reject outer pubkey with trailing newline'
+);
+
+// Probe 2 test: Leading space or tab on outer pubkey must be rejected
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: leadingSpaceOuterKey } } },
+  }),
+  /invalid character in base64/i,
+  'installer-check must reject outer pubkey with leading space'
+);
+
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: leadingTabOuterKey } } },
+  }),
+  /invalid character in base64/i,
+  'installer-check must reject outer pubkey with leading tab'
+);
+
+// Probe 3 test: Space before decoded key line must be rejected
+assert.throws(
+  () => runInstallerCheck({
+    ignoreEnv: true,
+    configOverride: { plugins: { updater: { pubkey: spaceBeforeKeyLine } } },
+  }),
+  /line 2 is not valid base64|invalid character in base64/i,
+  'installer-check must reject key with space before decoded key line'
 );
 
 // Verify high-bit key ID does NOT collide with TESTKEY1 when compared by raw bytes
@@ -502,6 +549,32 @@ assertCargoCheckFailsWith(
   { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: vtKey } } }) },
   /invalid character in base64/,
   'leading vertical tab'
+);
+
+// Probe 1 in cargo: Verify cargo check --release FAILS when outer pubkey has trailing newline
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: trailingNewlineOuterKey } } }) },
+  /invalid character in base64/,
+  'outer pubkey trailing newline'
+);
+
+// Probe 2 in cargo: Verify cargo check --release FAILS when outer pubkey has leading space or tab
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: leadingSpaceOuterKey } } }) },
+  /invalid character in base64/,
+  'outer pubkey leading space'
+);
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: leadingTabOuterKey } } }) },
+  /invalid character in base64/,
+  'outer pubkey leading tab'
+);
+
+// Probe 3 in cargo: Verify cargo check --release FAILS when key has space before decoded key line
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: spaceBeforeKeyLine } } }) },
+  /minisign public key line 2 is not valid base64.*invalid character in base64/,
+  'space before decoded key line'
 );
 
 // 5j. Verify cargo check --release FAILS when alternate platform configs exist (covering json, json5, and toml variants)
