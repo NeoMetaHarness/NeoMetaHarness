@@ -561,7 +561,7 @@
       "status": "done",
       "owner": "sol-a",
       "evidence": "Pushed 16e7e47 (5 commits). installer:check PASS x2; cargo build clean; gateway, toggle PASS.",
-      "follow_up": "Updater public key is a placeholder; real signing key and actual installer builds per OS still to verify before v1.0."
+      "follow_up": "Updater public key is a placeholder; real signing key and actual installer builds per OS still to verify before v1.0. Windows installer build and install verified 2026-11-23 under P7-14."
     },
     "P7-7": {
       "title": "Docs site (static, local build)",
@@ -607,6 +607,12 @@
       "owner": "antigravity",
       "note": "User decision 2026-11-21: fix the 20 mismatches from the docs sweep; code is the source of truth.",
       "evidence": "PM review 2026-11-22 on main a43b9d0 + work/gemini-p713 (2d750dd; 8 docs files) + PM fix 40c2a91 (06-org-structure: db is SQLite-only, Postgres planned; egress is an HTTPS-only guard with private-network/DNS-at-connect blocking, no domain allowlist; both verified against packages/db and packages/egress). Docs-only change, no code touched. docs:build x2 (clean tree), docs:check, pnpm check, secret scan PASS. Cross-reviews: Sol-B x1, Opus x2; all findings fixed."
+    },
+    "P7-14": {
+      "title": "Installer runtime as one archive, unpacked on first launch",
+      "status": "done",
+      "owner": "pm + helpers",
+      "evidence": "Owner-approved 2026-11-22 after the first real Windows installer build stalled (~157k loose resource files, 1.9 GB; Tauri NSIS script generation ~30 min, then makensis failed on paths > 260 chars). work/payload (6 commits, reviewed as 9901e5c): installer:prepare deploys production dependencies only, through one hoisted node_modules for the gateway and all extensions (54k files; tsx moved to gateway dependencies; engine-superagent declares its runtime contracts import), then packs it as one pax tar (709 MB, 59,469 entries) plus runtime.json (version, sha256). The Tauri shell unpacks it into <app_local_data_dir>/runtime/<version>-<sha12> under a file lock (temp dir, marker, rename; traversal/symlink entries refused; old versions cleaned). Real archive unpack 56 s, reuse <1 ms. Unsigned NSIS installer built in 13 min (136 MB); install-test (silent install to temp dir, isolated data/runtime dirs): ready in 50 s, POST /extensions/list 200 with 28 extensions incl. engine-dsh, gateway exits on app close, uninstall clean. Review: installer:prepare+smoke+check x2, neo-app build, cargo test (57), test:p1-5, test:p7-8, test:p7-11, gateway, toggle, check, secret scan OK; full regression ok=70 fail=0."
     }
   },
   "p6_tasks": {
