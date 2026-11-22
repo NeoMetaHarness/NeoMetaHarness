@@ -13,7 +13,8 @@ export class AppsProjection implements McpProjection {
   private active = true;
   private pending: Promise<unknown> = Promise.resolve();
   private readonly consumers = new Map<string, Consumer>();
-  constructor(private readonly vault: VaultService, private readonly apps: AppsRegistry, private readonly gateway: () => string) {}
+  constructor(private readonly vault: VaultService, private readonly apps: AppsRegistry, private readonly gateway: () => string,
+    private readonly runInWorkspace: <T>(workspace: string, work: () => T | Promise<T>) => Promise<T> = async (_workspace, work) => work()) {}
   private key(engine: McpEngine, profile: string) { return JSON.stringify([engine, profile]); }
   private scope(value: { engine: McpEngine; profile: string; workspace: string }) {
     return { kind: 'engine' as const, workspaceId: value.workspace, subjectId: `engine-${value.engine}/${value.profile}` };
@@ -98,8 +99,9 @@ export class AppsProjection implements McpProjection {
     try {
       const args = action.data;
       if (args.operation === 'connect') throw new Error('Connect accounts through the authenticated App, then grant this profile access');
-      const body = args.operation === 'toolkits' ? await this.apps.toolkits(args.provider)
-        : await this.apps.run(args, { kind: 'engine', engine: consumer.engine, profile: consumer.profile, workspaceId: consumer.workspace });
+      const body = await this.runInWorkspace(consumer.workspace, () => args.operation === 'toolkits'
+        ? this.apps.toolkits(args.provider)
+        : this.apps.run(args, { kind: 'engine', engine: consumer.engine, profile: consumer.profile, workspaceId: consumer.workspace }));
       return { status: 200, body };
     } catch { return { status: 403, body: { error: 'Apps operation unavailable or awaiting a valid policy service' } }; }
   }

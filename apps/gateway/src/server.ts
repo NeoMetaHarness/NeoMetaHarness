@@ -348,6 +348,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     },
     computerMcpBridge,
     appsRegistry, appsMcpBridge,
+    appsRunInWorkspace: <T>(workspace: string, work: () => T | Promise<T>) => kernel.runInWorkspace(workspace, work),
     appsHttpClient: options.appsHttpClient,
     computerLocalDriverFactory: options.computerLocalDriverFactory,
     hermesScreen: options.hermesScreenBridge,
