@@ -143,3 +143,19 @@ pub fn validate_minisign_pubkey(pubkey: &str) -> Result<(), String> {
 
     Ok(())
 }
+
+/// The release key must be the one checked in to tauri.conf.json. `effective` is the key after
+/// TAURI_CONFIG is merged (the `--config` arguments `tauri build` passes, or an inherited value: the
+/// build cannot tell them apart), so any key that differs from the checked-in one is refused.
+#[allow(dead_code)]
+pub fn validate_release_key_source(checked_in: Option<&str>, effective: Option<&str>) -> Result<(), String> {
+    let checked_in = checked_in.ok_or("tauri.conf.json has no plugins.updater.pubkey")?;
+    let effective = effective.ok_or("plugins.updater.pubkey is missing from the effective config")?;
+    if checked_in != effective {
+        return Err(
+            "the updater public key differs from the key checked in to tauri.conf.json; release builds run with TAURI_CONFIG unset and must not change the key"
+                .to_string(),
+        );
+    }
+    Ok(())
+}

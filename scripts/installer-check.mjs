@@ -239,48 +239,42 @@ export function runInstallerCheck(options = {}) {
   assert.match(baseConfig.build.beforeBundleCommand ?? '', /installer-check/, 'tauri.conf.json runs installer-check before packaging bundles');
   assert.deepEqual(baseConfig.plugins?.['deep-link']?.desktop?.schemes, ['neo'], 'desktop deep link survives config merge');
 
+  // The release key is the one checked in to tauri.conf.json. `options.configOverride` patches that checked-in
+  // file (a test seam standing in for its contents); nothing else may change the key.
+  const checkedInConfig = options.configOverride ? deepMerge(baseConfig, options.configOverride) : baseConfig;
+  const checkedInPubkey = checkedInConfig.plugins?.updater?.pubkey;
+
   // 2. Resolve the effective merged configuration
-  // Hierarchy: base config -> tauri.bundle.conf.json -> TAURI_CONFIG (hook only) -> CLI args (--config) -> options overrides
+  // Hierarchy: checked-in config -> tauri.bundle.conf.json -> TAURI_CONFIG -> CLI args (--config) -> options overrides
   //
-  // `tauri build --config ...` replaces TAURI_CONFIG with its merged --config arguments before it compiles and
-  // runs hooks, so an environment-only TAURI_CONFIG never reaches a release. TAURI_CONFIG therefore counts only
-  // when this script runs as Tauri's beforeBundleCommand (Tauri sets TAURI_ENV_* for hooks): it then holds the
-  // release --config. Run standalone, a TAURI_CONFIG updater key is refused instead of trusted.
+  // Release builds run with TAURI_CONFIG unset; `tauri build --config ...` sets it from its --config arguments for
+  // the compile and its hooks. Neither build.rs nor this hook can tell those arguments from an inherited
+  // TAURI_CONFIG, so whatever it holds is merged and the resulting key must still equal the checked-in key.
   let envConfig = {};
   if (!options.ignoreEnv) {
     if ('TAURI_ENV_CONFIG' in process.env || process.env.TAURI_ENV_CONFIG !== undefined) {
       throw new Error('Release installer packaging failed closed: TAURI_ENV_CONFIG is not supported by Tauri; pass the release config with --config.');
     }
-    const runByTauri = options.runByTauri ?? Boolean(process.env.TAURI_ENV_PLATFORM);
     const rawEnv = options.envConfig ?? process.env.TAURI_CONFIG;
     if (rawEnv) {
-      let parsed;
       try {
-        parsed = typeof rawEnv === 'object' ? rawEnv : JSON.parse(rawEnv);
+        envConfig = typeof rawEnv === 'object' ? rawEnv : JSON.parse(rawEnv);
       } catch (err) {
         throw new Error(`Failed to parse TAURI_CONFIG from environment: ${err.message}`);
-      }
-      if (runByTauri) {
-        envConfig = parsed;
-      } else if (parsed?.plugins?.updater?.pubkey !== undefined) {
-        throw new Error(
-          'Release installer packaging failed closed: an updater public key set only in TAURI_CONFIG is replaced by `tauri build --config` and never reaches the release. Check the key in to apps/neo-app/src-tauri/tauri.conf.json or pass a release --config file.'
-        );
       }
     }
   }
 
   const cliConfig = options.cliConfig ?? parseCliConfig(options.cliArgs ?? process.argv);
 
-  let effectiveConfig = deepMerge(baseConfig, bundleConfigFile);
+  let effectiveConfig = deepMerge(checkedInConfig, bundleConfigFile);
+  // The test seam stands for the checked-in files, so it applies before TAURI_CONFIG and --config.
+  if (options.configOverride) effectiveConfig = deepMerge(effectiveConfig, options.configOverride);
   effectiveConfig = deepMerge(effectiveConfig, envConfig);
   effectiveConfig = deepMerge(effectiveConfig, cliConfig);
 
   if (options.installerConfigOverride) {
     effectiveConfig = deepMerge(effectiveConfig, options.installerConfigOverride);
-  }
-  if (options.configOverride) {
-    effectiveConfig = deepMerge(effectiveConfig, options.configOverride);
   }
   if (options.mergedConfigOverride) {
     effectiveConfig = options.mergedConfigOverride;
@@ -317,6 +311,12 @@ export function runInstallerCheck(options = {}) {
 
   // Enforce check inside release build path with no bypass on effective merged config
   validateMinisignPublicKey(pubkey);
+  // Fail closed on the key source: TAURI_CONFIG or a --config argument must not swap the key.
+  if (pubkey !== checkedInPubkey) {
+    throw new Error(
+      'Release installer packaging failed closed: the updater public key differs from the key checked in to apps/neo-app/src-tauri/tauri.conf.json. Check the owner key in there; TAURI_CONFIG and --config must not change it.'
+    );
+  }
 
   assert.ok(Array.isArray(updater.endpoints) && updater.endpoints.length > 0, 'updater endpoint required');
   assert.deepEqual(

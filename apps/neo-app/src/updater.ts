@@ -118,13 +118,15 @@ interface StartupUpdateStatus {
   done: boolean;
   version: string | null;
   error: string | null;
+  /** A manual check started first, so the shell did not keep this result as the install candidate. */
+  superseded?: boolean;
 }
 
 let startupApplied = false;
 
 function applyStartupStatus(status: StartupUpdateStatus | null | undefined) {
-  // Apply once, and never over a manual check that is running or has finished.
-  if (!status?.done || startupApplied || currentState.checking || currentState.status) return;
+  // Apply once, and never over a manual check that is running, has finished, or superseded it in the shell.
+  if (!status?.done || status.superseded || startupApplied || currentState.checking || currentState.status) return;
   startupApplied = true;
   if (status.version) {
     currentState = {

@@ -413,74 +413,47 @@ assert.throws(
 );
 delete process.env.TAURI_ENV_CONFIG;
 
-// Run standalone, an env-only TAURI_CONFIG key is refused: `tauri build --config` replaces TAURI_CONFIG with its
-// merged --config arguments, so such a key never reaches the release.
-delete process.env.TAURI_ENV_PLATFORM;
-process.env.TAURI_CONFIG = JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } });
-assert.throws(
-  () => runInstallerCheck(),
-  /public key set only in TAURI_CONFIG is replaced by `tauri build --config`/,
-  "installer-check must refuse an env-only TAURI_CONFIG key when run standalone"
-);
-delete process.env.TAURI_CONFIG;
-
-// As Tauri's beforeBundleCommand (TAURI_ENV_* set), TAURI_CONFIG holds the release --config merge.
-process.env.TAURI_ENV_PLATFORM = "windows";
-// Verify that the hook TAURI_CONFIG (the --config merge) is merged and validated
-process.env.TAURI_CONFIG = JSON.stringify({
-  plugins: {
-    updater: {
-      pubkey: validReleaseKey,
-    },
-  },
-});
-runInstallerCheck();
-delete process.env.TAURI_CONFIG;
-
-// Verify that TAURI_CONFIG with placeholder key fails
-process.env.TAURI_CONFIG = JSON.stringify({
-  plugins: {
-    updater: {
-      pubkey: 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY',
-    },
-  },
-});
-assert.throws(
-  () => runInstallerCheck(),
-  /release installer packaging requires a valid owner minisign public key/,
-  'installer-check must reject placeholder passed via TAURI_CONFIG'
-);
-delete process.env.TAURI_CONFIG;
-
-// Verify unrelated plugin override in TAURI_CONFIG leaves updater config intact (still failing on base placeholder)
-process.env.TAURI_CONFIG = JSON.stringify({
-  plugins: {
-    unrelatedPlugin: { enabled: true },
-  },
-});
-assert.throws(
-  () => runInstallerCheck(),
-  /release installer packaging requires a valid owner minisign public key/,
-  'installer-check must retain updater config and reject base placeholder when unrelated plugin is configured'
-);
-delete process.env.TAURI_CONFIG;
-
-// Verify unrelated plugin override + valid updater key succeeds
-process.env.TAURI_CONFIG = JSON.stringify({
-  plugins: {
-    unrelatedPlugin: { enabled: true },
-    updater: { pubkey: validReleaseKey },
-  },
-});
-runInstallerCheck();
-delete process.env.TAURI_CONFIG;
-
+// Key source fails closed: the release key must equal the key checked in to tauri.conf.json. Release builds run
+// with TAURI_CONFIG unset; a TAURI_CONFIG or --config key that differs from the checked-in one is refused,
+// whether this runs standalone or as Tauri's beforeBundleCommand (TAURI_ENV_* set).
+const differs = /differs from the key checked in to apps\/neo-app\/src-tauri\/tauri\.conf\.json/;
+for (const hook of [false, true]) {
+  if (hook) process.env.TAURI_ENV_PLATFORM = 'windows'; else delete process.env.TAURI_ENV_PLATFORM;
+  // Env-only key over the checked-in placeholder: refused.
+  process.env.TAURI_CONFIG = JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } });
+  assert.throws(() => runInstallerCheck(), differs, 'TAURI_CONFIG-only key is refused (hook=' + hook + ')');
+  // Env key that differs from a real checked-in key: refused.
+  assert.throws(
+    () => runInstallerCheck({ configOverride: { plugins: { updater: { pubkey: acceptedCrlfKey } } } }),
+    differs,
+    'TAURI_CONFIG key differing from the checked-in key is refused (hook=' + hook + ')'
+  );
+  // Env key equal to the checked-in key: accepted.
+  runInstallerCheck({ configOverride: { plugins: { updater: { pubkey: validReleaseKey } } } });
+  // Unrelated TAURI_CONFIG settings keep the checked-in key (and its placeholder still fails closed).
+  process.env.TAURI_CONFIG = JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true } } });
+  assert.throws(() => runInstallerCheck(), /release installer packaging requires a valid owner minisign public key/);
+  runInstallerCheck({ configOverride: { plugins: { updater: { pubkey: validReleaseKey } } } });
+  // A placeholder in TAURI_CONFIG fails on the key itself.
+  process.env.TAURI_CONFIG = JSON.stringify({ plugins: { updater: { pubkey: 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY' } } });
+  assert.throws(
+    () => runInstallerCheck({ configOverride: { plugins: { updater: { pubkey: validReleaseKey } } } }),
+    /release installer packaging requires a valid owner minisign public key/
+  );
+  delete process.env.TAURI_CONFIG;
+}
 delete process.env.TAURI_ENV_PLATFORM;
 
-// Verify that CLI --config argument override is merged and validated
+// A --config argument may not swap the key either; one that repeats the checked-in key is fine.
+assert.throws(
+  () => runInstallerCheck({ ignoreEnv: true, cliArgs: ['--config', JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } })] }),
+  differs,
+  '--config key differing from the checked-in placeholder is refused'
+);
 runInstallerCheck({
   ignoreEnv: true,
-  cliArgs: ['--config', JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } })],
+  configOverride: { plugins: { updater: { pubkey: validReleaseKey } } },
+  cliArgs: ['--config', JSON.stringify({ bundle: { createUpdaterArtifacts: true }, plugins: { updater: { pubkey: validReleaseKey } } })],
 });
 console.log('Installer check verification passed (effective config merging, placeholder rejected, structural validation enforced, test key accepted).');
 

@@ -94,6 +94,8 @@ fn validate_release_config() {
         panic!("Release build failed closed: TAURI_ENV_CONFIG is not supported by Tauri; use TAURI_CONFIG instead");
     }
 
+    let checked_in_pubkey = config.pointer("/plugins/updater/pubkey").and_then(|v| v.as_str()).map(str::to_owned);
+
     // If TAURI_CONFIG is set in environment, parse and merge it via JSON merge patch.
     // If present, it MUST be valid JSON (fail closed on malformed config).
     if let Ok(ref raw) = std::env::var("TAURI_CONFIG") {
@@ -125,6 +127,11 @@ fn validate_release_config() {
     };
 
     if let Err(e) = validate_minisign_pubkey(pubkey) {
+        panic!("Release build failed closed: {}", e);
+    }
+    // Fail closed on the key source: TAURI_CONFIG (set by `tauri build --config`, or inherited) must not
+    // swap the checked-in key.
+    if let Err(e) = validate_release_key_source(checked_in_pubkey.as_deref(), Some(pubkey)) {
         panic!("Release build failed closed: {}", e);
     }
 }

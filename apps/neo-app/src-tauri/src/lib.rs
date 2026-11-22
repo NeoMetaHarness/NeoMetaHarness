@@ -34,8 +34,70 @@ fn forward_deep_link(app: &tauri::AppHandle, url: &str) {
     }
 }
 
+/// The version `install_update` may install, plus a generation counter. Each manual check bumps the
+/// generation when it starts, and a check may only store its result while its generation is still current.
+/// So a late startup check (or an older manual check) never replaces what a newer manual check set or
+/// cleared.
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct CandidateState {
+    version: Option<String>,
+    generation: u64,
+}
+
+impl CandidateState {
+    /// A manual check is starting: supersede every check already in flight.
+    pub fn begin_manual(&mut self) -> u64 {
+        self.generation += 1;
+        self.generation
+    }
+
+    /// The generation a background (startup) check runs under; it does not supersede anything.
+    pub fn current_generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Store a finished check's result, only if no newer manual check has started. Returns whether it applied.
+    pub fn finish(&mut self, generation: u64, version: Option<String>) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.version = version;
+        true
+    }
+
+    pub fn version(&self) -> Option<String> {
+        self.version.clone()
+    }
+}
+
 #[derive(Default)]
-struct UpdateCandidate(Mutex<Option<String>>);
+struct UpdateCandidate(Mutex<CandidateState>);
+
+/// How to start the new version after a Linux update: the same executable selected for installation
+/// (the AppImage file, or the real deb executable). Tauri's `restart()` would use its cached APPIMAGE.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelaunchPlan {
+    pub program: PathBuf,
+    /// A deb install must not pass an inherited APPIMAGE/APPDIR on to the new process.
+    pub clear_appimage_env: bool,
+}
+
+pub fn relaunch_plan(target: &str, executable: &std::path::Path) -> RelaunchPlan {
+    RelaunchPlan { program: executable.to_path_buf(), clear_appimage_env: !target.ends_with("-appimage") }
+}
+
+pub fn relaunch_command<I, S>(plan: &RelaunchPlan, args: I) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut command = Command::new(&plan.program);
+    command.args(args);
+    if plan.clear_appimage_env {
+        command.env_remove("APPIMAGE").env_remove("APPDIR");
+    }
+    command
+}
 
 pub const PRODUCTION_UPDATER_ENDPOINT: &str =
     "https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json";
@@ -232,11 +294,19 @@ pub fn evaluate_redirect_attempt(
     Ok(())
 }
 
-fn configure_updater_builder(
-    app: &tauri::AppHandle,
-) -> Result<(tauri_plugin_updater::UpdaterBuilder, Vec<String>), String> {
+struct ConfiguredUpdater {
+    builder: tauri_plugin_updater::UpdaterBuilder,
+    allowed_hosts: Vec<String>,
+    /// Linux only: how to start the installed version.
+    #[allow(dead_code)]
+    relaunch: Option<RelaunchPlan>,
+}
+
+fn configure_updater_builder(app: &tauri::AppHandle) -> Result<ConfiguredUpdater, String> {
     #[allow(unused_mut)]
     let mut builder = app.updater_builder();
+    #[allow(unused_mut)]
+    let mut relaunch = None;
 
     // Linux package-specific target (linux-{arch}-appimage or linux-{arch}-deb) and the executable to
     // replace. The plugin's default trusts APPIMAGE alone; override both from the running executable.
@@ -247,6 +317,7 @@ fn configure_updater_builder(
         let appdir = std::env::var_os("APPDIR").map(PathBuf::from);
         let (target, executable) =
             resolve_linux_install(linux_updater_arch(), appimage.as_deref(), appdir.as_deref(), &exe);
+        relaunch = Some(relaunch_plan(&target, &executable));
         builder = builder.target(target).executable_path(executable);
     }
     #[cfg(debug_assertions)]
@@ -331,21 +402,19 @@ fn configure_updater_builder(
         }))
     });
 
-    Ok((builder, allowed_hosts))
+    Ok(ConfiguredUpdater { builder, allowed_hosts, relaunch })
 }
 
+/// Fetch the feed and return the newer version, if any. Stores nothing: callers record the result in
+/// UpdateCandidate under their generation.
 async fn check_for_updates_internal(app: &tauri::AppHandle) -> Result<Option<String>, String> {
-    let (builder, allowed_hosts) = configure_updater_builder(app)?;
-    let updater = builder.build().map_err(|error| error.to_string())?;
+    let configured = configure_updater_builder(app)?;
+    let updater = configured.builder.build().map_err(|error| error.to_string())?;
     let update = updater.check().await.map_err(|error| error.to_string())?;
     if let Some(ref update) = update {
-        validate_update_download_url(&update.download_url, &allowed_hosts, cfg!(debug_assertions))?;
+        validate_update_download_url(&update.download_url, &configured.allowed_hosts, cfg!(debug_assertions))?;
     }
-    let version = update.map(|candidate| candidate.version);
-    if let Some(state) = app.try_state::<UpdateCandidate>() {
-        *state.0.lock().unwrap() = version.clone();
-    }
-    Ok(version)
+    Ok(update.map(|candidate| candidate.version))
 }
 
 #[tauri::command]
@@ -353,20 +422,50 @@ async fn check_for_updates(app: tauri::AppHandle, window: tauri::Window) -> Resu
     if window.label() != "main" {
         return Err("Updates can only be checked from the main window".into());
     }
-    check_for_updates_internal(&app).await
+    let state = app.try_state::<UpdateCandidate>().ok_or("Update candidate state is not registered")?;
+    let generation = state.0.lock().unwrap().begin_manual();
+    let version = check_for_updates_internal(&app).await?;
+    state.0.lock().unwrap().finish(generation, version.clone());
+    Ok(version)
+}
+
+/// The startup check's result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StartupResult {
+    pub result: Result<Option<String>, String>,
+    /// A manual check started meanwhile, so this result was not stored as the candidate.
+    pub superseded: bool,
 }
 
 /// The result of the one startup update check, cached so the frontend can read it whenever it
 /// subscribes (the webview may not exist yet when the check finishes). `None` while it is running.
 #[derive(Default)]
-struct StartupUpdateCheck(Mutex<Option<Result<Option<String>, String>>>);
+struct StartupUpdateCheck(Mutex<Option<StartupResult>>);
 
-pub fn startup_update_status_json(cached: &Option<Result<Option<String>, String>>) -> serde_json::Value {
+pub fn startup_update_status_json(cached: &Option<StartupResult>) -> serde_json::Value {
     match cached {
-        None => serde_json::json!({ "done": false, "version": null, "error": null }),
-        Some(Ok(version)) => serde_json::json!({ "done": true, "version": version, "error": null }),
-        Some(Err(error)) => serde_json::json!({ "done": true, "version": null, "error": error }),
+        None => serde_json::json!({ "done": false, "version": null, "error": null, "superseded": false }),
+        Some(StartupResult { result: Ok(version), superseded }) => {
+            serde_json::json!({ "done": true, "version": version, "error": null, "superseded": superseded })
+        }
+        Some(StartupResult { result: Err(error), superseded }) => {
+            serde_json::json!({ "done": true, "version": null, "error": error, "superseded": superseded })
+        }
     }
+}
+
+/// Record the startup check under the generation it started with. Returns the cached entry.
+pub fn record_startup_result(
+    candidate: &Mutex<CandidateState>,
+    generation: u64,
+    result: Result<Option<String>, String>,
+) -> StartupResult {
+    let mut state = candidate.lock().unwrap();
+    let superseded = match &result {
+        Ok(version) => !state.finish(generation, version.clone()),
+        Err(_) => state.current_generation() != generation,
+    };
+    StartupResult { result, superseded }
 }
 
 /// Reads the cached startup check. Never contacts the network.
@@ -386,10 +485,10 @@ async fn install_update(app: tauri::AppHandle, window: tauri::Window) -> Result<
         return Err("Updates can only be installed from the main window".into());
     }
     let candidate = app.try_state::<UpdateCandidate>()
-        .and_then(|state| state.0.lock().unwrap().clone())
+        .and_then(|state| state.0.lock().unwrap().version())
         .ok_or_else(|| "No update candidate available. Check for updates first.".to_string())?;
 
-    let (builder, allowed_hosts) = configure_updater_builder(&app)?;
+    let ConfiguredUpdater { builder, allowed_hosts, relaunch } = configure_updater_builder(&app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
     if let Some(update) = updater.check().await.map_err(|error| error.to_string())? {
         if update.version != candidate {
@@ -407,6 +506,15 @@ async fn install_update(app: tauri::AppHandle, window: tauri::Window) -> Result<
             if let Some(mut sidecar) = state.0.lock().unwrap().take() {
                 sidecar.stop();
             }
+        }
+        // Linux: start the executable that was just updated (AppImage file or deb executable), never
+        // Tauri's cached APPIMAGE, then exit cleanly. Elsewhere Tauri's restart is correct.
+        if let Some(plan) = relaunch {
+            relaunch_command(&plan, std::env::args_os().skip(1))
+                .spawn()
+                .map_err(|error| format!("Update installed, but starting {} failed: {error}", plan.program.display()))?;
+            app.exit(0);
+            return Ok(());
         }
         app.restart();
     }
@@ -520,11 +628,19 @@ pub fn run() {
             // Register every updater state before the startup check can finish.
             app.manage(UpdateCandidate::default());
             app.manage(StartupUpdateCheck::default());
+            // The startup check runs under the current generation; any manual check started meanwhile
+            // supersedes it, so its late result never replaces a candidate a manual check set or cleared.
+            let startup_generation = app.state::<UpdateCandidate>().0.lock().unwrap().current_generation();
             let app_handle_for_update = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let result = check_for_updates_internal(&app_handle_for_update).await;
-                let status = startup_update_status_json(&Some(result.clone()));
-                *app_handle_for_update.state::<StartupUpdateCheck>().0.lock().unwrap() = Some(result);
+                let entry = record_startup_result(
+                    &app_handle_for_update.state::<UpdateCandidate>().0,
+                    startup_generation,
+                    result,
+                );
+                let status = startup_update_status_json(&Some(entry.clone()));
+                *app_handle_for_update.state::<StartupUpdateCheck>().0.lock().unwrap() = Some(entry);
                 // Best-effort push for an already-open window; the frontend also reads the cache when it
                 // subscribes (startup_update_status), so a missed event loses nothing.
                 if let Some(window) = app_handle_for_update.get_webview_window("main") {
@@ -739,22 +855,141 @@ mod tests {
 
     #[test]
     fn test_startup_update_status_is_cached() {
+        let entry = |result: Result<Option<String>, String>, superseded| Some(StartupResult { result, superseded });
         assert_eq!(
             startup_update_status_json(&None),
-            serde_json::json!({ "done": false, "version": null, "error": null })
+            serde_json::json!({ "done": false, "version": null, "error": null, "superseded": false })
         );
         assert_eq!(
-            startup_update_status_json(&Some(Ok(Some("1.2.4".into())))),
-            serde_json::json!({ "done": true, "version": "1.2.4", "error": null })
+            startup_update_status_json(&entry(Ok(Some("1.2.4".into())), false)),
+            serde_json::json!({ "done": true, "version": "1.2.4", "error": null, "superseded": false })
         );
         assert_eq!(
-            startup_update_status_json(&Some(Ok(None))),
-            serde_json::json!({ "done": true, "version": null, "error": null })
+            startup_update_status_json(&entry(Ok(None), false)),
+            serde_json::json!({ "done": true, "version": null, "error": null, "superseded": false })
         );
         assert_eq!(
-            startup_update_status_json(&Some(Err("offline".into()))),
-            serde_json::json!({ "done": true, "version": null, "error": "offline" })
+            startup_update_status_json(&entry(Err("offline".into()), true)),
+            serde_json::json!({ "done": true, "version": null, "error": "offline", "superseded": true })
         );
+    }
+
+    #[test]
+    fn test_late_startup_check_never_overwrites_manual_candidate() {
+        // Manual check SETS a candidate while the startup check is still running.
+        let candidate = Mutex::new(CandidateState::default());
+        let startup = candidate.lock().unwrap().current_generation();
+        let manual = candidate.lock().unwrap().begin_manual();
+        assert!(candidate.lock().unwrap().finish(manual, Some("1.2.5".into())));
+        let late = record_startup_result(&candidate, startup, Ok(Some("1.2.4".into())));
+        assert!(late.superseded);
+        assert_eq!(candidate.lock().unwrap().version(), Some("1.2.5".into()));
+        // A late "no update" does not clear it either.
+        assert!(record_startup_result(&candidate, startup, Ok(None)).superseded);
+        assert_eq!(candidate.lock().unwrap().version(), Some("1.2.5".into()));
+
+        // Manual check CLEARS the candidate; the late startup result can't restore one.
+        let candidate = Mutex::new(CandidateState::default());
+        let startup = candidate.lock().unwrap().current_generation();
+        let manual = candidate.lock().unwrap().begin_manual();
+        assert!(candidate.lock().unwrap().finish(manual, None));
+        assert!(record_startup_result(&candidate, startup, Ok(Some("1.2.4".into()))).superseded);
+        assert_eq!(candidate.lock().unwrap().version(), None);
+
+        // Manual check still in flight when the startup check lands: startup is superseded, manual applies.
+        let candidate = Mutex::new(CandidateState::default());
+        let startup = candidate.lock().unwrap().current_generation();
+        let manual = candidate.lock().unwrap().begin_manual();
+        assert!(record_startup_result(&candidate, startup, Ok(Some("1.2.4".into()))).superseded);
+        assert_eq!(candidate.lock().unwrap().version(), None);
+        assert!(candidate.lock().unwrap().finish(manual, Some("1.2.6".into())));
+        assert_eq!(candidate.lock().unwrap().version(), Some("1.2.6".into()));
+
+        // An older manual check finishing after a newer one is ignored too.
+        let older = candidate.lock().unwrap().begin_manual();
+        let newer = candidate.lock().unwrap().begin_manual();
+        assert!(candidate.lock().unwrap().finish(newer, None));
+        assert!(!candidate.lock().unwrap().finish(older, Some("9.9.9".into())));
+        assert_eq!(candidate.lock().unwrap().version(), None);
+
+        // No manual check: the startup result becomes the candidate.
+        let candidate = Mutex::new(CandidateState::default());
+        let startup = candidate.lock().unwrap().current_generation();
+        let entry = record_startup_result(&candidate, startup, Ok(Some("1.2.4".into())));
+        assert!(!entry.superseded);
+        assert_eq!(candidate.lock().unwrap().version(), Some("1.2.4".into()));
+
+        // The manual command bumps the generation before its network check and stores under it.
+        let lib_rs = include_str!("lib.rs");
+        let manual_cmd = &lib_rs[lib_rs.find("async fn check_for_updates(").unwrap()..];
+        let manual_cmd = &manual_cmd[..manual_cmd.find("\n}\n").unwrap()];
+        assert!(manual_cmd.find("begin_manual()").unwrap() < manual_cmd.find("check_for_updates_internal(&app)").unwrap());
+        assert!(manual_cmd.contains(".finish(generation, version.clone())"));
+    }
+
+    #[test]
+    fn test_relaunch_uses_the_selected_executable() {
+        use std::ffi::OsStr;
+        use std::path::PathBuf;
+        let abs = |p: &str| PathBuf::from(if cfg!(windows) { format!("C:{p}") } else { p.to_string() });
+        let image = abs("/home/u/Apps/Neo.AppImage");
+        let mount = abs("/tmp/.mount_NeoAbc");
+        let deb_exe = abs("/usr/bin/neo-meta-harness");
+        let envs = |command: &Command| -> Vec<(String, Option<String>)> {
+            command
+                .get_envs()
+                .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned())))
+                .collect()
+        };
+
+        // Deb install with an inherited APPIMAGE/APPDIR: relaunch the real executable, and clear both.
+        let (target, executable) =
+            resolve_linux_install("x86_64", Some(image.as_path()), Some(mount.as_path()), &deb_exe);
+        let plan = relaunch_plan(&target, &executable);
+        assert_eq!(plan, RelaunchPlan { program: deb_exe.clone(), clear_appimage_env: true });
+        let command = relaunch_command(&plan, ["--flag"]);
+        assert_eq!(command.get_program(), deb_exe.as_os_str());
+        assert_eq!(command.get_args().collect::<Vec<_>>(), vec![OsStr::new("--flag")]);
+        let removed = envs(&command);
+        assert!(removed.contains(&("APPIMAGE".into(), None)) && removed.contains(&("APPDIR".into(), None)));
+
+        // AppImage install: relaunch the AppImage file that was replaced, environment untouched.
+        let mounted_exe = abs("/tmp/.mount_NeoAbc/usr/bin/neo-meta-harness");
+        let (target, executable) =
+            resolve_linux_install("x86_64", Some(image.as_path()), Some(mount.as_path()), &mounted_exe);
+        let plan = relaunch_plan(&target, &executable);
+        assert_eq!(plan, RelaunchPlan { program: image.clone(), clear_appimage_env: false });
+        let command = relaunch_command(&plan, Vec::<&OsStr>::new());
+        assert_eq!(command.get_program(), image.as_os_str());
+        assert!(envs(&command).is_empty());
+
+        // No AppImage variables at all: deb, with the environment cleared.
+        let (target, executable) = resolve_linux_install("aarch64", None, None, &deb_exe);
+        assert!(relaunch_plan(&target, &executable).clear_appimage_env);
+
+        // The install path relaunches through the plan, then exits, instead of Tauri's restart.
+        let lib_rs = include_str!("lib.rs");
+        let install = &lib_rs[lib_rs.find("async fn install_update(").unwrap()..];
+        let install = &install[..install.find("\nstruct GatewaySidecar").unwrap()];
+        assert!(install.find("relaunch_command(&plan").unwrap() < install.find("app.restart()").unwrap());
+        assert!(install.find("relaunch_command(&plan").unwrap() < install.find("app.exit(0)").unwrap());
+    }
+
+    #[test]
+    fn test_release_key_source_must_be_checked_in() {
+        let real = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQo=";
+        let other = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQ0KUldSUFYwNUZVa3RGV1ZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGENCg==";
+        assert!(validate_release_key_source(Some(real), Some(real)).is_ok());
+        // TAURI_CONFIG-only key over the checked-in placeholder, or a different real key: refused.
+        let err = validate_release_key_source(Some("REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY"), Some(real)).unwrap_err();
+        assert!(err.contains("differs from the key checked in"));
+        assert!(validate_release_key_source(Some(real), Some(other)).is_err());
+        assert!(validate_release_key_source(None, Some(real)).is_err());
+        assert!(validate_release_key_source(Some(real), None).is_err());
+        // build.rs takes the checked-in key before merging TAURI_CONFIG, then enforces the source rule.
+        let build_rs = include_str!("../build.rs");
+        assert!(build_rs.contains("validate_release_key_source(checked_in_pubkey.as_deref(), Some(pubkey))"));
+        assert!(build_rs.find("let checked_in_pubkey").unwrap() < build_rs.find("std::env::var(\"TAURI_CONFIG\")").unwrap());
     }
 
     #[test]
