@@ -11,13 +11,17 @@ signed and checked locally, and published with one `gh release create`. Commands
   "latest" skips pre-releases and drafts. Versions are plain `X.Y.Z`.
 - **Never delete or edit an old release or its assets.** Each `latest.json` points at its own versioned
   asset URLs. To undo a release, publish a newer patch ([Roll back](#roll-back)).
-- **The private signing key never leaves `%USERPROFILE%\.tauri\neo-updater.key`.** Nothing in this runbook
-  opens it. Tauri reads it during the build through `TAURI_SIGNING_PRIVATE_KEY`. Only the public key
-  (`neo-updater.key.pub`) is read, and it goes into a temporary config file outside the repository.
-  Never commit either file, a password or a `latest.json`.
+- **The private signing key and its password stay with the owner.** Nothing in this runbook names, reads or
+  copies them. The owner puts them in `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+  for the build shell from their own shell or secret store ([step 4](#4-build-and-sign-each-platform)).
+- **The public key is the one checked in** to `apps/neo-app/src-tauri/tauri.conf.json`
+  (`plugins.updater.pubkey`). The release tooling reads only that key: the preflight refuses the placeholder
+  and any override that changes it, and `release-manifest.mjs` verifies every signature with it. Setting the
+  real key there is task P1-11; no release can be cut until it is merged.
+- Never commit a private key, a password or a `latest.json`.
 - **At most 20 GitHub writes per release** ([GitHub safety guardrails](policies/GITHUB-SAFETY-GUARDRAILS.md)).
-  A release normally takes 9: one push and one `gh release create` (1 release plus 1 upload per asset).
-  Stop on any 403 or 429.
+  A release normally takes 9: one push and one `gh release create` (1 release plus 1 upload per asset, for
+  7 assets). Stop on any 403 or 429.
 
 ## 1. Prepare
 
@@ -68,17 +72,13 @@ git commit -m "chore(release): v$v"
 
 ## 3. Release override and preflight
 
-The release build needs two settings that the repository deliberately leaves out: the owner's public key,
-and `createUpdaterArtifacts`, which makes Tauri write the `.sig` files. Put them in a temporary file outside
-the repository:
+The release build needs one setting that the repository deliberately leaves off: `createUpdaterArtifacts`,
+which makes Tauri write the `.sig` files. Put it in a temporary file outside the repository. The override
+holds nothing else; the public key always comes from the checked-in `tauri.conf.json`.
 
 ```powershell
-$pub = (Get-Content "$env:USERPROFILE\.tauri\neo-updater.key.pub" -Raw).Trim()   # the PUBLIC key only
-$override = Join-Path $env:TEMP 'neo-release.json'
-[IO.File]::WriteAllText($override, (@{
-  bundle  = @{ createUpdaterArtifacts = $true }
-  plugins = @{ updater = @{ pubkey = $pub } }
-} | ConvertTo-Json -Depth 5))
+$override = Join-Path ([IO.Path]::GetTempPath()) 'neo-release.json'   # works on Windows, macOS and Linux
+[IO.File]::WriteAllText($override, (@{ bundle = @{ createUpdaterArtifacts = $true } } | ConvertTo-Json -Depth 5))
 
 node scripts/release-preflight.mjs --version $v --config $override
 ```
@@ -88,7 +88,7 @@ The preflight only reports; it never changes anything. Every line must say `PASS
 | Check | What it verifies |
 |---|---|
 | `version` | `$v` is `X.Y.Z` and all four version files carry it |
-| `updater config` | the effective public key is a real minisign key (not the placeholder) and the endpoint is the release URL above |
+| `updater config` | first, the public key checked in to `tauri.conf.json` is a real minisign key (not the placeholder); then, in the effective config (`tauri.conf.json`, `tauri.bundle.conf.json`, every `--config` and `TAURI_CONFIG`), the key is still that checked-in key, the endpoint is the release URL above and the version is `$v` |
 | `updater artifacts` | `createUpdaterArtifacts` is on in the effective config |
 | `working tree` | `git status` is clean |
 | `pnpm check` | the local check pipeline passes |
@@ -100,13 +100,17 @@ Fix anything that fails, commit, and run it again.
 
 Build on each operating system you release for, from the release commit. See
 [Installers & Packaging](install.md) for the toolchain. On each build machine, create the same
-`neo-release.json` override (step 3) and point Tauri at the private key **by path**:
+`neo-release.json` override (step 3).
+
+Before building, set both signing variables **in the build shell only**, from your own shell or secret
+store. This runbook does not say where the key is kept, and nothing here reads it:
+
+- `TAURI_SIGNING_PRIVATE_KEY`: the private key (its contents or its path, as the Tauri CLI accepts).
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password.
+
+Don't write either value to a file in the repository, a profile script or the shell history.
 
 ```powershell
-$env:TAURI_SIGNING_PRIVATE_KEY = "$env:USERPROFILE\.tauri\neo-updater.key"   # a path; Tauri reads the file
-$secure = Read-Host 'Updater key password' -AsSecureString
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [Net.NetworkCredential]::new('', $secure).Password
-
 Push-Location apps/neo-app/src-tauri
 cargo tauri build --config tauri.bundle.conf.json --config $override --bundles nsis,msi     # Windows
 # cargo tauri build --config tauri.bundle.conf.json --config $override --bundles app,dmg    # macOS
@@ -125,7 +129,12 @@ Each updater artifact gets a `.sig` file next to it under `apps/neo-app/src-taur
 | `darwin-aarch64-app` (or `darwin-x86_64-app`) | `macos/Neo Meta Harness.app.tar.gz` |
 | `linux-x86_64-appimage` | `appimage/neo-meta-harness_X.Y.Z_amd64.AppImage` |
 
-The `.dmg` and `.deb` are for manual installs, not updates. Publish them as plain assets.
+The macOS archive's name has no version. `release-manifest.mjs` reads the version from the bundle's
+`Info.plist` (`CFBundleShortVersionString`) inside the signed archive, so an older archive with a valid
+signature is refused.
+
+The `.dmg` (`dmg/Neo Meta Harness_X.Y.Z_aarch64.dmg`) and `.deb` (`deb/neo-meta-harness_X.Y.Z_amd64.deb`) are
+for manual installs, not updates. Publish them as plain assets.
 
 Copy every artifact, together with its `.sig`, to the machine that publishes the release.
 
@@ -137,7 +146,6 @@ Copy every artifact, together with its `.sig`, to the machine that publishes the
 ```powershell
 $bundle = 'apps/neo-app/src-tauri/target/release/bundle'
 node scripts/release-manifest.mjs --version $v --out-dir release-out `
-  --pubkey-file "$env:USERPROFILE\.tauri\neo-updater.key.pub" `
   --artifact "windows-x86_64-nsis=$bundle/nsis/Neo Meta Harness_${v}_x64-setup.exe" `
   --artifact "windows-x86_64-msi=$bundle/msi/Neo Meta Harness_${v}_x64_en-US.msi" `
   --artifact "darwin-aarch64-app=C:/release-inputs/Neo Meta Harness.app.tar.gz" `
@@ -147,7 +155,8 @@ node scripts/release-manifest.mjs --version $v --out-dir release-out `
 The script writes `release-out/latest.json` and copies each artifact into `release-out/`, named as GitHub
 will serve it (spaces become dots). For each platform, `latest.json` holds:
 
-- `version`, `notes` (the CHANGELOG section) and `pub_date`;
+- `version`, `notes` and `pub_date`. The notes are the CHANGELOG section for `$v` and nothing else; there
+  is no option to take them from another file;
 - a `url` under `https://github.com/NeoMetaHarness/NeoMetaHarness/releases/download/vX.Y.Z/`;
 - a `signature`, copied from the `.sig` file.
 
@@ -155,8 +164,13 @@ It also adds a plain `<os>-<arch>` entry for each platform.
 
 It refuses to write anything when:
 
-- a `.sig` is missing, malformed, signs a different file, or was made with a key other than `--pubkey-file`;
-- an artifact is missing, has the wrong type for its platform key, or was built for another version;
+- the public key checked in to `tauri.conf.json` is missing or still the placeholder;
+- a `.sig` is missing or malformed, does not verify against the artifact's bytes with that key, or names a
+  different file in its signed trusted comment;
+- an artifact is missing, or has the wrong type for its platform key;
+- an artifact was built for another version: from its file name or, for the macOS `.app.tar.gz`, from its
+  `Info.plist`;
+- the CHANGELOG section looks like it contains key material;
 - the version is not `X.Y.Z`, or it differs from any of the four version files;
 - a URL is not HTTPS;
 - the CHANGELOG has no entry for the version;
@@ -171,18 +185,21 @@ Get-Content release-out/latest.json      # check version, notes and one entry pe
 ## 6. Publish (the owner runs this; one push, one release)
 
 This is the only step that writes to GitHub. Count the writes: the push is 1, and `gh release create` is
-1 plus 1 per asset. Six assets makes 8 writes, 9 in total.
+1 plus 1 per asset. The 7 assets are `latest.json`, the four updater artifacts, the `.dmg` and the `.deb`:
+8 writes for the release, 9 in total.
 
 ```powershell
+# The release page notes are the same CHANGELOG section as latest.json (no GitHub write).
+$notes = Join-Path ([IO.Path]::GetTempPath()) "neo-notes-$v.md"
+[IO.File]::WriteAllText($notes, (Get-Content release-out/latest.json -Raw | ConvertFrom-Json).notes)
+
 git push origin main                                     # write 1: the release commit
 $sha = git rev-parse HEAD
-gh release create "v$v" --latest --target $sha --title "Neo Meta Harness v$v" `
-  --notes-file (Join-Path $env:TEMP "neo-notes-$v.md") `
+gh release create "v$v" --latest --target $sha --title "Neo Meta Harness v$v" --notes-file $notes `
   release-out/latest.json release-out/*.exe release-out/*.msi release-out/*.tar.gz release-out/*.AppImage `
-  "C:/release-inputs/Neo Meta Harness_${v}_aarch64.dmg"   # writes 2..9: the release and its assets
+  "C:/release-inputs/Neo Meta Harness_${v}_aarch64.dmg" `
+  "C:/release-inputs/neo-meta-harness_${v}_amd64.deb"     # writes 2..9: the release and its 7 assets
 ```
-
-Write the notes file first: copy the CHANGELOG section into `$env:TEMP\neo-notes-$v.md`.
 
 - `--latest` marks the release as the one `releases/latest` serves.
 - Never add `--prerelease` or `--draft`.
@@ -200,13 +217,41 @@ The version must be `$v`.
 
 ## 7. Verify the update in the installed app
 
-1. On a test machine, install the **previous** release's installer and open Neo Meta Harness.
-2. Open **Settings** and check for updates.
-3. The app must report version `X.Y.Z`. If it doesn't, check that `latest.json` has an entry for this
-   machine's platform, and that the release is marked latest.
-4. When the update is installed (the signed install flow is task P1-11), the app restarts on `X.Y.Z` and the
-   Gateway sidecar comes back. A signature mismatch is refused, so a failure here means the artifact and its
-   `.sig` don't match the published key.
+The desktop app reads its updater endpoint and public key from two environment variables at run time:
+`NMH_UPDATER_ENDPOINT` and `NMH_UPDATER_PUBLIC_KEY`. Without them, **Settings** reports "Updater endpoint is
+not configured" even on a correct install. Set both in a shell and start the app from that shell, so the
+app inherits them.
+
+**Check-only smoke test** (works today):
+
+1. On a test machine, install the **previous** release's installer. Don't open the app yet.
+2. In a PowerShell window on that machine, from a checkout of the release commit:
+
+   ```powershell
+   $env:NMH_UPDATER_ENDPOINT = 'https://github.com/NeoMetaHarness/NeoMetaHarness/releases/latest/download/latest.json'
+   $env:NMH_UPDATER_PUBLIC_KEY = (Get-Content apps/neo-app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).plugins.updater.pubkey
+   ```
+
+   This is the public key only, the one checked in.
+3. Start the installed app from the same shell by its executable, not from a shortcut or Finder, which
+   don't pass the variables on. The executable is `neo-meta-harness` (`neo-meta-harness.exe` on Windows),
+   inside the install folder. On macOS it is
+   `/Applications/Neo Meta Harness.app/Contents/MacOS/neo-meta-harness`. On Linux, run the AppImage.
+4. Open **Settings** and check for updates. The app must report version `X.Y.Z`.
+5. If it doesn't, check that `latest.json` has an entry for this machine's platform, and that the release
+   is marked latest.
+
+**Signed install and restart** applies only once task P1-11 (the signed desktop update flow) is merged.
+Check that P1-11 is `done` in `machine/readiness.json` first. On `main` before then, the app only checks
+and reports the version, so stop after the smoke test. Once P1-11 is merged:
+
+1. Install the update from **Settings**.
+2. The app must restart on `X.Y.Z`, and the Gateway sidecar must come back.
+3. A signature mismatch is refused. A failure here means the artifact and its `.sig` don't match the
+   published key.
+
+If P1-11 changes how the app gets its endpoint or key, follow its documentation instead of the variables
+above.
 
 ## Roll back
 
