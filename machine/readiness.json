@@ -326,9 +326,10 @@
     },
     "P2-12": {
       "title": "apps-composio and neo.apps interface",
-      "status": "in_progress",
+      "status": "done",
       "owner": "sol-a",
-      "code_check_2026_11_21": "Owner was sol61, but the work is on work/sol-a-p212 (sol-a worktree, 12 commits ahead); sol61 is on P1-10."
+      "code_check_2026_11_21": "Owner was sol61, but the work is on work/sol-a-p212 (sol-a worktree, 12 commits ahead); sol61 is on P1-10.",
+      "evidence": "PM review 2026-11-22 on main 9b0fc03 (after P3-11) + work/sol-a-p212 (8264c8c), rebased onto P2-11 by a helper and onto P3-11 by PM (both-sides-append conflicts in GatewayOptions only; content verified identical; head 9fdf831). apps-composio and the neo.apps interface: connected-account principals isolated per workspace, connected-app retries rejected with clear guidance, scoped MCP worker lifecycle preserved. Destructive app actions require the connected-account owner AND a workspace admin/owner; an account owner who is also an admin satisfies both with one decision (user-confirmed rule 2026-11-22, documented in the apps-composio README). test:p2-12 PASS x2 (needs NMH_UPSTREAM_CACHE), app tsc, test:p1-14, test:p3-11, gateway, toggle, pnpm check, secret scan PASS; clean full regression 68/68 including desktop suites."
     }
   },
   "known_risks": [
