@@ -1,0 +1,300 @@
+{
+  "schema_version": 1,
+  "source": "extensions/*/neo.extension.json",
+  "source_revision": "123190d",
+  "note": "Manifest-derived inventory of local extensions. Categories describe declared kind and do not imply enabled, healthy or released status. Runtime readiness is tracked only in machine/readiness.json.",
+  "extension_count": 24,
+  "kinds": {
+    "computer": [
+      "computer-docker",
+      "computer-hermes-screen",
+      "computer-local",
+      "computer-orgo",
+      "computer-vnc"
+    ],
+    "engine": [
+      "engine-dsh",
+      "engine-hermes",
+      "engine-superagent",
+      "engine-t3"
+    ],
+    "feature": [
+      "coding-workflow",
+      "computer-fake",
+      "computer-headless-chrome",
+      "computer-local-sandbox",
+      "sample-py",
+      "sample-ts"
+    ],
+    "integration": [
+      "channels"
+    ],
+    "memory": [
+      "memory-honcho",
+      "memory-local"
+    ],
+    "skills": [
+      "skills-registry"
+    ],
+    "system": [
+      "backup"
+    ],
+    "tool": [
+      "computers-mcp",
+      "metrics",
+      "models",
+      "models-router-panda"
+    ]
+  },
+  "extensions": [
+    {
+      "id": "backup",
+      "version": "0.1.0",
+      "display_name": "Encrypted backup and restore",
+      "kind": [
+        "system"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/backup/neo.extension.json"
+    },
+    {
+      "id": "channels",
+      "version": "0.1.0",
+      "display_name": "Channels",
+      "kind": [
+        "integration"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/channels/neo.extension.json",
+      "dependencies": {
+        "engine-hermes": "^0.1.0"
+      }
+    },
+    {
+      "id": "coding-workflow",
+      "version": "0.1.0",
+      "display_name": "Coding worktrees and local PR preparation",
+      "kind": [
+        "feature"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/coding-workflow/neo.extension.json",
+      "dependencies": {
+        "engine-t3": "^0.1.0"
+      }
+    },
+    {
+      "id": "computer-docker",
+      "version": "0.1.0",
+      "display_name": "Docker desktop",
+      "kind": [
+        "computer"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computer-docker/neo.extension.json"
+    },
+    {
+      "id": "computer-fake",
+      "version": "0.1.0",
+      "display_name": "Deterministic fake computer",
+      "kind": [
+        "feature"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computer-fake/neo.extension.json"
+    },
+    {
+      "id": "computer-headless-chrome",
+      "version": "0.1.0",
+      "display_name": "Isolated headless Chrome",
+      "kind": [
+        "feature"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computer-headless-chrome/neo.extension.json"
+    },
+    {
+      "id": "computer-hermes-screen",
+      "version": "0.1.0",
+      "display_name": "Hermes bot screen",
+      "kind": [
+        "computer"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computer-hermes-screen/neo.extension.json"
+    },
+    {
+      "id": "computer-local",
+      "version": "0.1.0",
+      "display_name": "My desktop (local driver)",
+      "kind": [
+        "computer"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computer-local/neo.extension.json"
+    },
+    {
+      "id": "computer-local-sandbox",
+      "version": "0.1.0",
+      "display_name": "Local sandbox desktop",
+      "kind": [
+        "feature"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computer-local-sandbox/neo.extension.json"
+    },
+    {
+      "id": "computer-orgo",
+      "version": "0.1.0",
+      "display_name": "Orgo cloud computers",
+      "kind": [
+        "computer"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computer-orgo/neo.extension.json"
+    },
+    {
+      "id": "computer-vnc",
+      "version": "0.1.0",
+      "display_name": "Remote desktop (VNC)",
+      "kind": [
+        "computer"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computer-vnc/neo.extension.json"
+    },
+    {
+      "id": "computers-mcp",
+      "version": "0.1.0",
+      "display_name": "Computer MCP Projection",
+      "kind": [
+        "tool"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/computers-mcp/neo.extension.json"
+    },
+    {
+      "id": "engine-dsh",
+      "version": "0.1.0",
+      "display_name": "DeepSeek Harness SDK engine",
+      "kind": [
+        "engine"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/engine-dsh/neo.extension.json"
+    },
+    {
+      "id": "engine-hermes",
+      "version": "0.1.0",
+      "display_name": "Hermes agent runtime",
+      "kind": [
+        "engine"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/engine-hermes/neo.extension.json"
+    },
+    {
+      "id": "engine-superagent",
+      "version": "0.1.0",
+      "display_name": "Neo super agent",
+      "kind": [
+        "engine"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/engine-superagent/neo.extension.json"
+    },
+    {
+      "id": "engine-t3",
+      "version": "0.1.0",
+      "display_name": "T3 coding control plane",
+      "kind": [
+        "engine"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/engine-t3/neo.extension.json"
+    },
+    {
+      "id": "memory-honcho",
+      "version": "0.1.0",
+      "display_name": "Honcho L2 memory",
+      "kind": [
+        "memory"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/memory-honcho/neo.extension.json"
+    },
+    {
+      "id": "memory-local",
+      "version": "0.1.0",
+      "display_name": "Neo local memory",
+      "kind": [
+        "memory"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/memory-local/neo.extension.json"
+    },
+    {
+      "id": "metrics",
+      "version": "0.1.0",
+      "display_name": "Success metrics",
+      "kind": [
+        "tool"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/metrics/neo.extension.json"
+    },
+    {
+      "id": "models",
+      "version": "0.1.0",
+      "display_name": "Model Hub",
+      "kind": [
+        "tool"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/models/neo.extension.json"
+    },
+    {
+      "id": "models-router-panda",
+      "version": "0.1.0",
+      "display_name": "Panda Model Router",
+      "kind": [
+        "tool"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/models-router-panda/neo.extension.json",
+      "dependencies": {
+        "models": "*"
+      }
+    },
+    {
+      "id": "sample-py",
+      "version": "0.1.0",
+      "display_name": "Python sample",
+      "kind": [
+        "feature"
+      ],
+      "runtime_type": "process",
+      "manifest": "extensions/sample-py/neo.extension.json"
+    },
+    {
+      "id": "sample-ts",
+      "version": "0.1.0",
+      "display_name": "TypeScript sample",
+      "kind": [
+        "feature"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/sample-ts/neo.extension.json"
+    },
+    {
+      "id": "skills-registry",
+      "version": "0.1.0",
+      "display_name": "Neo Skill Registry",
+      "kind": [
+        "skills"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/skills-registry/neo.extension.json"
+    }
+  ]
+}
