@@ -298,7 +298,18 @@ try {
   }
   multiDb.close();
   const multiRestart = new XSearchService(multiSettings, persistentClient, () => now, multiFile);
-  await assert.rejects(multiRestart.search({ query: 'migration remains limited after restart' }, aliceElsewhere), /user minute/);
+  const originalParse = JSON.parse;
+  let scannedScopedKeys = 0;
+  JSON.parse = (text, reviver) => {
+    if (text.startsWith('["team-')) scannedScopedKeys++;
+    return originalParse(text, reviver);
+  };
+  try {
+    await assert.rejects(multiRestart.search({ query: 'migration remains limited after restart' }, aliceElsewhere), /user minute/);
+  } finally {
+    JSON.parse = originalParse;
+  }
+  assert.equal(scannedScopedKeys, 0, 'unchanged legacy quota must not scan scoped user keys');
 
   // A staged SQLite generation can charge while an older, still-draining
   // generation continues writing the legacy JSON store after the import.

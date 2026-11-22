@@ -226,23 +226,38 @@ export class XSearchService implements NeoSearchService {
       this.counterDay = day;
     }
     if (snapshot.day === day) {
+      let scopedKeysByUser: Map<string, string[]> | undefined;
       const reconcile = (current: Map<string, QuotaCounter>, entries: [string, QuotaCounter][],
         seen: [string, QuotaCounter][]) => {
         const previous = new Map(seen);
         for (const [id, old] of entries) {
           const last = previous.get(id);
+          const dayDelta = Math.max(0, old.dayCount - (last?.dayCount ?? 0));
+          const minuteDelta = old.minute === minute
+            ? Math.max(0, old.minuteCount - (last?.minute === minute ? last.minuteCount : 0))
+            : 0;
+          if (dayDelta === 0 && minuteDelta === 0) continue;
           // Legacy writers aggregate a member's usage across workspaces. Apply
           // each new charge to every already-seen workspace for that member.
           // Workspaces first seen later inherit the aggregate in chargeCurrent.
-          const keys = current === this.userCounters && scopedUserFromCounterKey(id) === undefined
-            ? [id, ...[...current.keys()].filter(key => scopedUserFromCounterKey(key) === id)]
-            : [id];
+          let keys = [id];
+          if (current === this.userCounters && scopedUserFromCounterKey(id) === undefined) {
+            if (!scopedKeysByUser) {
+              scopedKeysByUser = new Map();
+              for (const key of current.keys()) {
+                const user = scopedUserFromCounterKey(key);
+                if (user === undefined) continue;
+                const group = scopedKeysByUser.get(user) ?? [];
+                group.push(key);
+                scopedKeysByUser.set(user, group);
+              }
+            }
+            keys = [id, ...(scopedKeysByUser.get(id) ?? [])];
+          }
           for (const key of keys) {
             const count = this.counterFor(current, key, minute);
-            count.dayCount += Math.max(0, old.dayCount - (last?.dayCount ?? 0));
-            if (old.minute === minute) {
-              count.minuteCount += Math.max(0, old.minuteCount - (last?.minute === minute ? last.minuteCount : 0));
-            }
+            count.dayCount += dayDelta;
+            count.minuteCount += minuteDelta;
           }
         }
       };
