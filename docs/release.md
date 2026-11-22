@@ -110,7 +110,7 @@ store. This runbook does not say where the key is kept, and nothing here reads i
 
 Don't write either value to a file in the repository, a profile script or the shell history.
 
-Keep `TAURI_CONFIG` **unset** in the build shell. `cargo tauri build` sets it itself from its `--config` arguments. The build (`build.rs`) and the bundle check (`installer-check.mjs`) refuse any updater public key that differs from the one checked in to `tauri.conf.json`.
+Keep `TAURI_CONFIG` **unset** in the build shell, because `cargo tauri build` sets it itself from its `--config` arguments. Four checks hold the key: the build (`build.rs`) and the bundle check (`installer-check.mjs`) refuse any updater public key that differs from the one checked in to `tauri.conf.json` (P1-11); `release-preflight.mjs` checks the effective config, including any `TAURI_CONFIG`, against the checked-in key; and `release-manifest.mjs` verifies every `.sig` against that key.
 
 ```powershell
 Push-Location apps/neo-app/src-tauri

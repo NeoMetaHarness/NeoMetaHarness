@@ -15,6 +15,7 @@ Set the date on the heading when the release is cut.
 - Schema-driven Settings for every extension, with per-workspace values and secrets (P1-9, P1-13).
 - Installers for Windows (NSIS, MSI), macOS (DMG) and Linux (AppImage, deb), with install docs (P7-6).
 - In-product PRD success metrics (P7-12).
+- Signed desktop auto-updates from full GitHub releases, verified with the checked-in public key; stable versions only (P1-11).
 
 ### Kernel, extensions and Gateway
 - Cordis kernel facade, oRPC contracts, Kysely/SQLite state, Gateway, and sample TypeScript and Python extensions (P1-1).
@@ -35,6 +36,9 @@ Set the date on the heading when the release is cut.
 - Agents service and Agents page: bots, streaming chat, approvals and stop, on Hermes (P2-0, P2-3, P2-4).
 - Routines (Hermes cron) and Tasks (Hermes kanban) (P2-7).
 - Channels: Telegram and WhatsApp through Hermes platforms (P2-5, P6-5).
+- Provider-agnostic voice with an xAI provider (P2-10).
+- Optional X search extension (P2-11).
+- Connected apps through Composio behind the `neo.apps` interface; destructive actions need the account owner and a workspace admin (P2-12).
 
 ### Models
 - Model Hub: providers with keys in the vault, route roles, projections into Hermes and DSH (P2-6).
@@ -45,7 +49,7 @@ Set the date on the heading when the release is cut.
 
 ### Computers
 - Screen-agnostic computers: registry, safety events, kill switch and leases, projected into every engine over MCP (P3-1, P3-7).
-- Providers: headless Chrome, VNC, Docker, opt-in local desktop, Hermes bot screen and Orgo; a bot can swap computers without a restart (P3-2, P3-3, P3-4, P3-6, P3-8, P3-9, P3-10).
+- Providers: headless Chrome, VNC, Docker, opt-in local desktop, Hermes bot screen, Orgo and boat.dev/PandaOS; a bot can swap computers without a restart (P3-2, P3-3, P3-4, P3-6, P3-8, P3-9, P3-10, P3-11).
 
 ### Memory and skills
 - L1 local memory with the single `neo` Hermes memory provider and a Memory page; Honcho L2 (self-hosted) with L1↔L2 sync, dreaming reports and admin-managed standing intents (P4-2, P4-5, P4-9, P4-10).
@@ -67,6 +71,4 @@ Set the date on the heading when the release is cut.
 
 ### Not in this section yet
 Tasks still `in_progress` in `machine/readiness.json` when this was written, and not listed above:
-the signed desktop update flow (P1-11), voice (P2-10), X search (P2-11), connected apps via Composio (P2-12),
-the boat.dev computer provider (P3-11) and the org repositories (P0-1). Move each one up when it is done
-before the release is cut.
+the org repositories (P0-1). Move it up when it is done, before the release is cut.
