@@ -1,5 +1,59 @@
 # Install Neo Meta Harness
 
+## Install dependencies
+
+From the repository root, on Node.js 22.12+ with pnpm 12.9.1:
+
+```sh
+pnpm install
+```
+
+pnpm 12 blocks dependency build scripts that are not approved. `pnpm-workspace.yaml` carries the approvals in `allowBuilds` (esbuild, koffi, node-pty and `@deepseek-ai/dsh-subprocess-local` run; `@google/genai` and `protobufjs` are skipped on purpose), so a plain `pnpm install` works on a fresh clone. If a dependency update adds a new build script, `pnpm install` stops with `ERR_PNPM_IGNORED_BUILDS`. Add that package to `allowBuilds` after reviewing its script.
+
+## Run in development
+
+Start the Gateway from the repository root (it runs `tsx src/main.ts`):
+
+```sh
+pnpm --dir apps/gateway start
+```
+
+By default it listens on a random loopback port and prints `GATEWAY_READY {"port":N}`. Set `NMH_PORT`, `NMH_DB_PATH` and `NMH_EXTENSIONS_DIR` to control the port, database file and extensions folder. Set `NEO_MODE=desktop` and `NEO_PRINT_DESKTOP_TOKEN=1` to also print the desktop token (`NEO_DESKTOP_TOKEN`). The web UI runs on a separate dev server:
+
+```sh
+pnpm --dir apps/neo-app dev      # Vite on 127.0.0.1
+```
+
+For the desktop app, build the frontend and run the Tauri shell. `tauri.conf.json` has no dev server URL, so the shell loads `apps/neo-app/dist`. In a checkout, the shell starts its own Gateway from `apps/gateway` (set `NMH_DESKTOP_REPO_ROOT` to use another checkout and `NMH_NODE` for a specific Node binary):
+
+```sh
+pnpm --dir apps/neo-app build
+cargo run --manifest-path apps/neo-app/src-tauri/Cargo.toml
+```
+
+There is no `dev` script for the desktop app in any `package.json`; the commands above come from `tauri.conf.json` and `apps/neo-app/src-tauri/src/lib.rs`.
+
+### Tests and the pinned upstream cache
+
+Some tests start the Gateway with real, pinned engines (Hermes, DeepSeek Harness, dsh-superagent, T3 Code). They read engine source from a local **upstream cache** and fail without it. This includes `pnpm test:toggle` (`tests/toggle-safety/run.mjs`) and `pnpm test:p7-3` (`apps/gateway/test/p7-3.ts`, which enables every extension).
+
+The cache is a folder of read-only, unmodified source clones named `<name>@<ref>`, at the refs pinned in `upstream.lock.json`. Point `NMH_UPSTREAM_CACHE` at it, or place a folder named `nmh-upstream-cache` in any parent directory of the checkout. `pnpm test:toggle` falls back to a path hard-coded for the maintainer's machine when the variable is unset, so always set `NMH_UPSTREAM_CACHE` explicitly. Populate it once, using the refs in `upstream.lock.json`:
+
+```sh
+mkdir nmh-upstream-cache && cd nmh-upstream-cache
+git -c core.longpaths=true clone --filter=blob:none https://github.com/deepseek-ai/deepseek-harness.git deepseek-harness@0.2.2-rc.1
+git -C deepseek-harness@0.2.2-rc.1 checkout dsh-v0.2.2-rc.1
+git -c core.longpaths=true clone --filter=blob:none https://github.com/deepseek-ai/dsh-superagent-prototype.git dsh-superagent@8c32a9dc5d72
+git -C dsh-superagent@8c32a9dc5d72 checkout 8c32a9dc5d72
+git -c core.longpaths=true clone --filter=blob:none https://github.com/NousResearch/hermes-agent.git hermes-agent@v0.23.2
+git -C hermes-agent@v0.23.2 checkout v0.23.2
+git -c core.longpaths=true clone --filter=blob:none https://github.com/pingdotgg/t3code.git t3code@v0.1.9
+git -C t3code@v0.1.9 checkout v0.1.9
+export NMH_UPSTREAM_CACHE="$PWD"
+```
+
+Never edit or push from the cache. If `upstream.lock.json` changes, re-clone at the new ref; `pnpm upstream:check` reports drift. The Hermes tests also need `uv` and Python 3.14.
+
 ## Desktop installers
 
 The desktop app uses Tauri 2 and the Astryx frontend. Its packaged gateway runs as a local Node sidecar with separately deployed gateway and extension dependencies. The Tauri shell manages the window, tray, and sidecar process. Gateway owns authentication, bots, extensions, and business logic.

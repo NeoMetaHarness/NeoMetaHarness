@@ -5,3 +5,10 @@ packages:
 allowBuilds:
   '@astryxdesign/core': false
   esbuild: true
+  # Native or helper-binary installs pulled in by the pinned DeepSeek Harness (dsh).
+  '@deepseek-ai/dsh-subprocess-local': true
+  koffi: true
+  node-pty: true
+  # No-op or advisory install scripts: skipped deliberately.
+  '@google/genai': false
+  protobufjs: false
