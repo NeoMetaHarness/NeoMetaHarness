@@ -58,11 +58,13 @@ metadata claims they are safe. Clients cannot supply the classification.
 - `act-with-approval`: every action creates an approval card.
 - `act`: only explicit read-only actions execute immediately; all others wait.
 
-Destructive approval requires admin/owner through the existing Inbox decision
-route. Viewers see the action and argument keys; member+ reviewers see full
-arguments. List and event responses enforce the same redaction and workspace
-boundary. Cross-workspace decisions are denied. Decisions are
-consumed before execution, so repeated/concurrent approvals cannot execute twice.
+Destructive actions require two approvals through the Inbox decision route: the
+connected-account owner and a workspace admin/owner. An account owner who is also
+an admin can satisfy both requirements. Non-destructive actions need only the
+connected-account owner's approval. Only the connected-account owner sees full
+arguments; other workspace members see a redacted summary in lists and events.
+Cross-workspace decisions are denied. Approvals are consumed before execution,
+so repeated/concurrent approvals cannot execute twice.
 Changing settings or disabling the provider invalidates pending approvals.
 Disabling the Inbox blocks execution; listing toolkits and creating links remain
 available. Pending callbacks expire on Gateway/Inbox restart: request the action

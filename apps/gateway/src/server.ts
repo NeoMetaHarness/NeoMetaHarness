@@ -500,8 +500,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!visible) throw new ORPCError('NOT_FOUND', { message: 'Inbox item not found' });
     return visible;
   };
-  const assertAppInboxDecider = (item: InboxItem | undefined, context: GatewayAuthContext) => {
-    if (item?.appAction && (!item.appAction.ownerUserId || item.appAction.ownerUserId !== context.user?.id)) {
+  const assertAppInboxDecider = (item: InboxItem | undefined, context: GatewayAuthContext, allowDestructiveAdmin = false) => {
+    if (item?.appAction && item.appAction.ownerUserId !== context.user?.id
+      && !(allowDestructiveAdmin && item.destructive && (context.role === 'admin' || context.role === 'owner'))) {
       throw new ORPCError('FORBIDDEN', { message: 'Connected-app action requires account owner' });
     }
   };
@@ -760,7 +761,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         if (!item.appAction && item.destructive && role !== 'admin' && role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Accepting destructive work requires admin or owner' });
         }
-        return visibleAppInboxItem(await invokeInbox('accept', { ...input, role }) as InboxItem, context);
+        return visibleAppInboxItem(await invokeInbox('accept', { ...input, role, actorUserId: context.user?.id }) as InboxItem, context);
       }),
       dismiss: os.inbox.dismiss.handler(async ({ input, context }) => {
         authorizeInboxAction('inbox.dismiss', context);
@@ -799,11 +800,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       approval: { decide: os.inbox.approval.decide.handler(async ({ input, context }) => {
         authorizeInboxAction('inbox.approval.decide', context);
         const { item, role } = await inboxItemForAction('inbox.approval.decide', input.id, context);
-        assertAppInboxDecider(item, context);
+        assertAppInboxDecider(item, context, true);
         if (!item.appAction && (item.approval?.destructive || item.source === 'neo/github') && role !== 'admin' && role !== 'owner') {
           throw new ORPCError('FORBIDDEN', { message: 'Destructive approval requires admin or owner' });
         }
-        return visibleAppInboxItem(await invokeInbox('approval/decide', { ...input, role }) as InboxItem, context);
+        return visibleAppInboxItem(await invokeInbox('approval/decide', { ...input, role, actorUserId: context.user?.id }) as InboxItem, context);
       }) },
       retry: os.inbox.retry.handler(async ({ input, context }) => {
         authorizeInboxAction('inbox.retry', context);

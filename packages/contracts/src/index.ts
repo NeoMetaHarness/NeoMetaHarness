@@ -784,7 +784,8 @@ export const inboxItemSchema = z.object({
   /** Destructive work: accepting it needs an admin or owner. */
   destructive: z.boolean().optional(),
   approval: z.object({ destructive: z.boolean(), reason: z.string(),
-    decision: z.enum(['approved', 'denied']).optional() }).optional(),
+    decision: z.enum(['approved', 'denied']).optional(),
+    ownerApproved: z.boolean().optional(), adminApproved: z.boolean().optional() }).optional(),
   ticketId: z.string().optional(), report: inboxReportSchema.optional(),
   episode: inboxEpisodeSchema.optional(),
   createdAt: z.number(), updatedAt: z.number(),

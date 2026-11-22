@@ -614,11 +614,14 @@ class SuperagentService {
   }
 
   /** Accept a Suggestion as `role` (the accepting member; falls back to the requester for in-process callers). */
-  async accept(input: { id: string }, role?: Role): Promise<InboxItem> {
+  async accept(input: { id: string; actorUserId?: string }, role?: Role): Promise<InboxItem> {
     const item = this.items.get(input.id);
     if (!item) throw new Error('Suggestion not found');
     if (item.status !== 'suggestion') throw new Error(`Cannot accept ${item.status} ticket`);
     if (isUpstreamBump(item)) return this.acceptUpstream(item, role);
+    if (item.appAction && (!item.appAction.ownerUserId || item.appAction.ownerUserId !== input.actorUserId)) {
+      throw new Error('Connected-app acceptance requires account owner');
+    }
     if (!item.appAction && (item.destructive ?? isDestructive(item.text)) && role && !isAdmin(role)) {
       throw new Error('Accepting destructive work requires admin or owner');
     }
@@ -715,11 +718,16 @@ class SuperagentService {
     })();
     this.inflight.add(work); try { return await work; } finally { this.inflight.delete(work); }
   }
-  async decideApproval(input: { id: string; decision: 'approve' | 'deny'; reason: string },
+  async decideApproval(input: { id: string; decision: 'approve' | 'deny'; reason: string; actorUserId?: string },
     role: 'viewer' | 'member' | 'admin' | 'owner'): Promise<InboxItem> {
     const item = this.items.get(input.id);
     if (!item || item.status !== 'approval') throw new Error('Ticket is not awaiting approval');
-    if (!item.appAction && item.approval?.destructive && role !== 'admin' && role !== 'owner') {
+    const isAppOwner = !!item.appAction?.ownerUserId && item.appAction.ownerUserId === input.actorUserId;
+    const isWorkspaceAdmin = role === 'admin' || role === 'owner';
+    if (item.appAction && !isAppOwner && !(item.destructive && isWorkspaceAdmin)) {
+      throw new Error('Connected-app approval requires account owner or destructive-action administrator');
+    }
+    if (!item.appAction && item.approval?.destructive && !isWorkspaceAdmin) {
       throw new Error('Destructive approval requires admin or owner');
     }
     if (item.dream) {
@@ -735,7 +743,13 @@ class SuperagentService {
     }
     if (item.appAction) {
       if (input.decision === 'deny') { this.appExecutions.delete(item.id); return this.update(item, { status: 'blocked', kind: undefined, approval: { ...item.approval!, decision: 'denied', reason: input.reason } }); }
-      const approved = this.update(item, { approval: { ...item.approval!, decision: 'approved', reason: input.reason } });
+      const approval = { ...item.approval!, reason: input.reason,
+        ownerApproved: !!item.approval?.ownerApproved || isAppOwner,
+        adminApproved: !!item.approval?.adminApproved || isWorkspaceAdmin };
+      if (item.destructive && !(approval.ownerApproved && approval.adminApproved)) {
+        return this.update(item, { approval });
+      }
+      const approved = this.update(item, { approval: { ...approval, decision: 'approved' } });
       await this.executeApp(approved); return this.items.get(item.id)!;
     }
     if (item.source === 'neo/github') {
@@ -1040,13 +1054,13 @@ export default defineExtension({
     ctx.route('ask', ({ body }) => service.ask(body));
     ctx.route('list', () => service.list());
     ctx.route('decisions/list', ({ body }) => service.listDecisions(body as { ticketId?: string; limit?: number; workspace?: string }));
-    ctx.route('accept', ({ body }) => service.accept(body as { id: string }, (body as { role?: Role }).role));
+    ctx.route('accept', ({ body }) => service.accept(body as { id: string; actorUserId?: string }, (body as { role?: Role }).role));
     ctx.route('dismiss', ({ body }) => service.dismiss(body as { id: string; reason?: string }, (body as { role?: Role }).role));
     ctx.route('accept-mode/get', ({ body }) => service.acceptModeGet((body ?? {}) as { workspace?: string }));
     ctx.route('accept-mode/set', ({ body }) => service.acceptModeSet(body as { mode: AcceptMode; workspace?: string }));
     ctx.route('reply', ({ body }) => service.reply(body as { id: string; answer: string }));
     ctx.route('approval/decide', ({ body }) => service.decideApproval(body as {
-      id: string; decision: 'approve' | 'deny'; reason: string;
+      id: string; decision: 'approve' | 'deny'; reason: string; actorUserId?: string;
       role: 'viewer' | 'member' | 'admin' | 'owner';
     }, (body as { role: 'viewer' | 'member' | 'admin' | 'owner' }).role));
     ctx.route('retry', ({ body }) => service.retry(body as { id: string }));
