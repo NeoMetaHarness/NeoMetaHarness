@@ -107,7 +107,7 @@ export class XaiVoiceService implements NeoVoiceService {
     }
   }
 
-  private async send(path: string, body: BodyInit, requestBytes: number, requesterId: string, workspaceId?: string, contentType?: string): Promise<Response> {
+  private async send(path: string, body: BodyInit, requestBytes: number, requesterId: string, workspaceId?: string, contentType?: string, signal?: AbortSignal): Promise<Response> {
     if (!this.active) throw new Error('xAI Voice extension is disabled');
     if (this.settingsFor && !workspaceId?.trim()) throw new Error('xAI Voice requires requester workspace identity');
     const settings = this.settingsFor ? await this.settingsFor(workspaceId!) : this.settings;
@@ -117,6 +117,7 @@ export class XaiVoiceService implements NeoVoiceService {
       throw new Error('xAI Voice request too large');
     }
     const origin = validateEgressUrl(settings.baseUrl || 'https://api.x.ai', settings.allowPrivateNetwork === true);
+    if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
     this.enforceRateLimit(requesterId, settings, workspaceId);
     const headers: Record<string, string> = { Authorization: `Bearer ${key}` };
     if (contentType) headers['Content-Type'] = contentType;
@@ -129,7 +130,9 @@ export class XaiVoiceService implements NeoVoiceService {
       const guardedFetch = createEgressFetch(() => settings.allowPrivateNetwork === true, injected,
         { maxResponseBytes: path === '/v1/stt' ? MAX_TRANSCRIPT_BYTES : MAX_JSON_AUDIO_BYTES });
       response = await guardedFetch(new URL(path, origin.origin), {
-        method: 'POST', headers, body, signal: AbortSignal.timeout(30_000), redirect: 'error',
+        method: 'POST', headers, body,
+        signal: AbortSignal.any(signal ? [signal, AbortSignal.timeout(30_000)] : [AbortSignal.timeout(30_000)]),
+        redirect: 'error',
       });
     } catch {
       // A transport failure can embed request credentials in its original error.
@@ -139,7 +142,7 @@ export class XaiVoiceService implements NeoVoiceService {
     return response;
   }
 
-  async transcribe(raw: VoiceTranscribeInput, requesterId = 'internal', workspaceId?: string): Promise<VoiceTranscribeOutput> {
+  async transcribe(raw: VoiceTranscribeInput, requesterId = 'internal', workspaceId?: string, signal?: AbortSignal): Promise<VoiceTranscribeOutput> {
     const input = voiceTranscribeInput.parse(raw);
     if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.audioBase64)) {
       throw new Error('Invalid audio encoding');
@@ -154,15 +157,15 @@ export class XaiVoiceService implements NeoVoiceService {
     if (input.language) form.set('language', input.language);
     const extension = input.mimeType === 'audio/mpeg' ? 'mp3' : input.mimeType === 'audio/wav' ? 'wav' : 'audio';
     form.set('file', new Blob([Uint8Array.from(audio)], { type: input.mimeType }), `audio.${extension}`);
-    const response = await this.send('/v1/stt', form as unknown as BodyInit, audio.length, requesterId, workspaceId);
+    const response = await this.send('/v1/stt', form as unknown as BodyInit, audio.length, requesterId, workspaceId, undefined, signal);
     if (mediaType(response) !== 'application/json') throw new Error('xAI Voice returned invalid transcript type');
     return voiceTranscribeOutput.parse(parseProviderJson(await readLimited(response, MAX_TRANSCRIPT_BYTES)));
   }
 
-  async synthesize(raw: VoiceSynthesizeInput, requesterId = 'internal', workspaceId?: string): Promise<VoiceSynthesizeOutput> {
+  async synthesize(raw: VoiceSynthesizeInput, requesterId = 'internal', workspaceId?: string, signal?: AbortSignal): Promise<VoiceSynthesizeOutput> {
     const input = voiceSynthesizeInput.parse(raw);
     const body = JSON.stringify({ text: input.text, voice_id: input.voice ?? 'eve', language: input.language ?? 'en' });
-    const response = await this.send('/v1/tts', body, Buffer.byteLength(body), requesterId, workspaceId, 'application/json');
+    const response = await this.send('/v1/tts', body, Buffer.byteLength(body), requesterId, workspaceId, 'application/json', signal);
     const mimeType = mediaType(response);
     if (mimeType === 'application/json') {
       const json = parseProviderJson(await readLimited(response, MAX_JSON_AUDIO_BYTES));

@@ -95,6 +95,43 @@ async function assertNativeMultipartStt(home: string): Promise<void> {
   }
 }
 
+async function assertCallerAbort(): Promise<void> {
+  let notifyStarted: () => void = () => {};
+  let notifyClosed: () => void = () => {};
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) { /* Wait until the fake upstream has the entire request. */ }
+    res.once('close', () => notifyClosed());
+    notifyStarted();
+    // An upstream without a response must be disconnected when the caller aborts.
+  });
+  await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const client: VoiceHttpClient = {
+    request: (url, init) => fetch(`http://127.0.0.1:${address.port}${new URL(url).pathname}`, init),
+  };
+  const voice = new XaiVoiceService({ apiKey: key }, client);
+  try {
+    for (const operation of ['transcribe', 'synthesize'] as const) {
+      const started = new Promise<void>(resolve => { notifyStarted = resolve; });
+      const closed = new Promise<void>(resolve => { notifyClosed = resolve; });
+      const controller = new AbortController();
+      const request = operation === 'transcribe'
+        ? voice.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' },
+          'member-one', 'workspace-one', controller.signal)
+        : voice.synthesize({ text: 'cancel-this-request' }, 'member-one', 'workspace-one', controller.signal);
+      await started;
+      controller.abort();
+      await assert.rejects(request, /request failed/);
+      await closed;
+    }
+  } finally {
+    voice.dispose();
+    server.closeAllConnections();
+    await new Promise<void>(done => server.close(() => done()));
+  }
+}
+
 async function startGateway(home: string, fakePort: number) {
   const extensionsDir = join(home, 'extension-fixtures');
   await mkdir(extensionsDir);
@@ -144,6 +181,7 @@ async function main() {
     assert.equal((await independent.transcribe({ audioBase64: audio.toString('base64'), mimeType: 'audio/mpeg' })).text, 'Injected transcript');
     assert.deepEqual(calls, ['/v1/stt']);
     await assertNativeMultipartStt(home);
+    await assertCallerAbort();
     await assert.rejects(independent.synthesize({ text: 'x'.repeat(15_001) }), /too_big|<=15000|15000|maximum|less than or equal/i);
     for (const blockedIp of ['127.0.0.1', '169.254.169.254', '10.0.0.1', '192.168.0.1', '::1']) {
       const host = blockedIp.includes(':') ? `[${blockedIp}]` : blockedIp;
