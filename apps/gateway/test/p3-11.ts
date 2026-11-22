@@ -273,6 +273,26 @@ try {
   } });
   const firstComputer = await ownerRpc.computers.provision({ providerId: 'computer-boat', spec: {} });
   const secondComputer = await secondRpc.computers.provision({ providerId: 'computer-boat', spec: {} });
+  assert.deepEqual((await ownerRpc.computers.list()).map(computer => computer.id), [firstComputer.id],
+    'workspace A lists only its own Boat computers');
+  assert.deepEqual((await secondRpc.computers.list()).map(computer => computer.id), [secondComputer.id],
+    'workspace B lists only its own Boat computers');
+  await assert.rejects(secondRpc.computers.capture({ id: firstComputer.id }),
+    'workspace B cannot capture workspace A');
+  await assert.rejects(secondRpc.computers.lease({ id: firstComputer.id, holder: 'human' }),
+    'workspace B cannot take workspace A lease');
+  await assert.rejects(secondRpc.computers.release({ id: firstComputer.id }),
+    'workspace B cannot release workspace A');
+  await assert.rejects(secondRpc.computers.assign({ engine: 'dsh', targetId: 'shared-target', computerId: firstComputer.id }),
+    'workspace B cannot assign workspace A computer');
+  authGateway.computers.assign('dsh', 'shared-target', firstComputer.id, workspace.id);
+  authGateway.computers.assign('dsh', 'shared-target', secondComputer.id, secondWorkspace.id);
+  assert.equal(authGateway.computers.binding('dsh', 'shared-target'), undefined,
+    'unscoped lookups cannot see workspace assignments');
+  assert.equal(authGateway.computers.binding('dsh', 'shared-target', workspace.id)?.computerId, firstComputer.id);
+  assert.equal(authGateway.computers.binding('dsh', 'shared-target', secondWorkspace.id)?.computerId, secondComputer.id);
+  assert.notEqual(authGateway.computers.binding('dsh', 'shared-target', workspace.id)?.token,
+    authGateway.computers.binding('dsh', 'shared-target', secondWorkspace.id)?.token);
   assert.deepEqual(workspaceRequests.slice(0, 2), [
     { workspaceId: workspace.id, url: 'https://boat.example/api/v1/sandboxes', authorization: 'Bearer vaulted-workspace-A' },
     { workspaceId: secondWorkspace.id, url: 'https://10.20.0.5/api/v1/sandboxes', authorization: 'Bearer vaulted-workspace-B' },
@@ -283,6 +303,7 @@ try {
     ['Bearer vaulted-workspace-A', 'Bearer vaulted-workspace-B'], 'cleanup uses the originating workspace credentials');
   console.log('P3-11 AUTH PASS viewer=403 enabled+disabled admin=authorized');
   console.log('P3-11 WORKSPACE CREDENTIALS PASS two vault scopes, separate endpoints, keys and egress policies');
+  console.log('P3-11 WORKSPACE REGISTRY PASS isolated list, capture, lease, release and assignment bindings');
 } finally {
   await authGateway.close();
   await rm(authRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

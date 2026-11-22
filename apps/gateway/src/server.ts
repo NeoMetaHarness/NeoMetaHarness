@@ -1882,8 +1882,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       const backupRoute = path === '/x/backup/backup' || path === '/x/backup/restore';
       if (backupRoute) authorize(path, context);
 
-      if (path === '/x/computer-boat/snapshot' && kernel.hasRoute(path)) {
+      if (path === '/x/computer-boat/snapshot') {
         authorize(path, context as GatewayAuthContext);
+        if (!kernel.hasRoute(path)) { res.writeHead(404).end(); return; }
         if (req.method !== 'POST') { res.writeHead(405).end(); return; }
         const chunks: Buffer[] = [];
         let size = 0;
