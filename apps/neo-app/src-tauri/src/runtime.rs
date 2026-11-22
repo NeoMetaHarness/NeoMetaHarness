@@ -76,6 +76,12 @@ fn is_complete(target: &Path, manifest: &RuntimeManifest) -> bool {
     fs::read_to_string(target.join(MARKER_NAME)).is_ok_and(|text| text == manifest.marker())
 }
 
+/// Cheap check (one small file read, no lock) whether `ensure_runtime` will have to unpack the archive. Used by the
+/// shell to decide whether to show the setup screen; `ensure_runtime` stays the authority and re-checks under the lock.
+pub fn needs_unpack(manifest: &RuntimeManifest, base: &Path) -> bool {
+    !is_complete(&base.join(manifest.key()), manifest)
+}
+
 fn remove_dir_if_present(path: &Path) -> Result<(), String> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
@@ -302,7 +308,12 @@ mod tests {
         let scratch = Scratch::new();
         let (archive, manifest) = payload_archive(&scratch.0, "1.0.0", "console.log(1)");
         let base = scratch.0.join("runtime");
+        assert!(needs_unpack(&manifest, &base), "nothing unpacked yet");
         let target = ensure_runtime(&archive, &manifest, &base).unwrap();
+        assert!(!needs_unpack(&manifest, &base), "complete runtime needs no setup screen");
+        fs::write(target.join(MARKER_NAME), "garbage").unwrap();
+        assert!(needs_unpack(&manifest, &base), "a corrupt marker means a re-extract");
+        ensure_runtime(&archive, &manifest, &base).unwrap();
         assert_eq!(target, base.join(manifest.key()));
         assert_eq!(fs::read_to_string(target.join("apps/gateway/src/main.ts")).unwrap(), "console.log(1)");
         assert!(target.join("extensions/demo/neo.extension.json").is_file());

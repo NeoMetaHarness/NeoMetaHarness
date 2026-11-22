@@ -26,3 +26,13 @@
   margin-bottom: 20px;
   border: 1px solid currentColor;
 }
+.neo-setup {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
+  max-width: 520px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 24px 16px;
+}

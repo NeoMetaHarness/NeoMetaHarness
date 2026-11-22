@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -717,31 +718,52 @@ struct GatewaySidecar {
     input: ChildStdin,
 }
 
-impl GatewaySidecar {
-    fn launch(app: &tauri::AppHandle, data_dir: PathBuf) -> Result<(Self, u16), Box<dyn std::error::Error>> {
-        fs::create_dir_all(&data_dir)?;
+/// Where the Gateway runtime comes from: the repository (development) or the archive bundled with an installer.
+enum RuntimeSource {
+    Repo(PathBuf),
+    Bundled { archive: PathBuf, manifest: runtime::RuntimeManifest, base: PathBuf },
+}
+
+impl RuntimeSource {
+    /// Cheap: reads the bundled manifest only, never the archive.
+    fn resolve(app: &tauri::AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let repo = std::env::var_os("NMH_DESKTOP_REPO_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."));
-        // Installers bundle one runtime archive; it is unpacked into the user's local data dir before the
-        // Gateway starts (and before the ready timer below). No archive means development: repo paths.
-        let runtime_dir = match runtime::bundled_archive(&app.path().resource_dir()?.join("runtime"))? {
+        Ok(match runtime::bundled_archive(&app.path().resource_dir()?.join("runtime"))? {
             Some((archive, manifest)) => {
                 let base = match std::env::var_os("NMH_RUNTIME_DIR") {
                     Some(dir) => PathBuf::from(dir),
                     None => app.path().app_local_data_dir()?.join("runtime"),
                 };
-                let dir = runtime::ensure_runtime(&archive, &manifest, &base)
+                Self::Bundled { archive, manifest, base }
+            }
+            None => Self::Repo(repo),
+        })
+    }
+
+    /// True only on first launch and after an update: the archive still has to be unpacked (tens of seconds).
+    fn needs_unpack(&self) -> bool {
+        matches!(self, Self::Bundled { manifest, base, .. } if runtime::needs_unpack(manifest, base))
+    }
+}
+
+impl GatewaySidecar {
+    fn launch(source: &RuntimeSource, data_dir: &std::path::Path) -> Result<(Self, u16), Box<dyn std::error::Error>> {
+        fs::create_dir_all(data_dir)?;
+        // Installers bundle one runtime archive; it is unpacked into the user's local data dir before the
+        // Gateway starts (and before the ready timer below). No archive means development: repo paths.
+        let (packaged, root) = match source {
+            RuntimeSource::Bundled { archive, manifest, base } => {
+                let dir = runtime::ensure_runtime(archive, manifest, base)
                     .map_err(|error| format!("Unpacking the Neo runtime failed: {error}"))?;
                 if !dir.join("apps/gateway/src/main.ts").is_file() {
                     return Err(format!("Unpacked runtime {} has no apps/gateway/src/main.ts", dir.display()).into());
                 }
-                Some(dir)
+                (true, dir)
             }
-            None => None,
+            RuntimeSource::Repo(repo) => (false, repo.clone()),
         };
-        let packaged = runtime_dir.is_some();
-        let root = runtime_dir.unwrap_or(repo);
         let gateway_dir = root.join("apps/gateway");
         let extensions_dir = root.join("extensions");
         let node = if packaged {
@@ -818,7 +840,160 @@ impl GatewaySidecar {
     }
 }
 
-struct GatewayState(Mutex<Option<GatewaySidecar>>);
+/// The running Gateway, plus whether the shell is exiting. The flag closes the race where the background setup
+/// thread finishes starting the Gateway after the user has already closed the setup window.
+struct GatewayState(Mutex<Option<GatewaySidecar>>, AtomicBool);
+
+impl GatewayState {
+    /// Keeps a started Gateway. If the shell is already exiting, stops it instead and returns false.
+    fn adopt(&self, mut sidecar: GatewaySidecar) -> bool {
+        let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.1.load(Ordering::SeqCst) {
+            drop(slot);
+            sidecar.stop();
+            return false;
+        }
+        *slot = Some(sidecar);
+        true
+    }
+
+    fn shutdown(&self) {
+        let taken = {
+            let mut slot = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            self.1.store(true, Ordering::SeqCst);
+            slot.take()
+        };
+        if let Some(mut sidecar) = taken {
+            sidecar.stop();
+        }
+    }
+}
+
+/// Set when setup failed behind the setup screen; closing that window then exits with a failure code.
+static SETUP_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// Local page shown while the runtime is unpacked. It makes no Gateway calls.
+const SETUP_PAGE: &str = "index.html?setup=1";
+
+/// Everything after the Gateway is ready: updater state, the main window (or navigating the setup window to the
+/// app), launcher shortcut, deep links, tray, and finally the readiness status file. Runs on the main thread.
+fn finish_setup(app: &tauri::AppHandle, data_dir: &std::path::Path, port: u16, gateway_pid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    // Register every updater state before the startup check can finish.
+    app.manage(UpdateCandidate::default());
+    // The startup check takes the busy flag now, before the webview can start a manual check (which
+    // is then refused until it finishes). Its result lands only in UpdateCandidate; the webview reads
+    // update_state. (A fresh state has nothing running, so this cannot be refused.)
+    let startup_check = UpdateBusy::check(app.state::<UpdateCandidate>().0.clone())?;
+    let app_handle_for_update = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = with_deadline(
+            check_for_updates_internal(&app_handle_for_update),
+            UPDATE_CHECK_TIMEOUT,
+            "Checking for updates",
+        )
+        .await;
+        startup_check.finish_check(result);
+        notify_update_state(&app_handle_for_update);
+    });
+
+    let token = fs::read_to_string(data_dir.join("desktop.token")).unwrap_or_default().trim().to_string();
+    let mut url = if token.is_empty() {
+        format!("index.html?gateway=http%3A%2F%2F127.0.0.1%3A{port}")
+    } else {
+        format!("index.html?gateway=http%3A%2F%2F127.0.0.1%3A{port}&token={token}")
+    };
+    if let Ok(Some(urls)) = app.deep_link().get_current() {
+        if let Some(link) = urls.first() {
+            if link.scheme() == "neo" && ["inbox", "coding"].contains(&link.host_str().unwrap_or_default()) {
+                url.push_str("&deep_link=");
+                url.push_str(&percent_encoding::utf8_percent_encode(link.as_str(), percent_encoding::NON_ALPHANUMERIC).to_string());
+            }
+        }
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        // The setup screen is showing: load the app in that same window (same origin, same relative URL).
+        window.navigate(window.url()?.join(&url)?)?;
+    } else {
+        let url = WebviewUrl::App(url.into());
+        WebviewWindowBuilder::new(app, "main", url)
+            .title("Neo Meta Harness")
+            .inner_size(1280.0, 860.0)
+            .build()?;
+    }
+
+    let shortcut = std::env::var("NMH_LAUNCHER_SHORTCUT").ok()
+        .or_else(|| fs::read_to_string(data_dir.join("launcher-shortcut.txt")).ok())
+        .unwrap_or_else(|| "Ctrl+Shift+Space".to_owned());
+    // Non-fatal: after an update relaunch the old process may still hold the shortcut for a moment.
+    // Retry once, then run without the launcher shortcut rather than abort setup.
+    let shortcut_registered = register_shortcut_non_fatal(
+        || {
+            app.global_shortcut()
+                .on_shortcut(shortcut.trim(), |app, _, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        focus_main(app);
+                    }
+                })
+                .map_err(|error| error.to_string())
+        },
+        SHORTCUT_RETRY_DELAY,
+        |message| eprintln!("{message}"),
+    );
+
+    let app_handle = app.clone();
+    app.deep_link().on_open_url(move |event| {
+        for url in event.urls() {
+            forward_deep_link(&app_handle, url.as_str());
+        }
+    });
+    if let Ok(Some(urls)) = app.deep_link().get_current() {
+        for url in urls {
+            forward_deep_link(app, url.as_str());
+        }
+    }
+
+    let open = MenuItem::with_id(app, "open", "Open Neo", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", "Stop all agents", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Neo", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &stop, &quit])?;
+    TrayIconBuilder::new()
+        .icon(app.default_window_icon().ok_or("Desktop tray icon unavailable")?.clone())
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => focus_main(app),
+            "stop" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval("window.dispatchEvent(new Event('neo:stop-all-agents'))");
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+
+    if let Some(file) = std::env::var_os("NMH_DESKTOP_STATUS_FILE") {
+        fs::write(
+            file,
+            serde_json::json!({ "port": port, "gatewayPid": gateway_pid, "appPid": std::process::id(), "trayReady": true, "deepLinks": ["neo://inbox/", "neo://coding/"], "shortcut": shortcut.trim(), "shortcutRegistered": shortcut_registered }).to_string(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Setup failed behind the setup screen: show the error there. The Gateway (if it started) stays in
+/// GatewayState and is stopped on exit; closing the window exits with code 1.
+fn show_setup_error(app: &tauri::AppHandle, error: &str) {
+    eprintln!("Neo setup failed: {error}");
+    SETUP_FAILED.store(true, Ordering::SeqCst);
+    let encoded = percent_encoding::utf8_percent_encode(error, percent_encoding::NON_ALPHANUMERIC).to_string();
+    let shown = app.get_webview_window("main").is_some_and(|window| {
+        let target = window.url().ok().and_then(|current| current.join(&format!("{SETUP_PAGE}&error={encoded}")).ok());
+        target.is_some_and(|target| window.navigate(target).is_ok())
+    });
+    if !shown {
+        app.exit(1);
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -832,116 +1007,57 @@ pub fn run() {
                 .map(PathBuf::from)
                 .map(Ok)
                 .unwrap_or_else(|| app.path().app_data_dir())?;
-            let (sidecar, port) = GatewaySidecar::launch(app.handle(), data_dir.clone())?;
-            let gateway_pid = sidecar.child.id();
-            app.manage(GatewayState(Mutex::new(Some(sidecar))));
-            // Register every updater state before the startup check can finish.
-            app.manage(UpdateCandidate::default());
-            // The startup check takes the busy flag now, before the webview can start a manual check (which
-            // is then refused until it finishes). Its result lands only in UpdateCandidate; the webview reads
-            // update_state. (A fresh state has nothing running, so this cannot be refused.)
-            let startup_check = UpdateBusy::check(app.state::<UpdateCandidate>().0.clone())?;
-            let app_handle_for_update = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let result = with_deadline(
-                    check_for_updates_internal(&app_handle_for_update),
-                    UPDATE_CHECK_TIMEOUT,
-                    "Checking for updates",
-                )
-                .await;
-                startup_check.finish_check(result);
-                notify_update_state(&app_handle_for_update);
-            });
-
-            let token = fs::read_to_string(data_dir.join("desktop.token")).unwrap_or_default().trim().to_string();
-            let mut url = if token.is_empty() {
-                format!("index.html?gateway=http%3A%2F%2F127.0.0.1%3A{port}")
-            } else {
-                format!("index.html?gateway=http%3A%2F%2F127.0.0.1%3A{port}&token={token}")
-            };
-            if let Ok(Some(urls)) = app.deep_link().get_current() {
-                if let Some(link) = urls.first() {
-                    if link.scheme() == "neo" && ["inbox", "coding"].contains(&link.host_str().unwrap_or_default()) {
-                        url.push_str("&deep_link=");
-                        url.push_str(&percent_encoding::utf8_percent_encode(link.as_str(), percent_encoding::NON_ALPHANUMERIC).to_string());
-                    }
-                }
+            app.manage(GatewayState(Mutex::new(None), AtomicBool::new(false)));
+            let source = RuntimeSource::resolve(app.handle())?;
+            if !source.needs_unpack() {
+                // Development, or the runtime is already unpacked: start synchronously, exactly as before.
+                let (sidecar, port) = GatewaySidecar::launch(&source, &data_dir)?;
+                let gateway_pid = sidecar.child.id();
+                app.state::<GatewayState>().adopt(sidecar);
+                return finish_setup(app.handle(), &data_dir, port, gateway_pid);
             }
-            let url = WebviewUrl::App(url.into());
-            WebviewWindowBuilder::new(app, "main", url)
+            // First launch or after an update: unpacking takes tens of seconds. Show the setup screen now and
+            // unpack + start the Gateway off the main thread, then finish setup back on the main thread.
+            eprintln!("Neo: unpacking the runtime; showing the setup screen ({SETUP_PAGE})");
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::App(SETUP_PAGE.into()))
                 .title("Neo Meta Harness")
                 .inner_size(1280.0, 860.0)
                 .build()?;
-
-            let shortcut = std::env::var("NMH_LAUNCHER_SHORTCUT").ok()
-                .or_else(|| fs::read_to_string(data_dir.join("launcher-shortcut.txt")).ok())
-                .unwrap_or_else(|| "Ctrl+Shift+Space".to_owned());
-            // Non-fatal: after an update relaunch the old process may still hold the shortcut for a moment.
-            // Retry once, then run without the launcher shortcut rather than abort setup.
-            let shortcut_registered = register_shortcut_non_fatal(
-                || {
-                    app.global_shortcut()
-                        .on_shortcut(shortcut.trim(), |app, _, event| {
-                            if event.state() == ShortcutState::Pressed {
-                                focus_main(app);
-                            }
-                        })
-                        .map_err(|error| error.to_string())
-                },
-                SHORTCUT_RETRY_DELAY,
-                |message| eprintln!("{message}"),
-            );
-
-            let app_handle = app.handle().clone();
-            app.deep_link().on_open_url(move |event| {
-                for url in event.urls() {
-                    forward_deep_link(&app_handle, url.as_str());
-                }
-            });
-            if let Ok(Some(urls)) = app.deep_link().get_current() {
-                for url in urls {
-                    forward_deep_link(app.handle(), url.as_str());
-                }
-            }
-
-            let open = MenuItem::with_id(app, "open", "Open Neo", true, None::<&str>)?;
-            let stop = MenuItem::with_id(app, "stop", "Stop all agents", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit Neo", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &stop, &quit])?;
-            TrayIconBuilder::new()
-                .icon(app.default_window_icon().ok_or("Desktop tray icon unavailable")?.clone())
-                .menu(&menu)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "open" => focus_main(app),
-                    "stop" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.eval("window.dispatchEvent(new Event('neo:stop-all-agents'))");
+            let handle = app.handle().clone();
+            thread::spawn(move || {
+                let launched = match GatewaySidecar::launch(&source, &data_dir) {
+                    Ok((sidecar, port)) => {
+                        let gateway_pid = sidecar.child.id();
+                        if !handle.state::<GatewayState>().adopt(sidecar) {
+                            return; // the user closed the setup window meanwhile; the Gateway was stopped
                         }
+                        Ok((port, gateway_pid))
                     }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .build(app)?;
-
-            if let Some(file) = std::env::var_os("NMH_DESKTOP_STATUS_FILE") {
-                fs::write(
-                    file,
-                    serde_json::json!({ "port": port, "gatewayPid": gateway_pid, "appPid": std::process::id(), "trayReady": true, "deepLinks": ["neo://inbox/", "neo://coding/"], "shortcut": shortcut.trim(), "shortcutRegistered": shortcut_registered }).to_string(),
-                )?;
-            }
+                    Err(error) => Err(error.to_string()),
+                };
+                let main = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    let result = launched.and_then(|(port, gateway_pid)| {
+                        finish_setup(&main, &data_dir, port, gateway_pid).map_err(|error| error.to_string())
+                    });
+                    if let Err(error) = result {
+                        show_setup_error(&main, &error);
+                    }
+                });
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::Destroyed) {
-                window.app_handle().exit(0);
+                window.app_handle().exit(if SETUP_FAILED.load(Ordering::SeqCst) { 1 } else { 0 });
             }
         })
         .build(tauri::generate_context!())
         .expect("Failed to build Neo desktop shell")
         .run(|app, event| {
             if matches!(event, RunEvent::Exit) {
-                if let Some(mut sidecar) = app.state::<GatewayState>().0.lock().unwrap().take() {
-                    sidecar.stop();
+                if let Some(state) = app.try_state::<GatewayState>() {
+                    state.shutdown();
                 }
             }
         });
@@ -1445,7 +1561,11 @@ mod tests {
     #[test]
     fn test_startup_state_registered_before_check_and_exit_hook_cleans_up() {
         let lib_rs = include_str!("lib.rs");
-        let setup = &lib_rs[lib_rs.find(".setup(|app|").unwrap()..];
+        // P7-15: everything after the Gateway is ready moved from `.setup(|app|` into `finish_setup`, which both the
+        // synchronous path and the setup-screen path call; the ordering checks below apply there.
+        assert!(lib_rs[lib_rs.find(".setup(|app|").unwrap()..].contains("finish_setup(app.handle(), &data_dir, port, gateway_pid)"));
+        let setup = &lib_rs[lib_rs.find("fn finish_setup(").unwrap()..];
+        let setup = &setup[..setup.find("\nfn show_setup_error(").unwrap()];
         let candidate = setup.find("app.manage(UpdateCandidate::default())").unwrap();
         let begin = setup.find("UpdateBusy::check(app.state::<UpdateCandidate>().0.clone())?;").unwrap();
         let spawn = setup.find("check_for_updates_internal(&app_handle_for_update)").unwrap();
@@ -1459,6 +1579,52 @@ mod tests {
         let hook = &lib_rs[lib_rs.find("builder.on_before_exit(move ||").unwrap()..];
         let hook = &hook[..hook.find("});").unwrap()];
         assert!(hook.find("sidecar.stop()").unwrap() < hook.find("cleanup_before_exit()").unwrap());
+    }
+
+    #[test]
+    fn test_setup_screen_only_when_unpacking_and_status_file_last() {
+        let lib_rs = include_str!("lib.rs");
+        let setup = &lib_rs[lib_rs.find(".setup(|app|").unwrap()..];
+        let setup = &setup[..setup.find(".on_window_event(").unwrap()];
+        // GatewayState exists before anything can exit, so RunEvent::Exit always finds it.
+        let managed = setup.find("app.manage(GatewayState(").unwrap();
+        let check = setup.find("if !source.needs_unpack() {").unwrap();
+        let sync_launch = setup.find("GatewaySidecar::launch(&source, &data_dir)?").unwrap();
+        let setup_window = setup.find("WebviewUrl::App(SETUP_PAGE.into())").unwrap();
+        let background = setup.find("thread::spawn(move ||").unwrap();
+        assert!(managed < check && check < sync_launch && sync_launch < setup_window && setup_window < background);
+        // The slow path never blocks setup and finishes on the main thread.
+        let slow = &setup[background..];
+        assert!(slow.find("GatewaySidecar::launch(").unwrap() < slow.find("run_on_main_thread(").unwrap());
+        assert!(slow.contains("show_setup_error(&main, &error)"));
+        // Readiness contract: the status file is the last step, after the window and tray exist.
+        let finish = &lib_rs[lib_rs.find("fn finish_setup(").unwrap()..];
+        let finish = &finish[..finish.find("\nfn show_setup_error(").unwrap()];
+        let status = finish.find("NMH_DESKTOP_STATUS_FILE").unwrap();
+        assert!(finish.find("window.navigate(").unwrap() < status);
+        assert!(finish.find("TrayIconBuilder::new()").unwrap() < status);
+        // Exit stops whichever Gateway was adopted, and a late Gateway is stopped once exiting.
+        assert!(lib_rs.contains("app.try_state::<GatewayState>() {\n                    state.shutdown();"));
+    }
+
+    #[test]
+    fn test_late_gateway_is_stopped_after_shutdown() {
+        let state = GatewayState(Mutex::new(None), AtomicBool::new(false));
+        state.shutdown();
+        assert!(state.1.load(Ordering::SeqCst));
+        // A Gateway that becomes ready after exit started must not be kept (it is stopped instead).
+        // Stand-in Gateway that exits after reading one line (the "shutdown" stop() sends).
+        let started = Instant::now();
+        let mut child = Command::new(if cfg!(windows) { "cmd.exe" } else { "head" })
+            .args(if cfg!(windows) { &["/d", "/c", "set /p line="][..] } else { &["-n", "1"][..] })
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let input = child.stdin.take().unwrap();
+        assert!(!state.adopt(GatewaySidecar { child, input }));
+        assert!(state.0.lock().unwrap().is_none());
+        assert!(started.elapsed() < Duration::from_secs(8), "stopped via the shutdown line, not the kill fallback");
     }
 
     #[test]

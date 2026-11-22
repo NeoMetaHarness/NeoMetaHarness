@@ -26,6 +26,7 @@ const Settings = lazy(() => import('./pages/Settings'));
 const Onboarding = lazy(() => import('./pages/Onboarding'));
 const SetupReminder = lazy(() => import('./pages/SetupReminder'));
 const Placeholder = lazy(() => import('./pages/Placeholder'));
+const Setup = lazy(() => import('./pages/Setup'));
 const pages = [
   { label: 'Inbox', path: '/inbox', icon: 'inbox' },
   { label: 'Agents', path: '/agents', icon: 'person' },
@@ -171,4 +172,8 @@ if ('serviceWorker' in navigator) {
   }
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode><NeoApp /></StrictMode>);
+// The desktop shell shows the setup screen while it unpacks the runtime (P7-15); it never talks to the Gateway.
+const startQuery = new URLSearchParams(window.location.search);
+createRoot(document.getElementById('root')!).render(<StrictMode>
+  {startQuery.has('setup') ? <NeoTheme><Suspense fallback={null}><Setup error={startQuery.get('error')} /></Suspense></NeoTheme> : <NeoApp />}
+</StrictMode>);
