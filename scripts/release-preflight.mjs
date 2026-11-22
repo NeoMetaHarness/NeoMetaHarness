@@ -3,16 +3,18 @@
 //
 //   node scripts/release-preflight.mjs [--version 1.0.0] [--config <tauri override.json> ...]
 //
-// Checks: the app version agrees everywhere, it is a full X.Y.Z release, the effective updater config
-// (tauri.conf.json + tauri.bundle.conf.json + each --config + TAURI_CONFIG) has the real public key, the
-// release endpoint and updater artifacts enabled, the working tree is clean, `pnpm check` passes and
-// CHANGELOG.md has an entry for the version. Exit code 1 when any check fails.
+// Checks: the app version agrees everywhere and is a full X.Y.Z release; the public key checked in to
+// tauri.conf.json is a real minisign key (not the placeholder); the effective config (tauri.conf.json +
+// tauri.bundle.conf.json + each --config + TAURI_CONFIG) keeps that key, the release endpoint and the version,
+// and enables updater artifacts; the working tree is clean; `pnpm check` passes; CHANGELOG.md has an entry
+// for the version. Exit code 1 when any check fails.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  UPDATER_ENDPOINT, VERSION_FILES, assertReleaseVersion, changelogSection, mergePatch, parsePublicKey, readVersions, versionProblems,
+  TAURI_CONFIG, UPDATER_ENDPOINT, VERSION_FILES, assertReleaseVersion, changelogSection, checkedInPublicKey, mergePatch,
+  parsePublicKey, readVersions, versionProblems,
 } from './release-lib.mjs';
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,13 +59,23 @@ export function preflight({ root = DEFAULT_ROOT, version, configOverrides = [], 
   });
 
   check('updater config', () => {
-    const updater = effectiveTauriConfig(root, configOverrides).plugins?.updater;
-    const keyId = parsePublicKey(updater?.pubkey);
+    // 1. The checked-in key first: an override must never be what hides the placeholder.
+    const checkedIn = checkedInPublicKey(root);
+    const keyId = parsePublicKey(checkedIn);
+    // 2. Then the effective config the build will use (overrides and TAURI_CONFIG applied).
+    const effective = effectiveTauriConfig(root, configOverrides);
+    const updater = effective.plugins?.updater;
+    if (typeof updater?.pubkey !== 'string' || updater.pubkey.trim() !== checkedIn) {
+      throw new Error(`an override changes the updater public key; the release must use the key checked in to ${TAURI_CONFIG}`);
+    }
     const endpoints = updater?.endpoints ?? [];
     if (endpoints.length !== 1 || endpoints[0] !== UPDATER_ENDPOINT) {
       throw new Error(`updater endpoints must be exactly ["${UPDATER_ENDPOINT}"], got ${JSON.stringify(endpoints)}`);
     }
-    return `public key ${keyId}, endpoint ${UPDATER_ENDPOINT}`;
+    if (effective.version !== target) {
+      throw new Error(`effective config version is ${JSON.stringify(effective.version)}, not ${target}`);
+    }
+    return `checked-in public key ${keyId}, endpoint ${UPDATER_ENDPOINT}, version ${target}`;
   });
 
   check('updater artifacts', () => {

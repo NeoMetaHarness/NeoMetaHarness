@@ -3,17 +3,22 @@
 //
 //   node scripts/release-manifest.mjs --version 1.0.0 --out-dir release-out ^
 //     --artifact windows-x86_64-nsis="apps/neo-app/src-tauri/target/release/bundle/nsis/Neo Meta Harness_1.0.0_x64-setup.exe" ^
-//     [--artifact <platform>=<file> ...] [--notes-file notes.md] [--pubkey-file %USERPROFILE%\.tauri\neo-updater.key.pub]
+//     [--artifact <platform>=<file> ...]
 //
 // Each artifact's signature is read from "<file>.sig" (written by the Tauri bundler when
-// TAURI_SIGNING_PRIVATE_KEY is set). The artifacts are copied into --out-dir under the names GitHub will
-// serve, next to latest.json, ready for one `gh release create`. Fails closed on anything it cannot verify.
-// Offline only: never contacts GitHub and never reads a private key.
+// TAURI_SIGNING_PRIVATE_KEY is set) and verified against the artifact bytes with the updater public key
+// checked in to tauri.conf.json. Each artifact must be built for --version: from its file name (bound by
+// the signed trusted comment) or, for a macOS .app.tar.gz, from the bundle's Info.plist. The release notes
+// are the CHANGELOG.md section for the version and nothing else. The artifacts are copied into --out-dir
+// under the names GitHub will serve, next to latest.json, ready for one `gh release create`.
+// Fails closed on anything it cannot verify. Offline only: never contacts GitHub and never reads a private key.
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  assertReleaseVersion, changelogSection, parsePublicKey, parseSignature, readVersions, releaseDownloadBase, versionProblems,
+  assertNoKeyMaterial, assertReleaseVersion, changelogSection, checkedInPublicKey, parseSignature, plistShortVersion,
+  readTarGzEntry, readVersions, releaseDownloadBase, verifyMinisign, versionProblems,
 } from './release-lib.mjs';
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,6 +35,8 @@ const KINDS = {
 /** The installer a plain `<os>-<arch>` entry points at when several are published. */
 const PREFERRED = { windows: ['nsis', 'msi'], darwin: ['app'], linux: ['appimage', 'deb', 'rpm'] };
 const PLATFORM_KEY = /^(windows|darwin|linux)-(x86_64|aarch64|i686|armv7)-(nsis|msi|app|appimage|deb|rpm)$/;
+const INFO_PLIST = /^(?:\.\/)?[^/]+\.app\/Contents\/Info\.plist$/;
+const VERSION_IN_NAME = /(?:^|[_-])v?(\d+\.\d+\.\d+)(?=[_.-])/;
 
 /** The name GitHub serves an uploaded asset under (it replaces unsupported characters such as spaces with '.'). */
 export function githubAssetName(name) {
@@ -47,23 +54,41 @@ function assertHttpsBase(base) {
 }
 
 /**
- * Validate the inputs and build the manifest. Pure apart from reading the artifacts, their .sig files,
- * the version files and (when notes are not given) CHANGELOG.md.
+ * The version an artifact was built for. A macOS .app.tar.gz has no version in its name, so it is read from
+ * the bundle's Info.plist (CFBundleShortVersionString) inside the signed archive. Every other installer
+ * carries it in its file name, which the verified signature's trusted comment binds.
+ */
+async function artifactVersion(kind, source, name) {
+  if (kind === 'app') {
+    const plist = await readTarGzEntry(source, (path) => INFO_PLIST.test(path));
+    if (!plist) throw new Error(`${name} has no <name>.app/Contents/Info.plist`);
+    const found = plistShortVersion(plist.toString('utf8'));
+    if (!found) throw new Error(`${name}: Info.plist has no CFBundleShortVersionString`);
+    return found;
+  }
+  const found = VERSION_IN_NAME.exec(name)?.[1];
+  if (!found) throw new Error(`${name} has no version in its file name`);
+  return found;
+}
+
+/**
+ * Validate the inputs and build the manifest. Reads only the artifacts, their .sig files, the version files,
+ * the checked-in updater public key and CHANGELOG.md (the only source of release notes).
  * Returns { manifest, assets: [{ source, name }] }.
  */
-export function buildManifest({ root = DEFAULT_ROOT, version, artifacts, notes, pubDate, baseUrl, publicKey }) {
+export async function buildManifest({ root = DEFAULT_ROOT, version, artifacts, pubDate, baseUrl, ...rest }) {
+  const unknown = Object.keys(rest);
+  if (unknown.length) throw new Error(`Unknown option(s): ${unknown.join(', ')}`);
   assertReleaseVersion(version);
   const problems = versionProblems(readVersions(root), version);
   if (problems.length) throw new Error(`Version mismatch:\n  ${problems.join('\n  ')}`);
 
-  let releaseNotes = notes;
-  if (releaseNotes === undefined) {
-    const changelog = join(root, 'CHANGELOG.md');
-    if (!existsSync(changelog)) throw new Error('CHANGELOG.md is missing; pass --notes-file or add the release entry');
-    releaseNotes = changelogSection(readFileSync(changelog, 'utf8'), version);
-    if (releaseNotes === undefined) throw new Error(`CHANGELOG.md has no entry for ${version}`);
-  }
-  if (typeof releaseNotes !== 'string' || !releaseNotes.trim()) throw new Error('Release notes are empty');
+  const changelog = join(root, 'CHANGELOG.md');
+  if (!existsSync(changelog)) throw new Error('CHANGELOG.md is missing; add the release entry');
+  const notes = changelogSection(readFileSync(changelog, 'utf8'), version);
+  if (notes === undefined) throw new Error(`CHANGELOG.md has no entry for ${version}`);
+  if (!notes) throw new Error('Release notes are empty');
+  assertNoKeyMaterial(notes, `CHANGELOG.md entry for ${version}`);
 
   const date = pubDate === undefined ? new Date() : new Date(pubDate);
   if (Number.isNaN(date.getTime()) || (typeof pubDate === 'string' && !/^\d{4}-\d{2}-\d{2}T/.test(pubDate))) {
@@ -71,7 +96,7 @@ export function buildManifest({ root = DEFAULT_ROOT, version, artifacts, notes, 
   }
 
   const base = assertHttpsBase(baseUrl ?? releaseDownloadBase(version));
-  const expectedKeyId = publicKey === undefined ? undefined : parsePublicKey(publicKey);
+  const publicKey = checkedInPublicKey(root);
 
   if (!Array.isArray(artifacts) || artifacts.length === 0) throw new Error('At least one --artifact is required');
   const platforms = {};
@@ -90,10 +115,6 @@ export function buildManifest({ root = DEFAULT_ROOT, version, artifacts, notes, 
     if (KINDS[kind].os !== os || !KINDS[kind].matches(name)) {
       throw new Error(`${platform}: ${name} is not a ${kind} updater artifact`);
     }
-    const versionInName = name.match(/(?:^|[_-])v?(\d+\.\d+\.\d+)(?=[_.-])/)?.[1];
-    if (versionInName && versionInName !== version) {
-      throw new Error(`${platform}: ${name} was built for ${versionInName}, not ${version}`);
-    }
 
     const sigFile = `${source}.sig`;
     if (!existsSync(sigFile)) throw new Error(`${platform}: missing signature ${basename(sigFile)} (build with TAURI_SIGNING_PRIVATE_KEY set)`);
@@ -101,14 +122,18 @@ export function buildManifest({ root = DEFAULT_ROOT, version, artifacts, notes, 
     let parsed;
     try { parsed = parseSignature(signature); }
     catch (error) { throw new Error(`${platform}: invalid signature ${basename(sigFile)}: ${error.message}`); }
-    // minisign records the signed file name in the trusted comment ("timestamp:...\tfile:<name>").
-    const signedName = /(?:^|\s)file:(.+)$/.exec(parsed.trustedComment)?.[1]?.trim();
-    if (signedName !== undefined && signedName !== name) {
-      throw new Error(`${platform}: ${basename(sigFile)} signs ${signedName}, not ${name}`);
+    // Verify the signature over the artifact bytes, exactly as the installed updater will.
+    try { verifyMinisign(publicKey, await readFile(source), signature); }
+    catch (error) { throw new Error(`${platform}: ${basename(sigFile)} does not verify: ${error.message}`); }
+    // The signed trusted comment records the signed file name: "timestamp:...\tfile:<name>".
+    const signedName = /(?:^|\t)file:([^\t]+)/.exec(parsed.trustedComment)?.[1]?.trim();
+    if (signedName !== name) {
+      throw new Error(`${platform}: ${basename(sigFile)} signs ${signedName ?? 'no file name'}, not ${name}`);
     }
-    if (expectedKeyId !== undefined && parsed.keyId !== expectedKeyId) {
-      throw new Error(`${platform}: ${basename(sigFile)} was made with key ${parsed.keyId}, not the updater key ${expectedKeyId}`);
-    }
+    let builtFor;
+    try { builtFor = await artifactVersion(kind, source, name); }
+    catch (error) { throw new Error(`${platform}: ${error.message}`); }
+    if (builtFor !== version) throw new Error(`${platform}: ${name} was built for ${builtFor}, not ${version}`);
 
     const assetName = githubAssetName(name);
     if (assetNames.has(assetName)) throw new Error(`${platform}: two artifacts would be published as ${assetName}`);
@@ -130,7 +155,7 @@ export function buildManifest({ root = DEFAULT_ROOT, version, artifacts, notes, 
 
   const manifest = {
     version,
-    notes: releaseNotes.trim(),
+    notes,
     pub_date: date.toISOString().replace(/\.\d{3}Z$/, 'Z'),
     platforms: Object.fromEntries(Object.keys(platforms).sort().map((key) => [key, platforms[key]])),
   };
@@ -160,10 +185,8 @@ export function parseArgs(argv) {
     };
     if (flag === '--version') options.version = value();
     else if (flag === '--out-dir') options.outDir = value();
-    else if (flag === '--notes-file') options.notesFile = value();
     else if (flag === '--pub-date') options.pubDate = value();
     else if (flag === '--base-url') options.baseUrl = value();
-    else if (flag === '--pubkey-file') options.pubkeyFile = value();
     else if (flag === '--root') options.root = value();
     else if (flag === '--artifact') {
       const spec = value();
@@ -177,19 +200,14 @@ export function parseArgs(argv) {
   return options;
 }
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  if (options.pubkeyFile && /\.key$/i.test(options.pubkeyFile)) {
-    throw new Error('--pubkey-file must be the public key (.key.pub), never the private key');
-  }
-  const { manifest, assets } = buildManifest({
+  const { manifest, assets } = await buildManifest({
     root: options.root ? resolve(options.root) : DEFAULT_ROOT,
     version: options.version,
     artifacts: options.artifacts,
-    notes: options.notesFile ? readFileSync(options.notesFile, 'utf8') : undefined,
     pubDate: options.pubDate,
     baseUrl: options.baseUrl,
-    publicKey: options.pubkeyFile ? readFileSync(options.pubkeyFile, 'utf8').trim() : undefined,
   });
   const written = writeRelease({ outDir: options.outDir, manifest, assets });
   console.log(`release-manifest: wrote ${written}`);
@@ -197,8 +215,8 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { main(); } catch (error) {
+  main().catch((error) => {
     console.error(`release-manifest FAILED: ${error.message}`);
-    process.exit(1);
-  }
+    process.exitCode = 1;
+  });
 }
