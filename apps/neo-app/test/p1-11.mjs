@@ -758,7 +758,7 @@ const cargoCheckSucceeds = (tauriConfig) => {
   if (tauriConfig === undefined) delete env.TAURI_CONFIG; else env.TAURI_CONFIG = tauriConfig;
   execFileSync(cargoBin, ['check', '--release'], { cwd: srcTauriDir, stdio: 'pipe', env });
 };
-const keySourceDiffers = /differs from the key checked in to apps\/neo-app\/src-tauri\/tauri\.conf\.json/;
+const keySourceDiffers = /differs from the key checked in to (apps\/neo-app\/src-tauri\/)?tauri\.conf\.json/;
 
 // 6. Verify cargo check --release with TAURI_CONFIG setting only an unrelated plugin keeps the checked-in updater
 //    config: the owner key passes; with a placeholder patched in alongside, it fails closed.
