@@ -38,7 +38,7 @@ The desktop app updates itself from signed GitHub releases.
 
 #### Public key
 
-The owner's updater public key is **checked in** to `apps/neo-app/src-tauri/tauri.conf.json` under `plugins.updater.pubkey`. It is a public key, so committing it is safe. Until the owner's key is set there, the file holds the placeholder `REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY`.
+The owner's updater public key is **checked in** to `apps/neo-app/src-tauri/tauri.conf.json` under `plugins.updater.pubkey`. It is a public key, so committing it is safe. The checked-in key has key ID `CD4A392114308502`.
 
 Release builds fail closed in `build.rs` and in the `beforeBundleCommand` (`scripts/installer-check.mjs`) when any of these is true:
 - the key is missing, malformed, the placeholder or a test key;

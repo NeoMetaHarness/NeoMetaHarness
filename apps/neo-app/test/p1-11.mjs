@@ -88,13 +88,21 @@ function closeWindow(pid) {
 console.log('Building frontend with Vite...');
 execFileSync(process.execPath, [join(appDir, 'node_modules/vite/bin/vite.js'), 'build'], { cwd: appDir, stdio: 'pipe' });
 
-console.log('Running installer-check unit checks (verifying rejection of placeholder key and acceptance of valid test key)...');
+console.log('Running installer-check unit checks (checked-in owner key accepted; placeholder, differing and malformed keys rejected)...');
 const { runInstallerCheck } = await import('../../../scripts/installer-check.mjs');
 const baseTauriConf = JSON.parse(await readFile(join(appDir, 'src-tauri/tauri.conf.json'), 'utf8'));
 
-// Verify that default config with placeholder key strictly fails installer-check (no bypass)
+// The checked-in key is the owner's real public key, and it is accepted as is (no override, no bypass).
+const PLACEHOLDER_KEY = 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY';
+const checkedInKey = baseTauriConf.plugins.updater.pubkey;
+assert.ok(typeof checkedInKey === 'string' && checkedInKey !== PLACEHOLDER_KEY, 'tauri.conf.json carries the real owner key');
+runInstallerCheck({ ignoreEnv: true });
+
+// A placeholder in the checked-in config still fails closed. `configOverride` patches an in-memory copy of
+// tauri.conf.json (the "checked-in" config the check reads), never the file itself.
+const placeholderOverride = { plugins: { updater: { pubkey: PLACEHOLDER_KEY } } };
 assert.throws(
-  () => runInstallerCheck({ ignoreEnv: true }),
+  () => runInstallerCheck({ ignoreEnv: true, configOverride: placeholderOverride }),
   /release installer packaging requires a valid owner minisign public key, not a placeholder or empty string/,
   'installer-check must reject the placeholder public key with no bypass'
 );
@@ -419,23 +427,28 @@ delete process.env.TAURI_ENV_CONFIG;
 const differs = /differs from the key checked in to apps\/neo-app\/src-tauri\/tauri\.conf\.json/;
 for (const hook of [false, true]) {
   if (hook) process.env.TAURI_ENV_PLATFORM = 'windows'; else delete process.env.TAURI_ENV_PLATFORM;
-  // Env-only key over the checked-in placeholder: refused.
+  // Env-only key over a checked-in placeholder: refused.
   process.env.TAURI_CONFIG = JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } });
-  assert.throws(() => runInstallerCheck(), differs, 'TAURI_CONFIG-only key is refused (hook=' + hook + ')');
-  // Env key that differs from a real checked-in key: refused.
+  assert.throws(() => runInstallerCheck({ configOverride: placeholderOverride }), differs, 'TAURI_CONFIG-only key is refused (hook=' + hook + ')');
+  // Env key that differs from the real checked-in owner key: refused.
+  assert.throws(() => runInstallerCheck(), differs, 'TAURI_CONFIG key differing from the checked-in owner key is refused (hook=' + hook + ')');
+  // Env key that differs from another valid checked-in key: refused.
   assert.throws(
     () => runInstallerCheck({ configOverride: { plugins: { updater: { pubkey: acceptedCrlfKey } } } }),
     differs,
     'TAURI_CONFIG key differing from the checked-in key is refused (hook=' + hook + ')'
   );
-  // Env key equal to the checked-in key: accepted.
+  // Env key equal to the checked-in key: accepted (the real owner key, and a fixture key).
   runInstallerCheck({ configOverride: { plugins: { updater: { pubkey: validReleaseKey } } } });
-  // Unrelated TAURI_CONFIG settings keep the checked-in key (and its placeholder still fails closed).
+  process.env.TAURI_CONFIG = JSON.stringify({ plugins: { updater: { pubkey: checkedInKey } } });
+  runInstallerCheck();
+  // Unrelated TAURI_CONFIG settings keep the checked-in key: the owner key passes, a placeholder fails closed.
   process.env.TAURI_CONFIG = JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true } } });
-  assert.throws(() => runInstallerCheck(), /release installer packaging requires a valid owner minisign public key/);
+  runInstallerCheck();
+  assert.throws(() => runInstallerCheck({ configOverride: placeholderOverride }), /release installer packaging requires a valid owner minisign public key/);
   runInstallerCheck({ configOverride: { plugins: { updater: { pubkey: validReleaseKey } } } });
   // A placeholder in TAURI_CONFIG fails on the key itself.
-  process.env.TAURI_CONFIG = JSON.stringify({ plugins: { updater: { pubkey: 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY' } } });
+  process.env.TAURI_CONFIG = JSON.stringify({ plugins: { updater: { pubkey: PLACEHOLDER_KEY } } });
   assert.throws(
     () => runInstallerCheck({ configOverride: { plugins: { updater: { pubkey: validReleaseKey } } } }),
     /release installer packaging requires a valid owner minisign public key/
@@ -448,7 +461,14 @@ delete process.env.TAURI_ENV_PLATFORM;
 assert.throws(
   () => runInstallerCheck({ ignoreEnv: true, cliArgs: ['--config', JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } })] }),
   differs,
-  '--config key differing from the checked-in placeholder is refused'
+  '--config key differing from the checked-in owner key is refused'
+);
+runInstallerCheck({ ignoreEnv: true, cliArgs: ['--config', JSON.stringify({ plugins: { updater: { pubkey: checkedInKey } } })] });
+// Deleting the real checked-in owner key through --config is refused too.
+assert.throws(
+  () => runInstallerCheck({ ignoreEnv: true, cliArgs: ['--config', JSON.stringify({ plugins: { updater: { pubkey: null } } })] }),
+  /plugins\.updater\.pubkey is missing/,
+  '--config null patch deleting the checked-in owner key is refused'
 );
 runInstallerCheck({
   ignoreEnv: true,
@@ -546,7 +566,7 @@ assert.throws(
   /plugins\.updater\.pubkey is missing/,
   'a later null patch wins over an earlier restore'
 );
-console.log('Installer check verification passed (effective config merging, placeholder rejected, structural validation enforced, test key accepted).');
+console.log('Installer check verification passed (checked-in owner key accepted, placeholder and differing keys rejected, effective config merging, structural validation enforced).');
 
 console.log('Running update-state unit test (frontend renders only update_state; out-of-order replies dropped)...');
 execFileSync(process.execPath, ['--experimental-strip-types', join(appDir, 'test/p1-11-update-state.mjs')], { cwd: appDir, stdio: 'pipe' });
@@ -605,9 +625,11 @@ assertCargoCheckFailsWith(
   'empty updater pubkey'
 );
 
-// 3. Verify cargo check --release FAILS with default placeholder key (no config override provided)
+// 3. Verify cargo check --release FAILS with the placeholder key. The checked-in file carries the real owner key,
+//    so the placeholder is patched in through TAURI_CONFIG (the same merge-then-validate path build.rs uses);
+//    the key is validated before the key-source rule, so the placeholder itself is reported.
 assertCargoCheckFailsWith(
-  { TAURI_CONFIG: undefined, TAURI_ENV_CONFIG: undefined },
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: PLACEHOLDER_KEY } } }), TAURI_ENV_CONFIG: undefined },
   /placeholder updater public key REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY must not ship in a release build/,
   'placeholder key'
 );
@@ -730,42 +752,42 @@ for (const altFile of ['tauri.windows.conf.json', 'tauri.windows.conf.json5', 'T
   }
 }
 
-// 6. Verify cargo check --release FAILS when TAURI_CONFIG only sets unrelated plugin (updater retained, base placeholder rejected)
+const cargoCheckSucceeds = (tauriConfig) => {
+  const env = { ...process.env };
+  delete env.TAURI_ENV_CONFIG;
+  if (tauriConfig === undefined) delete env.TAURI_CONFIG; else env.TAURI_CONFIG = tauriConfig;
+  execFileSync(cargoBin, ['check', '--release'], { cwd: srcTauriDir, stdio: 'pipe', env });
+};
+const keySourceDiffers = /differs from the key checked in to apps\/neo-app\/src-tauri\/tauri\.conf\.json/;
+
+// 6. Verify cargo check --release with TAURI_CONFIG setting only an unrelated plugin keeps the checked-in updater
+//    config: the owner key passes; with a placeholder patched in alongside, it fails closed.
+cargoCheckSucceeds(JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true } } }));
 assertCargoCheckFailsWith(
-  { TAURI_CONFIG: JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true } } }) },
+  { TAURI_CONFIG: JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true }, updater: { pubkey: PLACEHOLDER_KEY } } }) },
   /placeholder updater public key REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY must not ship in a release build/,
-  'unrelated plugin override without pubkey'
+  'unrelated plugin override with placeholder pubkey'
 );
 
-// 7. Verify cargo check --release SUCCEEDS when unrelated plugin AND valid release key are supplied
-execFileSync(cargoBin, ['check', '--release'], {
-  cwd: srcTauriDir,
-  stdio: 'pipe',
-  env: {
-    ...process.env,
-    TAURI_CONFIG: JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true }, updater: { pubkey: validReleaseKey } } }),
-  },
-});
+// 7. Verify cargo check --release SUCCEEDS when unrelated plugin AND the checked-in owner key are supplied
+cargoCheckSucceeds(JSON.stringify({ plugins: { unrelatedPlugin: { enabled: true }, updater: { pubkey: checkedInKey } } }));
 
-// 8. Verify cargo check --release SUCCEEDS with accepted CRLF key fixture
-execFileSync(cargoBin, ['check', '--release'], {
-  cwd: srcTauriDir,
-  stdio: 'pipe',
-  env: {
-    ...process.env,
-    TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: acceptedCrlfKey } } }),
-  },
-});
+// 8. Verify cargo check --release FAILS when TAURI_CONFIG swaps in a different valid key (CRLF fixture, release fixture)
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: acceptedCrlfKey } } }) },
+  keySourceDiffers,
+  'TAURI_CONFIG with a valid CRLF key that differs from the checked-in key'
+);
+assertCargoCheckFailsWith(
+  { TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }) },
+  keySourceDiffers,
+  'TAURI_CONFIG with a valid key that differs from the checked-in key'
+);
 
-// 9. Verify cargo check --release SUCCEEDS when valid release key is supplied via TAURI_CONFIG
-execFileSync(cargoBin, ['check', '--release'], {
-  cwd: srcTauriDir,
-  stdio: 'pipe',
-  env: {
-    ...process.env,
-    TAURI_CONFIG: JSON.stringify({ plugins: { updater: { pubkey: validReleaseKey } } }),
-  },
-});
+// 9. Verify cargo check --release SUCCEEDS with the checked-in owner key: TAURI_CONFIG unset (how release builds
+//    run), or repeating the same key.
+cargoCheckSucceeds(undefined);
+cargoCheckSucceeds(JSON.stringify({ plugins: { updater: { pubkey: checkedInKey } } }));
 
 // 10. Verify warm build guards: build.rs reruns when TAURI_ENV_CONFIG changes or alternate config is added
 assertCargoCheckFailsWith(
@@ -786,7 +808,7 @@ try {
   if (existsSync(warmAltPath)) rmSync(warmAltPath, { force: true });
 }
 
-console.log('PASS build.rs release fail-closed verification (unresolvable config, placeholder, malformed keys, alternate configs, and unrelated plugin override verified; valid release config passes)');
+console.log('PASS build.rs release fail-closed verification (unresolvable config, placeholder, malformed and differing keys, alternate configs, and unrelated plugin override verified; checked-in owner key passes)');
 console.log('Building desktop binary with Cargo (debug)...');
 execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['build'], {
   cwd: join(appDir, 'src-tauri'), stdio: 'pipe',

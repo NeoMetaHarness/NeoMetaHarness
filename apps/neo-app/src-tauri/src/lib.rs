@@ -1409,7 +1409,7 @@ mod tests {
         let real = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQpSV1JQVjA1RlVrdEZXVnBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYQo=";
         let other = "dW50cnVzdGVkIGNvbW1lbnQ6IHJlbGVhc2UgcHVibGljIGtleQ0KUldSUFYwNUZVa3RGV1ZwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGENCg==";
         assert!(validate_release_key_source(Some(real), Some(real)).is_ok());
-        // TAURI_CONFIG-only key over the checked-in placeholder, or a different real key: refused.
+        // TAURI_CONFIG-only key over a placeholder checked-in key, or a different real key: refused.
         let err = validate_release_key_source(Some("REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY"), Some(real)).unwrap_err();
         assert!(err.contains("differs from the key checked in"));
         assert!(validate_release_key_source(Some(real), Some(other)).is_err());
