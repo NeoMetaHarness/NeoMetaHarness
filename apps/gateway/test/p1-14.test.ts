@@ -60,7 +60,6 @@ async function prepareFixture(mode: 'server' | 'desktop', withDeploymentRoutes =
         });
         for (const [path, result] of Object.entries({
           'github/configure': { ok: true },
-          'github/status': { repositories: [], mode: 'observe', hasToken: false, pausedUntil: null, stopped: false },
           'github/poll': { checked: 2, created: 1, pausedUntil: null },
           'github/pull-request': null,
           'upstream/check': { checked: 2, drift: 1 },
@@ -69,6 +68,9 @@ async function prepareFixture(mode: 'server' | 'desktop', withDeploymentRoutes =
           'cron/list': [{ id: 'system-upstream', botId: 'neo-system', text: '@neo/upstream check', schedule: 'weekly', mode: 'observe' }],
           'cron/delete': { deleted: true },
         })) ctx.route(path, () => result);
+        ctx.route('github/status', () => ({
+          repositories: [], mode: modes.get('default') ?? 'observe', hasToken: false, pausedUntil: null, stopped: false,
+        }));
         for (const path of ['accept', 'dismiss', 'approval/decide', 'reply', 'retry']) {
           ctx.route(path, ({ body }) => ({ ...items.find(item => item.id === body.id), text: path + ':' + (body.role ?? '') }));
         }
@@ -294,6 +296,13 @@ test('P1-14 desktop: a workspace admin can read and write listed settings and se
     });
     assert.equal((await fixture.authPost('organization/set-active', { organizationId: workspace.id }, admin.token)).status, 200);
     const client = fixture.client(admin.token);
+    assert.notEqual((await client.extensions.list()).find((ext) => ext.id === 'channels')?.settingsVisible, false);
+    const ownerClient = fixture.client(gateway.desktopToken);
+    await ownerClient.extensions.enable({ id: fixture.id });
+    assert.deepEqual(await client.inbox.acceptMode.set({ mode: 'act-with-approval' }), { mode: 'act-with-approval' });
+    assert.deepEqual(await client.inbox.acceptMode.get(), { mode: 'act-with-approval' });
+    await assert.rejects(ownerClient.inbox.acceptMode.deployment.get(), notFound);
+    await assert.rejects(ownerClient.inbox.acceptMode.deployment.set({ mode: 'act' }), notFound);
     assert.equal((await client.settings.set({ extension: 'channels', values: { label: 'desktop' } })).values.label, 'desktop');
     assert.equal((await client.settings.get({ extension: 'channels' })).values.label, 'desktop');
     const scope = { kind: 'engine' as const, workspaceId: workspace.id, subjectId: 'channels' };
@@ -364,6 +373,11 @@ test('P1-14 server: deployment routes work with a workspace viewer role', async 
     console.log('P1-14_LIFECYCLE PASS only the deployment owner can enable or disable server extensions');
 
     const channelScope = { kind: 'engine' as const, workspaceId: 'default', subjectId: 'channels' };
+    await assert.rejects(setup.settings.get({ extension: 'channels' }), forbidden);
+    const founderExtensions = await setup.extensions.list();
+    assert.equal(founderExtensions.find((ext) => ext.id === 'channels')?.settingsVisible, false);
+    assert.notEqual(founderExtensions.find((ext) => ext.id === 'sample-settings')?.settingsVisible, false);
+    assert.notEqual((await deployment.extensions.list()).find((ext) => ext.id === 'channels')?.settingsVisible, false);
     await assert.rejects(setup.settings.set({ extension: 'channels', values: { label: 'blocked' } }), forbidden);
     await assert.rejects(setup.vault.put({ scope: channelScope, name: 'SEC_APIKEY', value: 'blocked' }), forbidden);
     const wrongBucket = (error: unknown) => {
@@ -455,6 +469,17 @@ test('P1-14 server: deployment routes work with a workspace viewer role', async 
     assert.deepEqual(await workspaceAdmin.inbox.acceptMode.set({ mode: 'act-with-approval' }), { mode: 'act-with-approval' });
     assert.deepEqual(await deployment.inbox.acceptMode.get(), { mode: 'act-with-approval' });
     await assert.rejects(deployment.inbox.acceptMode.set({ mode: 'observe' }), forbidden);
+    for (const client of [setup, workspaceAdmin]) {
+      await assert.rejects(client.inbox.acceptMode.deployment.get(), forbidden);
+      await assert.rejects(client.inbox.acceptMode.deployment.set({ mode: 'act' }), forbidden);
+    }
+    const deploymentMode = deployment.inbox.acceptMode.deployment;
+    assert.deepEqual(await deploymentMode.get(), { mode: 'observe' });
+    assert.deepEqual(await deploymentMode.set({ mode: 'act' }), { mode: 'act' });
+    assert.deepEqual(await deploymentMode.get(), { mode: 'act' });
+    assert.deepEqual(await workspaceAdmin.inbox.acceptMode.get(), { mode: 'act-with-approval' });
+    assert.deepEqual(await otherWorkspace.inbox.acceptMode.get(), { mode: 'observe' });
+    console.log('P1-14_ACCEPT_MODE PASS deployment owner can set the deployment mode without changing workspace modes');
 
     const hermes = deployment.x['engine-hermes'];
     assert.equal((await hermes.profiles.list()).profiles[0]?.name, 'scripted');
@@ -472,7 +497,7 @@ test('P1-14 server: deployment routes work with a workspace viewer role', async 
 
     const github = deployment.inbox.github;
     assert.deepEqual(await github.configure({ repositories: [] }), { ok: true });
-    assert.equal((await github.status()).mode, 'observe');
+    assert.equal((await github.status()).mode, 'act');
     assert.equal((await github.poll()).created, 1);
     assert.equal(await github.pullRequest({ repo: 'fixture/repo', branch: 'main', commit: 'a'.repeat(40) }), null);
     const upstream = deployment.inbox.upstream;

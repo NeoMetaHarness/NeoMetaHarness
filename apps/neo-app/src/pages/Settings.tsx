@@ -382,6 +382,7 @@ export default function Settings({ onOpen }: { onOpen: (path: '/settings/channel
   const configurableExtensions = extensions.filter(
     (ext) =>
       ext.status === 'running' &&
+      ext.settingsVisible !== false &&
       ext.settings &&
       typeof ext.settings === 'object' &&
       Object.keys((ext.settings as Record<string, unknown>).properties || {}).length > 0

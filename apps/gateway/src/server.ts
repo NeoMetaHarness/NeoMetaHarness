@@ -691,6 +691,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return invokeInbox('dismiss', { ...input, role }) as Promise<InboxItem>;
       }),
       acceptMode: {
+        deployment: {
+          get: os.inbox.acceptMode.deployment.get.handler(async ({ context }) => {
+            authorize('inbox.acceptMode.deployment.get', context);
+            if (mode !== 'server') throw new ORPCError('NOT_FOUND');
+            return invokeInbox('accept-mode/get', { workspace: DEPLOYMENT_CONFIG }) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
+          }),
+          set: os.inbox.acceptMode.deployment.set.handler(async ({ input, context }) => {
+            authorize('inbox.acceptMode.deployment.set', context);
+            if (mode !== 'server') throw new ORPCError('NOT_FOUND');
+            return invokeInbox('accept-mode/set', { mode: input.mode, workspace: DEPLOYMENT_CONFIG }) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
+          }),
+        },
         get: os.inbox.acceptMode.get.handler(async ({ context }) => {
           authorize('inbox.acceptMode.get', context);
           return invokeInbox('accept-mode/get', { workspace: acceptModeWorkspace(context) }) as Promise<{ mode: import('@neometaharness/contracts').AcceptMode }>;
@@ -1353,7 +1365,11 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     extensions: {
       list: os.extensions.list.handler(async ({ context }) => {
         authorize('extensions.list', context);
-        return Promise.all(kernel.list().map(withHealth));
+        const extensions = await Promise.all(kernel.list().map(withHealth));
+        if (mode === 'desktop' || canSeeDeploymentItems(context)) return extensions;
+        return extensions.map((extension) => hasDeploymentSettings(extension.id)
+          ? { ...extension, settingsVisible: false }
+          : extension);
       }),
       upgrade: os.extensions.upgrade.handler(async ({ input, context }) => {
         authorize('extensions.upgrade', context);

@@ -10,6 +10,7 @@ export const extensionStatusSchema = z.object({
   health: z.object({ ok: z.boolean(), pid: z.number().optional() }).optional(),
   routes: z.array(z.string()).optional(),
   settings: z.record(z.string(), z.unknown()).optional(),
+  settingsVisible: z.boolean().optional(),
 });
 
 export const computerActionSchema = z.discriminatedUnion('action', [
@@ -736,6 +737,10 @@ export const inboxContract = {
   acceptMode: {
     get: oc.output(z.object({ mode: acceptModeSchema })),
     set: oc.input(z.object({ mode: acceptModeSchema })).output(z.object({ mode: acceptModeSchema })),
+    deployment: {
+      get: oc.output(z.object({ mode: acceptModeSchema })),
+      set: oc.input(z.object({ mode: acceptModeSchema })).output(z.object({ mode: acceptModeSchema })),
+    },
   },
   reply: oc.input(z.object({ id: z.string().min(1), answer: z.string().trim().min(1) })).output(inboxItemSchema),
   approval: { decide: oc.input(z.object({ id: z.string().min(1),

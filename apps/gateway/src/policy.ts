@@ -243,6 +243,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'inbox.dismiss': 'member',
   'inbox.acceptMode.get': 'viewer',
   'inbox.acceptMode.set': 'admin',
+  'inbox.acceptMode.deployment.get': 'deployment-owner',
+  'inbox.acceptMode.deployment.set': 'deployment-owner',
   'inbox.reply': 'member',
   'inbox.approval.decide': 'member',
   'inbox.retry': 'member',
