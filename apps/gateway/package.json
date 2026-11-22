@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
-"test": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts test/vault-rpc.test.ts test/auth-gateway.test.ts test/policy.test.ts test/security.test.ts test/settings.test.ts test/channel-bus.test.ts test/memory-workspace.test.ts test/inbox-workspace.test.ts test/settings-workspace.test.ts test/models-workspace.test.ts && tsc --noEmit",
+    "test": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts test/vault-rpc.test.ts test/auth-gateway.test.ts test/policy.test.ts test/security.test.ts test/settings.test.ts test/channel-bus.test.ts test/memory-workspace.test.ts test/inbox-workspace.test.ts test/settings-workspace.test.ts test/models-workspace.test.ts && tsc --noEmit",
     "test:p1": "tsx test/p1.test.ts && tsx --test test/resolver.test.ts test/vault-rpc.test.ts && tsc --noEmit"
   },
   "dependencies": {
@@ -20,12 +20,12 @@
     "@orpc/contract": "1.16.2",
     "@orpc/server": "1.16.2",
     "better-auth": "1.7.25",
-    "ws": "8.18.3"
+    "ws": "8.18.3",
+    "tsx": "4.20.6"
   },
   "devDependencies": {
     "@types/node": "22.18.13",
     "@types/ws": "8.18.1",
-    "tsx": "4.20.6",
     "typescript": "5.9.3"
   }
 }

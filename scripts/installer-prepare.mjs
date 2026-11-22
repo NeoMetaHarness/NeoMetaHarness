@@ -17,12 +17,14 @@ if (Number(process.versions.node.split('.')[0]) < 22) {
 }
 
 function deploy(packageName, destination) {
-  const args = ['--config.strict-dep-builds=false', '--config.verifyDepsBeforeRun=false', '--filter', packageName, 'deploy', '--legacy', destination];
+  const args = ['--config.strict-dep-builds=false', '--config.verifyDepsBeforeRun=false', '--filter', packageName, 'deploy', '--prod', '--legacy', destination];
   const deployPath = relative(root, destination).replaceAll('\\\\', '/');
   const result = process.platform === 'win32'
-    ? spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/c', `pnpm.cmd --config.strict-dep-builds=false --config.verifyDepsBeforeRun=false --filter ${packageName} deploy --legacy ${deployPath}`], { cwd: root, stdio: 'inherit' })
+    ? spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/c', `pnpm.cmd --config.strict-dep-builds=false --config.verifyDepsBeforeRun=false --filter ${packageName} deploy --prod --legacy ${deployPath}`], { cwd: root, stdio: 'inherit' })
     : spawnSync('pnpm', args, { cwd: root, stdio: 'inherit' });
   if (result.status !== 0) throw new Error(`pnpm deploy failed for ${packageName}: ${result.error?.message ?? result.status}`);
+  // Installed apps run sources only: tests stay in the repository.
+  rmSync(join(destination, 'test'), { recursive: true, force: true });
 }
 
 rmSync(runtime, { recursive: true, force: true });

@@ -239,6 +239,9 @@ importers:
       better-auth:
         specifier: 1.7.25
         version: 1.7.25(@opentelemetry/api@1.10.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      tsx:
+        specifier: 4.20.6
+        version: 4.20.6
       ws:
         specifier: 8.18.3
         version: 8.18.3
@@ -249,9 +252,6 @@ importers:
       '@types/ws':
         specifier: 8.18.1
         version: 8.18.1
-      tsx:
-        specifier: 4.20.6
-        version: 4.20.6
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -741,6 +741,9 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.2.0
         version: 2.2.0
+      '@neometaharness/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@neometaharness/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
@@ -760,9 +763,6 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
-      '@neometaharness/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@orpc/contract':
         specifier: 1.16.2
         version: 1.16.2(@opentelemetry/api@1.10.0)
