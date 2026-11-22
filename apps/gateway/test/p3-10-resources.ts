@@ -53,8 +53,10 @@ try {
   };
   const rpcA = await client(alpha.id);
   const rpcB = await client(bravo.id);
+  // Extension lifecycle is deployment-owner only on a server (P1-14) and needs the owner's session, not an API key.
+  const deployment: any = createORPCClient<any>(new RPCLink({url: base, headers: {authorization: `Bearer ${token}`}}));
   for (const id of Object.keys(sources)) {
-    assert.equal((await rpcA.extensions.enable({id})).status, 'running', `${id} running`);
+    assert.equal((await deployment.extensions.enable({id})).status, 'running', `${id} running`);
   }
   const botA = await rpcA.agents.bots.create({name: 'Alpha bot'});
   const botB = await rpcB.agents.bots.create({name: 'Bravo bot'});
