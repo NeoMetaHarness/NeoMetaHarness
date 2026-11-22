@@ -8,6 +8,7 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
 let failure: 'exit' | 'xdotool' | 'abort' | undefined;
 let cleanupFailure: 'stop' | 'delete' | undefined;
 let nextCleanupResponse: { method: 'POST' | 'DELETE'; status: 204 | 404 } | undefined;
+let sandboxLookup: 'absent' | 'present' | 'html' | 'generic' = 'absent';
 let signalCommandStarted: (() => void) | undefined;
 const calls: { path: string; method: string; body: Record<string, unknown> }[] = [];
 
@@ -22,6 +23,21 @@ const fakeHttp: typeof fetch = async (url, init) => {
     const status = nextCleanupResponse.status;
     nextCleanupResponse = undefined;
     return new Response(null, { status });
+  }
+  if (init?.method === 'GET' && /^\/api\/v1\/sandboxes\/[^/]+$/.test(path)) {
+    if (sandboxLookup === 'html') return new Response('<html>route missing</html>', {
+      status: 404, headers: { 'content-type': 'text/html' },
+    });
+    if (sandboxLookup === 'generic') return new Response(JSON.stringify({ detail: 'Not Found' }), {
+      status: 404, headers: { 'content-type': 'application/json' },
+    });
+    if (sandboxLookup === 'present') return new Response(JSON.stringify({
+      ok: true, type: 'sandbox.info', sandbox: { id: path.split('/').pop() },
+    }), { headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({
+      ok: false, type: 'sandbox.error', status: 404, code: 'not_found',
+      error: { code: 'not_found', status: 404 },
+    }), { status: 404, headers: { 'content-type': 'application/json' } });
   }
   let response: unknown;
   if (path === '/api/v1/sandboxes') {
@@ -141,7 +157,25 @@ try {
     await provider[operation](cleanupId);
     assert.equal(calls.length, callCount, `successful ${operation} HTTP ${status} clears the tracked instance`);
   }
-  console.log('Boat provider PASS workspace+snapshot=true lease+screen=true failed-command+xdotool+abort=true cleanup-retry+204+404=true');
+  // A generic 404 or an HTML fallback can hide a live sandbox. Retry must stay possible.
+  for (const [operation, lookup, digit] of [
+    ['release', 'html', '8'], ['terminate', 'generic', '9'], ['release', 'present', 'a'],
+  ] as const) {
+    const cleanupId = 'neo-' + digit.repeat(24);
+    await provider.provision({ id: cleanupId }, { workspaceId: 'workspace-A' });
+    sandboxLookup = lookup;
+    nextCleanupResponse = { method: operation === 'release' ? 'POST' : 'DELETE', status: 404 };
+    const callsBefore = calls.length;
+    await assert.rejects(provider[operation](cleanupId), /HTTP 404/,
+      'unconfirmed ' + lookup + ' 404 must leave ' + operation + ' pending');
+    assert.equal(calls.slice(callsBefore).filter(call => call.method === 'GET').length, 1,
+      'cleanup verifies a 404 through GET sandbox');
+    sandboxLookup = 'absent';
+    nextCleanupResponse = { method: operation === 'release' ? 'POST' : 'DELETE', status: 204 };
+    await provider[operation](cleanupId);
+    assert.equal(nextCleanupResponse, undefined, 'retry must repeat the remote cleanup');
+  }
+  console.log('Boat provider PASS workspace+snapshot=true lease+screen=true cleanup-retry+204+verified404+unconfirmed404=true');
 } finally {
   await provider.close();
 }

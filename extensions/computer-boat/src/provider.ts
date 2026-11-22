@@ -72,8 +72,28 @@ export class BoatComputerProvider implements ComputerProvider {
     const response = await instance.http(instance.url + path, request);
     const cleanup = (method === 'POST' && /^\/sandboxes\/[^/]+\/stop$/.test(path)) ||
       (method === 'DELETE' && /^\/sandboxes\/[^/]+$/.test(path));
-    // A missing remote sandbox is already cleaned up. Only sandbox stop/delete have this behavior.
-    if (cleanup && response.status === 404) return undefined as T;
+    // A cleanup 404 can also mean an invalid route. Confirm absence using Boat's documented
+    // GET /sandboxes/{id} error envelope before dropping the tracked instance.
+    if (cleanup && response.status === 404) {
+      const sandboxPath = path.endsWith('/stop') ? path.slice(0, -'/stop'.length) : path;
+      const confirmation = await instance.http(instance.url + sandboxPath, {
+        method: 'GET',
+        headers: request.headers,
+      });
+      if (confirmation.status === 404 && confirmation.headers.get('content-type')?.includes('application/json')) {
+        const result = await confirmation.json().catch(() => null) as {
+          ok?: unknown;
+          type?: unknown;
+          status?: unknown;
+          code?: unknown;
+          error?: { status?: unknown; code?: unknown };
+        } | null;
+        if (result?.ok === false && result.type === 'sandbox.error' && result.status === 404 &&
+          result.code === 'not_found' && result.error?.code === 'not_found' && result.error.status === 404) {
+          return undefined as T;
+        }
+      }
+    }
     if (!response.ok) throw new Error(`Boat API ${method} ${path.split('?')[0]} returned HTTP ${response.status}`);
     if (cleanup) {
       const payload = (await response.text()).trim();
