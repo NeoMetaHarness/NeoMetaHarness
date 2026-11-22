@@ -12,15 +12,17 @@ const snap = (revision, fields = {}) => ({
 function fakeShell() {
   const pending = [];
   const commands = [];
-  const invoke = (name) => {
+  const args = [];
+  const invoke = (name, payload) => {
     if (name !== 'update_state') {
       commands.push(name);
+      args.push(payload);
       // A command reply that would be wrong to render: an old "Install" version.
       return Promise.resolve('9.9.9');
     }
     return new Promise((resolve) => pending.push(resolve));
   };
-  return { invoke, pending, commands };
+  return { invoke, pending, commands, args };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -75,11 +77,31 @@ assert.equal(toUpdateInfo(snap(1, { error: 'offline' })).status, 'offline');
 assert.equal(toUpdateInfo(snap(1, { available: true, version: '1.2.4', installing: true })).available, false, 'no second Install while installing');
 assert.equal(toUpdateInfo(snap(1, { available: true, version: '1.2.4', installing: true })).status, 'Installing update and restarting…');
 
-// 5. No shell (web/PWA): nothing to read, nothing rendered.
+// 5. Install sends exactly the {generation, version} on screen, and nothing when no Install is shown.
+{
+  const shell = fakeShell();
+  const store = createUpdateStore(shell.invoke);
+  await store.install();
+  assert.deepEqual(shell.commands, [], 'no Install shown, nothing sent');
+  const load = store.refresh();
+  shell.pending[0](snap(4, { generation: 6, available: true, version: '1.2.5' }));
+  await load;
+  const install = store.install();
+  await tick();
+  shell.pending[1](snap(5, { generation: 6, available: true, version: '1.2.5', installing: true }));
+  await tick();
+  shell.pending[2](snap(6, { generation: 6, available: true, version: '1.2.5', error: 'Update state changed, check again' }));
+  await install;
+  assert.deepEqual(shell.commands, ['install_update']);
+  assert.deepEqual(shell.args, [{ generation: 6, version: '1.2.5' }]);
+  assert.equal(store.get().status, 'Update state changed, check again', 'a refusal is shown from update_state');
+}
+
+// 6. No shell (web/PWA): nothing to read, nothing rendered.
 {
   const store = createUpdateStore(null);
   await store.check();
   assert.equal(store.get().status, '');
 }
 
-console.log('P1-11_UPDATE_STATE PASS single source of truth, out-of-order replies dropped by revision, replies never rendered');
+console.log('P1-11_UPDATE_STATE PASS single source of truth, out-of-order replies dropped by revision, replies never rendered, install sends the rendered generation and version');

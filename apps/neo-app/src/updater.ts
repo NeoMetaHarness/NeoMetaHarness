@@ -21,7 +21,7 @@ export interface UpdateSnapshot {
   error: string | null;
 }
 
-type Invoke = (name: string) => Promise<unknown>;
+type Invoke = (name: string, args?: Record<string, unknown>) => Promise<unknown>;
 
 const EMPTY: UpdateInfo = { available: false, version: null, status: '', checking: false, error: null };
 
@@ -50,6 +50,8 @@ export function toUpdateInfo(snapshot: UpdateSnapshot): UpdateInfo {
 export function createUpdateStore(invoke: Invoke | null) {
   let state: UpdateInfo = EMPTY;
   let revision = -1;
+  /** The snapshot behind what is on screen; Install authorizes exactly its {generation, version}. */
+  let rendered: UpdateSnapshot | null = null;
   const listeners = new Set<(state: UpdateInfo) => void>();
 
   const notify = () => {
@@ -72,14 +74,15 @@ export function createUpdateStore(invoke: Invoke | null) {
     }
     if (!snapshot || typeof snapshot.revision !== 'number' || snapshot.revision < revision) return;
     revision = snapshot.revision;
+    rendered = snapshot;
     state = toUpdateInfo(snapshot);
     notify();
   };
 
   /** Run a command, then render whatever the shell state says (the reply itself is ignored). */
-  const command = async (name: string): Promise<void> => {
+  const command = async (name: string, args?: Record<string, unknown>): Promise<void> => {
     if (!invoke) return;
-    const running = invoke(name);
+    const running = args ? invoke(name, args) : invoke(name);
     void refresh(); // shows "checking"/"installing" once the shell has started
     try {
       await running;
@@ -100,14 +103,22 @@ export function createUpdateStore(invoke: Invoke | null) {
     },
     refresh,
     check: () => command('check_for_updates'),
-    install: () => command('install_update'),
+    /**
+     * Install the candidate on screen. The shell refuses ("Update state changed, check again") if its
+     * generation or version moved on since this was rendered.
+     */
+    install: async (): Promise<void> => {
+      const shown = rendered;
+      if (!state.available || !shown?.version) return;
+      await command('install_update', { generation: shown.generation, version: shown.version });
+    },
   };
 }
 
 function nativeInvoke(): Invoke | null {
   if (typeof window === 'undefined') return null;
   const native = (window as unknown as { __TAURI_INTERNALS__?: { invoke: Invoke } }).__TAURI_INTERNALS__;
-  return native ? (name) => native.invoke(name) : null;
+  return native ? (name, args) => native.invoke(name, args) : null;
 }
 
 const store = createUpdateStore(nativeInvoke());

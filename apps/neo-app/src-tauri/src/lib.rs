@@ -51,13 +51,24 @@ pub struct CandidateState {
 }
 
 impl CandidateState {
+    /// Record a refused request so the frontend shows why; returns the message for the command reply.
+    fn refuse(&mut self, message: &str) -> String {
+        self.revision += 1;
+        self.error = Some(message.to_string());
+        message.to_string()
+    }
+
     /// A check is starting (startup or manual): it supersedes every check already in flight.
-    pub fn begin_check(&mut self) -> u64 {
+    /// Refused while an install runs: checks and installs never overlap.
+    pub fn begin_check(&mut self) -> Result<u64, String> {
+        if self.installing {
+            return Err(self.refuse("An update is being installed; check again after it finishes"));
+        }
         self.generation += 1;
         self.revision += 1;
         self.checking = true;
         self.error = None;
-        self.generation
+        Ok(self.generation)
     }
 
     /// Store a finished check, only if it is still the newest. Returns whether it applied.
@@ -81,16 +92,35 @@ impl CandidateState {
         true
     }
 
-    /// Installing the current candidate. Returns it, or an error when there is none or one is running.
-    pub fn begin_install(&mut self) -> Result<String, String> {
+    /// Authorize installing exactly the `{generation, version}` the frontend rendered. Refused when the
+    /// state changed since (a newer check, or a different or cleared candidate), while a check runs, or
+    /// while another install runs. Returns the authorized version.
+    pub fn begin_install(&mut self, generation: u64, version: &str) -> Result<String, String> {
         if self.installing {
-            return Err("An update is already being installed".into());
+            return Err(self.refuse("An update is already being installed"));
         }
-        let version = self.version.clone().ok_or("No update candidate available. Check for updates first.")?;
+        if self.checking {
+            return Err(self.refuse("A check for updates is running; wait for it to finish, then install"));
+        }
+        if generation != self.generation || self.version.as_deref() != Some(version) {
+            return Err(self.refuse("Update state changed, check again"));
+        }
         self.revision += 1;
         self.installing = true;
         self.error = None;
-        Ok(version)
+        Ok(version.to_string())
+    }
+
+    /// After download, before installing: the downloaded release must be the authorized version, and the
+    /// install authorized for that generation must still be the one running.
+    pub fn confirm_download(&self, generation: u64, authorized: &str, downloaded: &str) -> Result<(), String> {
+        if downloaded != authorized {
+            return Err(format!("Downloaded version {downloaded} is not the authorized version {authorized}"));
+        }
+        if !self.installing || generation != self.generation || self.version.as_deref() != Some(authorized) {
+            return Err("Update state changed, check again".into());
+        }
+        Ok(())
     }
 
     pub fn fail_install(&mut self, error: String) {
@@ -152,13 +182,15 @@ fn notify_update_state(app: &tauri::AppHandle) {
 }
 
 /// Run one check as a new generation and record its result in the shared state.
-async fn run_update_check(app: &tauri::AppHandle) {
-    let Some(state) = app.try_state::<UpdateCandidate>() else { return };
-    let generation = state.0.lock().unwrap().begin_check();
+async fn run_update_check(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.try_state::<UpdateCandidate>().ok_or("Update state is not registered")?;
+    let begun = state.0.lock().unwrap().begin_check();
     notify_update_state(app);
+    let generation = begun?;
     let result = check_for_updates_internal(app).await;
     state.0.lock().unwrap().finish_check(generation, result);
     notify_update_state(app);
+    Ok(())
 }
 
 /// How to start the new version after a Linux update: the same executable selected for installation
@@ -511,8 +543,7 @@ async fn check_for_updates(app: tauri::AppHandle, window: tauri::Window) -> Resu
     if window.label() != "main" {
         return Err("Updates can only be checked from the main window".into());
     }
-    run_update_check(&app).await;
-    Ok(())
+    run_update_check(&app).await
 }
 
 /// The current update state, straight from UpdateCandidate. Never contacts the network.
@@ -526,16 +557,23 @@ fn update_state(app: tauri::AppHandle, window: tauri::Window) -> Result<serde_js
     Ok(snapshot)
 }
 
-/// Install the current candidate. Failures are recorded in the shared state for the frontend to render.
+/// Install exactly the `{generation, version}` the frontend rendered. Checked against the shared state under
+/// its mutex; refusals and failures are recorded there for the frontend to render.
 #[tauri::command]
-async fn install_update(app: tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
+async fn install_update(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    generation: u64,
+    version: String,
+) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Updates can only be installed from the main window".into());
     }
     let state = app.try_state::<UpdateCandidate>().ok_or("Update state is not registered")?;
-    let candidate = state.0.lock().unwrap().begin_install()?;
+    let authorized = state.0.lock().unwrap().begin_install(generation, &version);
     notify_update_state(&app);
-    let result = install_candidate(&app, candidate).await;
+    let authorized = authorized?;
+    let result = install_candidate(&app, generation, authorized).await;
     if let Err(error) = &result {
         state.0.lock().unwrap().fail_install(error.clone());
         notify_update_state(&app);
@@ -543,13 +581,13 @@ async fn install_update(app: tauri::AppHandle, window: tauri::Window) -> Result<
     result
 }
 
-async fn install_candidate(app: &tauri::AppHandle, candidate: String) -> Result<(), String> {
+async fn install_candidate(app: &tauri::AppHandle, generation: u64, candidate: String) -> Result<(), String> {
     let app = app.clone();
     let ConfiguredUpdater { builder, allowed_hosts, relaunch } = configure_updater_builder(&app)?;
     let updater = builder.build().map_err(|error| error.to_string())?;
     if let Some(update) = updater.check().await.map_err(|error| error.to_string())? {
         if update.version != candidate {
-            return Err(format!("Available update version ({}) does not match expected candidate ({candidate})", update.version));
+            return Err(format!("Update state changed, check again: the feed now offers {} instead of {candidate}", update.version));
         }
         let current_ver = app.package_info().version.clone();
         if let (Ok(cur), Ok(cand)) = (semver::Version::parse(&current_ver.to_string()), semver::Version::parse(&update.version)) {
@@ -558,7 +596,10 @@ async fn install_candidate(app: &tauri::AppHandle, candidate: String) -> Result<
             }
         }
         validate_update_download_url(&update.download_url, &allowed_hosts, cfg!(debug_assertions))?;
-        update.download_and_install(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
+        // Download, re-verify against the authorized version and the shared state, then install.
+        let bytes = update.download(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
+        app.state::<UpdateCandidate>().0.lock().unwrap().confirm_download(generation, &candidate, &update.version)?;
+        update.install(bytes).map_err(|error| error.to_string())?;
         if let Some(state) = app.try_state::<GatewayState>() {
             if let Some(mut sidecar) = state.0.lock().unwrap().take() {
                 sidecar.stop();
@@ -686,7 +727,8 @@ pub fn run() {
             app.manage(UpdateCandidate::default());
             // The startup check takes its generation now, before any manual check can start, so every manual
             // check supersedes it. Its result lands only in UpdateCandidate; the webview reads update_state.
-            let startup_generation = app.state::<UpdateCandidate>().0.lock().unwrap().begin_check();
+            // (A fresh state has no install running, so this cannot be refused.)
+            let startup_generation = app.state::<UpdateCandidate>().0.lock().unwrap().begin_check()?;
             let app_handle_for_update = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let result = check_for_updates_internal(&app_handle_for_update).await;
@@ -916,7 +958,7 @@ mod tests {
         assert_eq!(snap["checking"], false);
 
         // Check finds a version: checking, then available with that version.
-        let g = state.begin_check();
+        let g = state.begin_check().unwrap();
         assert_eq!(state.snapshot()["checking"], true);
         assert_eq!(state.snapshot()["generation"], 1);
         assert!(state.finish_check(g, Ok(Some("1.2.4".into()))));
@@ -926,18 +968,18 @@ mod tests {
         assert_eq!(snap["checking"], false);
 
         // A failed check clears the candidate and records the error.
-        let g = state.begin_check();
+        let g = state.begin_check().unwrap();
         assert!(state.finish_check(g, Err("offline".into())));
         assert_eq!(state.version(), None);
         assert_eq!(state.snapshot()["error"], "offline");
 
         // Install: only with a candidate, not twice, and a failure is recorded.
-        assert!(state.begin_install().is_err());
-        let g = state.begin_check();
+        assert!(state.begin_install(2, "1.2.4").is_err(), "no candidate after the failed check");
+        let g = state.begin_check().unwrap();
         state.finish_check(g, Ok(Some("1.2.5".into())));
-        assert_eq!(state.begin_install().unwrap(), "1.2.5");
+        assert_eq!(state.begin_install(g, "1.2.5").unwrap(), "1.2.5");
         assert_eq!(state.snapshot()["installing"], true);
-        assert!(state.begin_install().is_err(), "no second install while one runs");
+        assert!(state.begin_install(g, "1.2.5").is_err(), "no second install while one runs");
         state.fail_install("disk full".into());
         let snap = state.snapshot();
         assert_eq!(snap["installing"], false);
@@ -946,7 +988,7 @@ mod tests {
 
         // Every mutation bumps the revision.
         let before = state.snapshot()["revision"].as_u64().unwrap();
-        state.begin_check();
+        state.begin_check().unwrap();
         assert!(state.snapshot()["revision"].as_u64().unwrap() > before);
     }
 
@@ -954,9 +996,9 @@ mod tests {
     fn test_out_of_order_replies_never_restore_stale_state() {
         // Startup check (g1) and two manual checks (g2, g3) all in flight; replies land in the worst order.
         let mut state = CandidateState::default();
-        let startup = state.begin_check();
-        let older_manual = state.begin_check();
-        let newer_manual = state.begin_check();
+        let startup = state.begin_check().unwrap();
+        let older_manual = state.begin_check().unwrap();
+        let newer_manual = state.begin_check().unwrap();
         assert!(state.finish_check(newer_manual, Ok(None)), "newest check applies: nothing to install");
         assert!(!state.finish_check(older_manual, Ok(Some("1.2.5".into()))), "older manual reply cannot restore Install");
         assert!(!state.finish_check(startup, Ok(Some("1.2.4".into()))), "late startup result cannot restore Install");
@@ -964,12 +1006,12 @@ mod tests {
         assert_eq!(snap["available"], false);
         assert_eq!(snap["checking"], false);
         assert_eq!(snap["generation"], 3);
-        assert!(state.begin_install().is_err());
+        assert!(state.begin_install(3, "1.2.5").is_err(), "nothing to install");
 
         // The reverse: the newest sets a candidate; a stale "no update" or error cannot clear it.
         let mut state = CandidateState::default();
-        let startup = state.begin_check();
-        let manual = state.begin_check();
+        let startup = state.begin_check().unwrap();
+        let manual = state.begin_check().unwrap();
         assert!(state.finish_check(manual, Ok(Some("1.2.6".into()))));
         assert!(!state.finish_check(startup, Ok(None)));
         assert!(!state.finish_check(startup, Err("timeout".into())));
@@ -978,8 +1020,8 @@ mod tests {
 
         // A stale reply also leaves "checking" to the check that is still running.
         let mut state = CandidateState::default();
-        let startup = state.begin_check();
-        let _running = state.begin_check();
+        let startup = state.begin_check().unwrap();
+        let _running = state.begin_check().unwrap();
         assert!(!state.finish_check(startup, Ok(Some("1.2.4".into()))));
         assert_eq!(state.snapshot()["checking"], true);
 
@@ -989,6 +1031,75 @@ mod tests {
         let manual_cmd = &manual_cmd[..manual_cmd.find("\n}\n").unwrap()];
         assert!(manual_cmd.contains("run_update_check(&app).await") && manual_cmd.contains("Result<(), String>"));
         assert!(lib_rs.contains(concat!("generate_handler![check_for_updates, ", "update_state, install_update]")));
+    }
+
+    #[test]
+    fn test_install_authorizes_exactly_the_rendered_candidate() {
+        let changed = "Update state changed, check again";
+        let ready = |version: &str| {
+            let mut state = CandidateState::default();
+            let g = state.begin_check().unwrap();
+            state.finish_check(g, Ok(Some(version.into())));
+            (state, g)
+        };
+
+        // Mismatched generation: the UI rendered generation 1, but a newer check (generation 2) found the same
+        // version since. Refused, and recorded for the UI.
+        let (mut state, g1) = ready("1.2.5");
+        let g2 = state.begin_check().unwrap();
+        state.finish_check(g2, Ok(Some("1.2.5".into())));
+        assert_eq!(state.begin_install(g1, "1.2.5").unwrap_err(), changed);
+        assert_eq!(state.snapshot()["error"], changed);
+        assert_eq!(state.snapshot()["installing"], false);
+        assert_eq!(state.begin_install(g2, "1.2.5").unwrap(), "1.2.5", "the current pair is accepted");
+
+        // Mismatched version: same generation, but the click carries a version other than the candidate.
+        let (mut state, g) = ready("1.2.6");
+        assert_eq!(state.begin_install(g, "1.2.5").unwrap_err(), changed);
+        // A cleared candidate (newer check found nothing) refuses the old pair too.
+        let g2 = state.begin_check().unwrap();
+        state.finish_check(g2, Ok(None));
+        assert_eq!(state.begin_install(g, "1.2.6").unwrap_err(), changed);
+        assert_eq!(state.begin_install(g2, "1.2.6").unwrap_err(), changed);
+
+        // Check during install: refused, and the install keeps its generation and candidate.
+        let (mut state, g) = ready("1.2.5");
+        state.begin_install(g, "1.2.5").unwrap();
+        assert!(state.begin_check().unwrap_err().contains("being installed"));
+        assert_eq!(state.snapshot()["generation"], g);
+        assert_eq!(state.snapshot()["installing"], true);
+        assert_eq!(state.version(), Some("1.2.5".into()));
+        assert!(state.confirm_download(g, "1.2.5", "1.2.5").is_ok());
+
+        // Install during check: a newer check is running, so the rendered pair cannot be installed yet.
+        let (mut state, g) = ready("1.2.5");
+        let running = state.begin_check().unwrap();
+        assert!(state.begin_install(g, "1.2.5").unwrap_err().contains("check for updates is running"));
+        assert_eq!(state.snapshot()["installing"], false);
+        // Even with the running check's own generation: no install while it runs.
+        assert!(state.begin_install(running, "1.2.5").is_err());
+        state.finish_check(running, Ok(Some("1.2.5".into())));
+        assert!(state.begin_install(running, "1.2.5").is_ok());
+
+        // After download: the downloaded release must be the authorized version.
+        let (mut state, g) = ready("1.2.5");
+        state.begin_install(g, "1.2.5").unwrap();
+        assert!(state.confirm_download(g, "1.2.5", "1.2.6").unwrap_err().contains("not the authorized version"));
+        assert_eq!(state.confirm_download(g + 1, "1.2.5", "1.2.5").unwrap_err(), changed);
+        state.fail_install("x".into());
+        assert_eq!(state.confirm_download(g, "1.2.5", "1.2.5").unwrap_err(), changed, "no longer installing");
+
+        // The command takes the rendered pair, and installs only after re-verifying the download.
+        let lib_rs = include_str!("lib.rs");
+        let install = &lib_rs[lib_rs.find("async fn install_candidate(").unwrap()..];
+        let install = &install[..install.find("\nstruct GatewaySidecar").unwrap()];
+        let download = install.find("update.download(").unwrap();
+        let confirm = install.find(".confirm_download(generation, &candidate, &update.version)?").unwrap();
+        let apply = install.find("update.install(bytes)").unwrap();
+        assert!(download < confirm && confirm < apply);
+        assert!(!install.contains("download_and_install"));
+        let command = &lib_rs[lib_rs.find("async fn install_update(").unwrap()..];
+        assert!(command[..command.find("\n}\n").unwrap()].contains(".begin_install(generation, &version)"));
     }
 
     #[test]
@@ -1097,7 +1208,7 @@ mod tests {
         let lib_rs = include_str!("lib.rs");
         let setup = &lib_rs[lib_rs.find(".setup(|app|").unwrap()..];
         let candidate = setup.find("app.manage(UpdateCandidate::default())").unwrap();
-        let begin = setup.find(".begin_check();").unwrap();
+        let begin = setup.find(".begin_check()?;").unwrap();
         let spawn = setup.find("check_for_updates_internal(&app_handle_for_update)").unwrap();
         assert!(candidate < begin && begin < spawn, "state is managed and the startup generation taken before the check starts");
         assert!(!lib_rs.contains(concat!("startup_update", "_status")), "the startup cache command is gone");
