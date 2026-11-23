@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -67,6 +67,11 @@ async function stopGateway(child?: ChildProcess) {
   if (!exited) child.kill('SIGKILL');
 }
 
+const cacheDir = join(extension, '.cache');
+const appDataBundles = () => (existsSync(cacheDir) ? readdirSync(cacheDir) : [])
+  .filter((name) => /^superagent-.+-app-data-[a-f0-9]{16}\.mjs$/.test(name)).map((name) => join(cacheDir, name));
+// Bundles of an earlier run of this test belong to a deleted temp install.
+for (const bundle of appDataBundles()) { rmSync(bundle, { force: true }); rmSync(bundle.replace(/\.mjs$/, '.built'), { force: true }); }
 const temp = await mkdtemp(join(tmpdir(), 'nmh-superagent-install-'));
 const data = join(temp, 'state');
 // The desktop shell passes local app data (NMH_ENGINES_DIR), separate from the roaming data folder.
@@ -179,7 +184,9 @@ try {
   const source = join(engines, `dsh-superagent@${pin.ref}`);
   assert.ok(existsSync(join(source, 'src/core/engine.ts')), 'source in the app data folder');
   assert.ok(existsSync(join(source, '.neo-engine.json')), 'install marker');
-  assert.ok(existsSync(join(extension, '.cache', `superagent-${pin.ref}-app-data.mjs`)), 'bundle built from the installed source');
+  const [bundle] = appDataBundles();
+  assert.ok(bundle && existsSync(bundle.replace(/\.mjs$/, '.built')), 'bundle built from the installed source, with its sidecar');
+  const builtAt = statSync(bundle).mtimeMs;
   const installed = await row('engine-superagent');
   assert.equal(installed.status, 'running');
   assert.equal(installed.health?.ok, true);
@@ -209,8 +216,35 @@ try {
   assert.equal((await app.http.extensions.list()).find((item) => item.id === 'sample-ts')?.status, 'running');
   assert.equal((await app.http.extensions.enable({ id: 'engine-superagent' })).status, 'running');
   assert.equal(downloads - before, 1);
+  assert.deepEqual(appDataBundles(), [bundle], 'restarts and re-enables reuse the bundle');
+  assert.equal(statSync(bundle).mtimeMs, builtAt, 'the bundle was not rebuilt');
 
-  console.log(`P7-16 SUPERAGENT INSTALL PASS not_installed=install-action network=plain-error verify=refused disable=cancel+healthy install=ready phases=${[...phases].join('>')} ticket=${done.report!.status} restart=reused toggle=healthy`);
+  // A source whose bundle cannot be built (here: a file missing from the source and no bundle yet; on a real
+  // machine e.g. esbuild quarantined) is offered again with a plain reason instead of a degraded card, and Try again
+  // recovers once the cause is gone.
+  await stopGateway(app.child);
+  for (const name of readdirSync(cacheDir)) if (name.startsWith(`superagent-${pin.ref}-app-data-`)) rmSync(join(cacheDir, name));
+  const moved = join(source, 'src/infra/health.ts');
+  renameSync(moved, `${moved}.away`);
+  app = await startGateway(env);
+  const broken = await app.http.x['engine-superagent'].install.status();
+  assert.deepEqual(broken, { state: 'failed', message: 'The super agent could not be prepared.',
+    error: "Couldn't prepare the super agent. Try again; if it keeps failing, reinstall Neo." });
+  const brokenRow = (await app.http.extensions.list()).find((item) => item.id === 'engine-superagent')!;
+  assert.equal(brokenRow.status, 'running', 'install mode, not degraded');
+  await assert.rejects(app.http.inbox.list(), /not installed/);
+  renameSync(`${moved}.away`, moved);
+  await app.http.x['engine-superagent'].install.start();
+  await eventually(async () => {
+    const current = await app!.http.x['engine-superagent'].install.status().catch(() => undefined);
+    if (current?.state === 'failed') throw new Error(`retry failed: ${current.error} ${app!.stderr}`);
+    return current?.state === 'ready';
+  }, 'Try again rebuilds the bundle', 60000);
+  assert.ok((await app.http.inbox.list()).some((item) => item.id === asked.id), 'the Inbox is back');
+  assert.equal(downloads - before, 1, 'the retry did not download');
+  assert.equal(appDataBundles().length, 1);
+
+  console.log(`P7-16 SUPERAGENT INSTALL PASS not_installed=install-action network=plain-error verify=refused disable=cancel+healthy install=ready phases=${[...phases].join('>')} ticket=${done.report!.status} restart=reused bundle=reused toggle=healthy build_failure=retry`);
 } finally {
   for (const response of held) response.destroy();
   await stopGateway(app?.child);

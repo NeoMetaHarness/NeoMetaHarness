@@ -6,11 +6,12 @@
  * use; the DSH packages the worker needs ship in Neo's runtime. Nothing else (no Python, no Hermes) is needed
  * to start; tickets are worked by Hermes bots, which is a run-time need, not a start-up one.
  */
-import { mkdir, rename, rm } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { build } from 'esbuild';
+import { build, version as esbuildVersion } from 'esbuild';
 import { resolveEngineSource, retrying, type EngineSource } from '@neometaharness/kernel';
 
 const extensionDir = resolve(import.meta.dirname, '..');
@@ -36,15 +37,32 @@ export function resolveSuperagentSource(enginesDir?: string): EngineSource | und
   return resolveEngineSource(superagentSourceOptions(enginesDir));
 }
 
+export interface SuperagentBundle { path: string; key: string; built: boolean }
+
 /**
- * Bundle the upstream modules Neo uses into this extension's `.cache` (inside the unpacked runtime, which is
- * replaced on update, so each version builds against its own packages). Written to a temp name and renamed, so a
- * reader never imports a half-written bundle. Returns the bundle path.
+ * What the bundle is built from. A sidecar `<bundle>.json` records it after the bundle is in place, and the bundle
+ * is reused only while every field matches: the installed source (its install marker's commit and archive sha256,
+ * else the lock's pin), the source folder, the entry that names the upstream modules, this extension's version and
+ * esbuild's. Anything else changing rebuilds it.
  */
-export async function buildPinnedSuperagent(source: EngineSource): Promise<string> {
+async function bundleKey(source: EngineSource, entry: string): Promise<string> {
+  const marker = await readFile(join(source.path, '.neo-engine.json'), 'utf8').then((text) => JSON.parse(text) as Record<string, unknown>, () => undefined);
+  const manifest = JSON.parse(await readFile(join(extensionDir, 'neo.extension.json'), 'utf8')) as { version: string };
+  return JSON.stringify({
+    name: source.pin.name, ref: source.pin.ref, origin: source.origin, source: resolve(source.path),
+    commit: marker?.commit ?? source.pin.commit ?? null, archive_sha256: marker?.archive_sha256 ?? source.pin.archive_sha256 ?? null,
+    extension: manifest.version, esbuild: esbuildVersion, entry: createHash('sha256').update(entry).digest('hex'),
+  });
+}
+
+/**
+ * The bundle of the upstream modules Neo uses, built when missing or stale. It lives in this extension's `.cache`
+ * (inside the unpacked runtime, which is replaced on update, so each version builds against its own packages). The
+ * bundle is written under a temp name and renamed, then its sidecar the same way, so a reader never sees a
+ * half-written bundle or a sidecar for a bundle that is not there yet.
+ */
+export async function ensureSuperagentBundle(source: EngineSource, outputDir = join(extensionDir, '.cache')): Promise<SuperagentBundle> {
   const src = join(source.path, 'src');
-  const outputDir = join(extensionDir, '.cache');
-  await mkdir(outputDir, { recursive: true });
   const file = (part: string) => JSON.stringify(join(src, part).replaceAll('\\', '/'));
   const entry = [
     `export { Engine } from ${file('core/engine.ts')}`,
@@ -53,22 +71,42 @@ export async function buildPinnedSuperagent(source: EngineSource): Promise<strin
     `export { HealthBoard } from ${file('infra/health.ts')}`,
     `export { sourceContextOf } from ${file('app/source-context.ts')}`,
   ].join(';\n');
-  const outfile = join(outputDir, `superagent-${source.pin.ref}-${source.origin}.mjs`);
-  const temporary = `${outfile}.${randomBytes(6).toString('hex')}.tmp`;
+  const key = await bundleKey(source, entry);
+  // The name carries the key's hash: a rebuilt bundle is a new module URL, so the module cache never serves a stale
+  // one, while a reactivation that reuses the bundle reuses the loaded module.
+  const prefix = `superagent-${source.pin.ref}-${source.origin}-`;
+  const base = join(outputDir, `${prefix}${createHash('sha256').update(key).digest('hex').slice(0, 16)}`);
+  const outfile = `${base}.mjs`;
+  // Not `<bundle>.json`: tsx resolves an import of `x.mjs` to `x.mjs.json` when that file exists.
+  const sidecar = `${base}.built`;
+  if (existsSync(outfile) && await readFile(sidecar, 'utf8').catch(() => '') === key) return { path: outfile, key, built: false };
+
+  await mkdir(outputDir, { recursive: true });
+  const suffix = `${randomBytes(6).toString('hex')}.tmp`;
   try {
+    await rm(sidecar, { force: true }); // a bundle being replaced is never described by the old sidecar
     await build({
       stdin: { contents: entry, resolveDir: extensionDir, loader: 'ts' },
-      bundle: true, platform: 'node', format: 'esm', packages: 'external', target: 'node22', outfile: temporary,
+      bundle: true, platform: 'node', format: 'esm', packages: 'external', target: 'node22', outfile: `${outfile}.${suffix}`,
       logLevel: 'silent',
     });
-    await retrying(() => rename(temporary, outfile)); // Windows: antivirus briefly holds fresh files
+    // Windows: antivirus briefly holds fresh files.
+    await retrying(() => rename(`${outfile}.${suffix}`, outfile));
+    await writeFile(`${sidecar}.${suffix}`, key);
+    await retrying(() => rename(`${sidecar}.${suffix}`, sidecar));
   } finally {
-    await rm(temporary, { force: true }).catch(() => {});
+    await rm(`${outfile}.${suffix}`, { force: true }).catch(() => {});
+    await rm(`${sidecar}.${suffix}`, { force: true }).catch(() => {});
   }
-  return outfile;
+  // Older bundles of this ref and origin are no longer used (best effort: one may still be loading elsewhere).
+  for (const name of await readdir(outputDir).catch(() => [] as string[])) {
+    if (name.startsWith(prefix) && !join(outputDir, name).startsWith(`${base}.`) && !name.endsWith('.tmp')) {
+      await rm(join(outputDir, name), { force: true }).catch(() => {});
+    }
+  }
+  return { path: outfile, key, built: true };
 }
 
-export async function loadPinnedSuperagent(source: EngineSource): Promise<Record<string, any>> {
-  // One bundle name per ref and origin, so its content never changes and the module cache may reuse it.
-  return import(pathToFileURL(await buildPinnedSuperagent(source)).href);
+export async function loadPinnedSuperagent(bundle: SuperagentBundle): Promise<Record<string, any>> {
+  return import(pathToFileURL(bundle.path).href);
 }

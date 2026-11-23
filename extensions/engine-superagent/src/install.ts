@@ -5,7 +5,7 @@
  * kernel to reactivate engine-superagent.
  */
 import { EngineInstallError, installEngineSource, type EngineProgress } from '@neometaharness/kernel';
-import { buildPinnedSuperagent, superagentSourceOptions } from './pinned.js';
+import { ensureSuperagentBundle, superagentSourceOptions } from './pinned.js';
 
 export type SuperagentInstallPhase = 'download' | 'verify' | 'extract' | 'build' | 'starting';
 export interface SuperagentInstallStatus {
@@ -45,24 +45,31 @@ export function installFailure(error: unknown): string {
   if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') {
     return "Couldn't save the super agent on this computer. Check that there is free disk space and try again.";
   }
-  // The build runs only on the verified source and Neo's own packages: a failure means a broken Neo runtime.
-  return "Couldn't prepare the super agent. Reinstall Neo and try again.";
+  // The build runs only on the verified source and Neo's own packages (esbuild). Security software holding or
+  // quarantining esbuild is the usual cause, and often passes; a lasting failure means a damaged Neo install.
+  return "Couldn't prepare the super agent. Try again; if it keeps failing, reinstall Neo.";
 }
 
 export class SuperagentInstaller {
-  private status: SuperagentInstallStatus = NOT_INSTALLED;
+  private status: SuperagentInstallStatus;
   private job?: Promise<void>;
   private readonly abort = new AbortController();
 
   constructor(private readonly options: {
     /** App-data engines folder; undefined when this Gateway has no data folder to install into. */
     enginesDir?: string;
+    /** Activation found the source but could not build its bundle: start as failed, so the UI can retry. */
+    failure?: unknown;
     /** Test fixture server; production downloads from GitHub. */
     downloadBase?: string;
     /** Called once the super agent is ready to run; the extension restarts itself (ctx.reactivate). */
     onInstalled: () => void;
     log?: (message: string, error: unknown) => void;
-  }) {}
+  }) {
+    this.status = 'failure' in options
+      ? { state: 'failed', message: 'The super agent could not be prepared.', error: installFailure(options.failure) }
+      : NOT_INSTALLED;
+  }
 
   current(): SuperagentInstallStatus { return { ...this.status }; }
 
@@ -103,7 +110,8 @@ export class SuperagentInstaller {
       });
       if (signal.aborted) return;
       this.phase('build', 0.92);
-      await buildPinnedSuperagent(source);
+      // The reactivation that follows finds this bundle current and reuses it.
+      await ensureSuperagentBundle(source);
       if (signal.aborted) return;
       this.phase('starting', 0.97);
       this.options.onInstalled();

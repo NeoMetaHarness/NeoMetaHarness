@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "tsx test/cron-ask.test.ts && tsx test/model.test.ts && tsx test/github-source.test.ts && tsx test/decision-log.test.ts && tsx test/e2e.test.ts",
-    "test:install": "tsx test/install.test.ts",
+    "test:install": "tsx test/bundle.test.ts && tsx test/install.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
