@@ -590,10 +590,10 @@
     },
     "P7-11": {
       "title": "v1.0 public release",
-      "status": "in_progress",
+      "status": "done",
       "owner": "opus",
-      "evidence": "Release tooling merged 2026-11-22 after PM review (review/p711 rebased onto P1-11 main as 9ca9cff): local latest.json generator, release preflight (signature verification, version binding, CHANGELOG-only notes, checked-in key match), signed linux-x86_64-deb entry, productName bundle names, macOS app bundle, docs/release.md runbook and v1.0.0 CHANGELOG. test:p7-11 PASS x2; gateway, toggle, check, secret scan OK; full regression ok=70 fail=0.",
-      "remaining": "Publishing v1.0 is the owner's decision: the owner sets TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD locally and runs the docs/release.md runbook."
+      "evidence": "Release tooling merged 2026-11-22 after PM review (review/p711 rebased onto P1-11 main as 9ca9cff): local latest.json generator, release preflight (signature verification, version binding, CHANGELOG-only notes, checked-in key match), signed linux-x86_64-deb entry, productName bundle names, macOS app bundle, docs/release.md runbook and v1.0.0 CHANGELOG. test:p7-11 PASS x2; gateway, toggle, check, secret scan OK; full regression ok=70 fail=0. Published 2026-11-23 as GitHub release v1.0.0 (Windows only) at 1b140b7: signed with the rotated updater key F0BDD994DDA35AF6; release-manifest verified both .sig files against the checked-in public key; assets setup.exe, MSI and latest.json uploaded; the live releases/latest/download/latest.json matches release-out byte for byte; silent install test of the signed setup.exe PASS (setup screen shown, gateway ready with engine-dsh, gateway exits on app close, uninstall OK).",
+      "follow_up": "macOS and Linux installers are not in v1.0.0; publish them in a later release."
     },
     "P7-12": {
       "title": "PRD success metrics measured in the running product",
