@@ -13,6 +13,8 @@ import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import { startGateway } from '../../gateway/src/server.ts';
 import { HeadlessChromeProvider } from '../../../extensions/computer-headless-chrome/src/index.ts';
 import { HermesRuntime } from '../../../extensions/engine-hermes/src/runtime.ts';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
+requireUpstreamCache('apps/neo-app/test/p3-3.mjs', ['hermes-agent']);
 
 const app = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(app, '../..');

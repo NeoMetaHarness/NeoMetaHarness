@@ -12,6 +12,8 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
+requireUpstreamCache('extensions/models/test/e2e.test.ts', ['hermes-agent']);
 
 const repo = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 type Client = ContractRouterClient<typeof neoContract>;

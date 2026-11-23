@@ -13,6 +13,8 @@ import { createORPCClient } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type HermesEvent } from '@neometaharness/contracts';
 import { coalesceText } from '../../../apps/gateway/src/coalesce.js';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
+requireUpstreamCache('extensions/engine-hermes/test/e2e.test.ts', ['hermes-agent']);
 
 const extension = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(extension, '../..');

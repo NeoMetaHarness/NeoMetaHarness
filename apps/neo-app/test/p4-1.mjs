@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
+requireUpstreamCache('apps/neo-app/test/p4-1.mjs', ['hermes-agent']);
 
 const app = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(app, '../..');

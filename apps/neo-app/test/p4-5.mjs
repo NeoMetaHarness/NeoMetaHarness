@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import { fakeHoncho } from './fake-honcho.mjs';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
+requireUpstreamCache('apps/neo-app/test/p4-5.mjs', ['hermes-agent']);
 
 const app = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(app, '../..');

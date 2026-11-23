@@ -12,6 +12,8 @@ import type { neoContract } from '@neometaharness/contracts';
 import { restrictPrivatePath } from '@neometaharness/vault';
 import { startGateway, type GatewayInstance } from '../src/server.js';
 import { verifyArchive } from '../../../extensions/backup/src/archive.js';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
+requireUpstreamCache('apps/gateway/test/p7-3.ts', ['dsh-superagent']);
 
 const exec = promisify(execFile);
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -53,6 +55,8 @@ try {
   let rpc = client(gateway.desktopToken);
   for (const status of gateway.kernel.list()) await rpc.extensions.enable({ id: status.id });
   for (const status of gateway.kernel.list()) assert.equal(status.status, 'running', `${status.id}: ${status.reason}`);
+  // P7-16: running is not enough; a super agent in install mode would skip the Inbox part of the drill.
+  assert.equal((await rpc.x['engine-superagent'].install.status()).state, 'ready', 'the super agent runs from the pinned source');
   const bot = await rpc.agents.bots.create({ name: 'Recovered drill bot' });
   const memory = await rpc.x['memory-local'].add({ workspace: 'default', subject: 'bot', subjectId: bot.id, text: 'Remember the restore drill', source: 'manual', provenance: 'P7-3', trust: 'confirmed' });
   const skill = { name: 'restore-skill', sourceProfile: 'bot-a', sourcePath: 'SKILL.md', content: '---\nname: restore-skill\n---\nDrill v1' };

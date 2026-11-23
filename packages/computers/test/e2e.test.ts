@@ -14,6 +14,8 @@ import { startGateway } from '../../../apps/gateway/src/server.js';
 import { FakeComputerProvider } from '../../../extensions/computer-fake/src/index.js';
 import { ComputerRegistry } from '../src/index.js';
 import { projectHermesComputer } from '../src/hermes.js';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
+requireUpstreamCache('packages/computers/test/e2e.test.ts', ['hermes-agent']);
 
 type Client = ContractRouterClient<typeof neoContract>;
 const extensions = fileURLToPath(new URL('../../../extensions/', import.meta.url));

@@ -10,6 +10,8 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
 import { startGateway } from '../../../apps/gateway/src/server.js';
 import { MODEL_ROLES } from '../../models/src/hub.js';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
+requireUpstreamCache('extensions/models-router-panda/test/escalation.gateway.test.ts', ['hermes-agent', 'dsh-superagent']);
 
 const repo = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const home = await mkdtemp(join(tmpdir(), 'neo-p29-'));
@@ -152,6 +154,7 @@ try {
   assert.equal(engine.status, 'running', engine.reason ?? 'Hermes did not start');
   const service = await rpc.extensions.enable({ id: 'engine-superagent' });
   assert.equal(service.status, 'running', service.reason ?? 'superagent did not start');
+  assert.equal((await rpc.x['engine-superagent'].install.status()).state, 'ready', 'the super agent runs from the pinned source');
   const bot = await rpc.agents.bots.create({ name: 'P2-9 Scripted Model Bot' });
   const item = await rpc.inbox.ask({ botId: bot.id, text: 'Evaluate this harmless proposal', mode: 'observe' });
   assert.equal(item.status, 'suggestion');

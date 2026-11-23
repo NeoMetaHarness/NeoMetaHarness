@@ -10,6 +10,8 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
+requireUpstreamCache('extensions/channels/test/e2e.test.ts', ['hermes-agent']);
 
 const extension = dirname(dirname(fileURLToPath(import.meta.url)));
 const repo = resolve(extension, '../..');
