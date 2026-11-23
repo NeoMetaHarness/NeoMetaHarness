@@ -132,7 +132,8 @@ try {
   assert.equal(enabled.status, 'running', `engine-superagent stays up to offer the install: ${enabled.reason ?? app.stderr}`);
   assert.equal(enabled.health?.ok, true, 'not installed is not a fault');
   assert.deepEqual(await status(), { state: 'not_installed', message: 'The super agent is not installed yet.' });
-  await assert.rejects(http.inbox.list(), 'no Inbox routes before the install');
+  await assert.rejects(http.inbox.list(), /The super agent is not installed\. Install it from Extensions\./, 'no Inbox before the install, and the Gateway says why');
+  await assert.rejects(http.inbox.ask({ text: 'Hi', botId: 'any' }), /not installed/);
   assert.equal((await row('engine-hermes')).status, 'disabled', 'the install does not need Hermes');
 
   // Network failure: plain-language reason, nothing left behind.

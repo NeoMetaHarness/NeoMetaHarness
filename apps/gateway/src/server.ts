@@ -487,7 +487,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   const invokeInbox = async (route: string, body: unknown) => {
     const path = `/x/engine-superagent/${route}`;
     if (!kernel.hasRoute(path)) {
-      throw new ORPCError('SERVICE_UNAVAILABLE', { message: 'Superagent extension is disabled' });
+      // P7-16: in install mode engine-superagent runs with only its install routes.
+      throw new ORPCError('SERVICE_UNAVAILABLE', { message: kernel.hasRoute('/x/engine-superagent/install/status')
+        ? 'The super agent is not installed. Install it from Extensions.' : 'Superagent extension is disabled' });
     }
     return kernel.invokeRoute(path, 'RPC', body);
   };

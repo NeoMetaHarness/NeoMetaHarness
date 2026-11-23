@@ -176,7 +176,7 @@ export class Dreamer {
     const destructive = proposals.some((item) => item.destructive);
     const sink = this.sink();
     if (!sink) {
-      risks.push('The Inbox (engine-superagent) is disabled, so nothing was proposed or applied.');
+      risks.push('The Inbox (engine-superagent) is disabled or not installed, so nothing was proposed or applied.');
       return this.finish({ ...report, status: 'undelivered' });
     }
     const acceptMode = sink.acceptMode(workspace);

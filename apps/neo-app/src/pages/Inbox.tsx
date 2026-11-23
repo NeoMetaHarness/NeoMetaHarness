@@ -6,6 +6,7 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type AcceptMode, type InboxItem } from '@neometaharness/contracts';
 import { Button } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
+import EngineInstall from './EngineInstall';
 import './inbox.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -35,6 +36,10 @@ export default function Inbox() {
   const [notifyNumber, setNotifyNumber] = useState('');
   const [busy, setBusy] = useState(false);
   const [enabled, setEnabled] = useState(false);
+  /** engine-superagent runs in install mode (P7-16): offer the install instead of the Inbox. */
+  const [notInstalled, setNotInstalled] = useState(false);
+  /** Bumped after an install from this page, to reconnect to the started Inbox. */
+  const [round, setRound] = useState(0);
   const [connection, setConnection] = useState('Connecting');
   const [error, setError] = useState('');
   const [acceptMode, setAcceptMode] = useState<AcceptMode | ''>('');
@@ -251,12 +256,15 @@ export default function Inbox() {
     active.current = true;
     let closed = false;
     let socket: WebSocket | undefined;
+    /** True when the Inbox can be used: engine-superagent is running and installed (P7-16 install mode is not). */
     const setStatus = async () => {
       const extensions = await http.extensions.list();
       const running = extensions.some((entry) => entry.id === 'engine-superagent' && entry.status === 'running');
-      if (!closed) setEnabled(running);
-      if (running) void http.inbox.acceptMode.get().then(({ mode }) => { if (!closed) setAcceptMode(mode); }).catch(() => {});
-      return running;
+      // While restarting after an install its routes are briefly absent; that counts as not ready yet.
+      const ready = running && await http.x['engine-superagent'].install.status().then((status) => status.state === 'ready', () => false);
+      if (!closed) { setEnabled(ready); setNotInstalled(running && !ready); }
+      if (ready) void http.inbox.acceptMode.get().then(({ mode }) => { if (!closed) setAcceptMode(mode); }).catch(() => {});
+      return ready;
     };
     void http.agents.bots.list().then((result) => {
       if (!closed) {
@@ -308,8 +316,8 @@ export default function Inbox() {
                 if (event.seq <= gatewayCursor.current) continue;
                 gatewayCursor.current = event.seq;
                 if (event.type === 'extension.state' && event.extensionId === 'engine-superagent') {
-                  if ((event.status === 'running') !== running) {
-                    setEnabled(event.status === 'running');
+                  // Running alone is not enough: an extension in install mode runs without the Inbox.
+                  if (await setStatus() !== running) {
                     // A restarted extension has a new event stream. Rebind the subscription.
                     stateChange = true;
                     throw new Error('Superagent state changed');
@@ -330,7 +338,7 @@ export default function Inbox() {
     }
     void listen();
     return () => { closed = true; active.current = false; socket?.close(); rows.current.clear(); };
-  }, []);
+  }, [round]);
 
   async function ask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -357,7 +365,11 @@ export default function Inbox() {
       <div><h1>Inbox</h1><p>Ask Neo to coordinate work across your agents.</p></div>
       <span className="connection" role="status">{connection}</span>
     </header>
-    {!enabled && <p className="page-error" role="status" data-testid="inbox-disabled">Superagent extension is disabled. Enable it on Extensions to use Ask Neo.</p>}
+    {notInstalled && <div data-testid="inbox-not-installed">
+      <p className="page-error" role="status">The super agent is not installed yet. Install it here or from Extensions to use Ask Neo.</p>
+      <EngineInstall engine="engine-superagent" testId="inbox-superagent-install" onReady={() => setRound((value) => value + 1)} />
+    </div>}
+    {!enabled && !notInstalled && <p className="page-error" role="status" data-testid="inbox-disabled">Superagent extension is disabled. Enable it on Extensions to use Ask Neo.</p>}
     {error && <p role="alert" className="page-error">{error}</p>}
     <form className="inbox-composer" onSubmit={(event) => { void ask(event); }}>
       <label htmlFor="inbox-prompt">Ask Neo</label>

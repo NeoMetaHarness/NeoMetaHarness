@@ -46,7 +46,7 @@ export class SuccessMetrics {
         withRecordedApproval: superagentAvailable ? withRecordedApproval : null,
         reason: superagentAvailable
           ? 'Only the latest approval is stored. Human question replies and repeated approvals have no durable event history.'
-          : 'Engine-superagent is missing or disabled. Ticket counts and attention proxy are unavailable.',
+          : 'Engine-superagent is not installed, or is missing or disabled. Ticket counts and attention proxy are unavailable.',
       },
       learning: {
         promotedPer20: null,
@@ -62,7 +62,7 @@ export class SuccessMetrics {
           ? null : (onboardingToFirstReplyMinutes - onboarding) / 60_000,
         reason: superagentAvailable
           ? 'Install time and all channel first-answer events are not persisted. Onboarding to Inbox channel delivery is a partial proxy.'
-          : 'Engine-superagent is missing or disabled. Channel delivery proxy is unavailable.',
+          : 'Engine-superagent is not installed, or is missing or disabled. Channel delivery proxy is unavailable.',
       },
     };
   }

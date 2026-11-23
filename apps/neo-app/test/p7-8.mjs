@@ -121,11 +121,19 @@ if (installMode) {
   const fixture = execFileSync('git', ['-C', join(cache, `hermes-agent@${pin.ref}`), 'archive', '--format=tar.gz',
     `--prefix=hermes-agent-${pin.ref.replace(/^v/, '')}/`, pin.commit], { maxBuffer: 512 * 1024 * 1024 });
   lock.pins['hermes-agent'] = { ...pin, archive_sha256: createHash('sha256').update(fixture).digest('hex') };
+  // The super agent, installed from the Inbox at the end.
+  const superagentPin = lock.pins['dsh-superagent'];
+  const superagentFixture = execFileSync('git', ['-C', join(cache, `dsh-superagent@${superagentPin.ref}`), 'archive', '--format=tar.gz',
+    `--prefix=dsh-superagent-prototype-${superagentPin.commit}/`, superagentPin.commit], { maxBuffer: 256 * 1024 * 1024 });
+  lock.pins['dsh-superagent'] = { ...superagentPin, archive_sha256: createHash('sha256').update(superagentFixture).digest('hex') };
   const lockFile = join(home, 'upstream.lock.json');
   writeFileSync(lockFile, JSON.stringify(lock, null, 2));
+  const fixtures = new Map([[`/${pin.upstream}/tar.gz/${pin.commit}`, fixture],
+    [`/${superagentPin.upstream}/tar.gz/${superagentPin.commit}`, superagentFixture]]);
   fixtureServer = createServer((request, response) => {
-    if (request.url !== `/${pin.upstream}/tar.gz/${pin.commit}`) { response.writeHead(404).end(); return; }
-    response.writeHead(200, { 'content-type': 'application/x-gzip', 'content-length': fixture.length }).end(fixture);
+    const body = fixtures.get(request.url);
+    if (!body) { response.writeHead(404).end(); return; }
+    response.writeHead(200, { 'content-type': 'application/x-gzip', 'content-length': body.length }).end(body);
   });
   await new Promise((done) => fixtureServer.listen(0, '127.0.0.1', done));
   installEnv = {
@@ -302,6 +310,25 @@ try {
   if (installMode) {
     await view.wait('!!document.querySelector("[data-testid=extension-engine-hermes]") && !document.querySelector("[data-testid=extension-engine-hermes-install]")', 'Extensions card no longer offers an install');
     await view.wait('!!document.querySelector("[data-testid=extension-engine-superagent-install-start]") && !document.querySelector("[data-testid=extension-engine-superagent-install-needs]")', 'super agent no longer waits for Hermes');
+    // The Inbox while the super agent is not installed: an install offer, Ask disabled, and a steady connection
+    // (no reconnect loop against the missing Inbox routes).
+    await view.evaluate('document.querySelector("a[href^=\'/inbox\']").click()');
+    await view.wait('location.pathname === "/inbox" && !!document.querySelector("[data-testid=inbox-superagent-install-start]")', 'Inbox offers Install the super agent');
+    await view.wait('document.querySelector(".connection")?.textContent === "Live"', 'Inbox connection live');
+    await sleep(2000);
+    const notInstalled = await view.evaluate(`({ connection: document.querySelector('.connection')?.textContent,
+      prompt: document.querySelector('#inbox-prompt').disabled, text: document.querySelector('[data-testid=inbox-not-installed]')?.textContent,
+      disabledNotice: !!document.querySelector('[data-testid=inbox-disabled]') })`);
+    assert.equal(notInstalled.connection, 'Live', 'no reconnect loop while the super agent is not installed');
+    assert.equal(notInstalled.prompt, true, 'Ask is disabled until the super agent is installed');
+    assert.match(notInstalled.text, /not installed/);
+    assert.equal(notInstalled.disabledNotice, false);
+    await assert.rejects(rpc.inbox.list(), /not installed/, 'the Gateway says not installed, not disabled');
+    // Installing from the Inbox brings the Inbox up in place.
+    await view.evaluate('document.querySelector("[data-testid=inbox-superagent-install-start]").click()');
+    await view.wait('!document.querySelector("[data-testid=inbox-not-installed]") && !document.querySelector("#inbox-prompt").disabled && document.querySelector(".connection")?.textContent === "Live"', 'Inbox ready after installing the super agent', 1200);
+    assert.equal((await rpc.x['engine-superagent'].install.status()).state, 'ready');
+    assert.deepEqual(await rpc.inbox.list(), []);
   }
   console.log('P7-8_TIMES ' + JSON.stringify({ ...stepTimes, total: elapsedTotal, max_allowed: 240000 }));
 
@@ -310,7 +337,7 @@ try {
   await eventually(async () => {
     try { await fetch(`${base}/health`); return false; } catch { return true; }
   }, 'gateway clean exit', 450);
-  console.log((installMode ? 'P7-8 PASS hermes=installed-from-onboarding extensions_card=install-button superagent_card=install-button+needs-hermes ' : 'P7-8 PASS ') + 'build=true WebView2=true workspace=true owner=true model=scripted bot=true channel=optional chat=reply reload=false exit=clean');
+  console.log((installMode ? 'P7-8 PASS hermes=installed-from-onboarding extensions_card=install-button superagent_card=install-button+needs-hermes inbox=not-installed+no-reconnect+installed ' : 'P7-8 PASS ') + 'build=true WebView2=true workspace=true owner=true model=scripted bot=true channel=optional chat=reply reload=false exit=clean');
   passed = true;
 } finally {
   view?.close();
