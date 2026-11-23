@@ -75,7 +75,11 @@ for (const [name, u] of entries) {
   const status = latest.kind === 'error' ? 'ERROR' : !pin ? 'unpinned' : pin.ref === latest.ref ? 'current' : u.adopted ? 'review' : 'bump available'
   rows.push({ name, channel: u.channel, pinned: pin?.ref ?? '-', latest: latest.ref, status,
     upstream: u.upstream, changelog: latest.changelog ?? null })
-  if (writeLock && latest.kind !== 'error') lock.pins[name] = { kind: latest.kind, ref: latest.ref, upstream: u.upstream, pinned_on: new Date().toISOString().slice(0, 10) }
+  if (writeLock && latest.kind !== 'error') {
+    // The verified download (commit, archive_sha256) belongs to one ref; a new ref must be re-verified by hand (P7-16).
+    lock.pins[name] = { ...(pin?.ref === latest.ref ? pin : {}), kind: latest.kind, ref: latest.ref, upstream: u.upstream,
+      pinned_on: new Date().toISOString().slice(0, 10) }
+  }
 }
 
 if (json) console.log(`NMH_UPSTREAM_JSON=${JSON.stringify(rows)}`)

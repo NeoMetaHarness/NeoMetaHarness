@@ -32,6 +32,12 @@ export interface ExtensionContext {
   /** Close owned sockets/connections when retiring, before request drain. */
   onDrain(close: () => void | Promise<void>): () => void;
   health(check: () => Health | Promise<Health>): void;
+  /**
+   * Restart this extension (a fresh activate()) and the running extensions that depend on it, after the
+   * kernel's current lifecycle work. For an engine whose runtime was installed while it ran (P7-16). A no-op
+   * once this generation is retired. Never await it from activate() or from an effect's cleanup.
+   */
+  reactivate(): Promise<void>;
 }
 
 export interface NeoExtension {
@@ -451,6 +457,24 @@ export class NeoKernel {
     };
   }
 
+  /** ctx.reactivate(): retire the generation and its running dependents, then reconcile starts them again. */
+  private reactivate(id: string, generation: ExtensionGeneration): Promise<void> {
+    const work = this.operation.then(async () => {
+      const entry = this.entries.get(id);
+      if (this.closing || !entry || entry.running !== generation) return;
+      for (const dependent of this.runningDependents(id)) {
+        await this.retire(dependent.id, dependent);
+        const dependentEntry = this.entries.get(dependent.id);
+        if (dependentEntry?.running === dependent) dependentEntry.running = undefined;
+      }
+      await this.retire(id, generation);
+      entry.running = undefined;
+      if (!this.closing) await this.reconcile();
+    });
+    this.operation = work.catch(() => {});
+    return work;
+  }
+
   private async retire(id: string, generation: ExtensionGeneration) {
     if (this.active.get(id) === generation) {
       this.active.delete(id); this.snapshot = this.compile(this.active);
@@ -758,6 +782,7 @@ export class NeoKernel {
               contribute: (kind, value) => { generation.assertMutable(); owner.effect(() => generation.contribute(kind, value)); },
               onDrain: (close) => generation.onDrain(close),
               health: (check) => { generation.assertMutable(); generation.check = async () => check(); },
+              reactivate: () => this.reactivate(id, generation),
             };
           },
         });
@@ -829,3 +854,4 @@ async function deadline<T>(operation: Promise<T>, ms: number, message: string): 
   finally { if (timer) clearTimeout(timer); }
 }
 export * from './apps.js';
+export * from './engine-source.js';
