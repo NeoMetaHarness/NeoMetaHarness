@@ -94,6 +94,8 @@ export {
 export interface GatewayOptions {
   databaseFile: string;
   dataDir?: string;
+  /** P7-16: engine sources, venvs and uv's cache. The desktop shell passes local app data; default <dataDir>/engines. */
+  enginesDir?: string;
   extensionsDir?: string;
   port?: number;
   mode?: 'server' | 'desktop';
@@ -362,7 +364,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     skillsBridge,
     extensionDataDir,
     // P7-16: engine sources installed on demand, their venvs and caches (outside the versioned runtime).
-    ...(options.dataDir || options.databaseFile !== ':memory:' ? { enginesDir: join(dataDir, 'engines') } : {}),
+    ...(options.enginesDir ? { enginesDir: options.enginesDir }
+      : options.dataDir || options.databaseFile !== ':memory:' ? { enginesDir: join(dataDir, 'engines') } : {}),
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
     // P1-13: where an extension keeps a workspace's own configuration (Model Hub, Panda). Desktop has one
     // ('default', unchanged); server mode keeps each workspace apart, and 'default' is the deployment's.

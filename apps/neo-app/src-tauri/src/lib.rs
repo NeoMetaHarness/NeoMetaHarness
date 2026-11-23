@@ -748,8 +748,20 @@ impl RuntimeSource {
     }
 }
 
+/// Engine sources, venvs, uv's cache and uv-managed Python (P7-16): NMH_ENGINES_DIR, else beside an explicit
+/// NMH_DESKTOP_DATA_DIR (isolated runs stay in their folder), else the local (non-roaming) app data folder.
+fn engines_dir(app: &tauri::AppHandle, data_dir: &std::path::Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if let Some(dir) = std::env::var_os("NMH_ENGINES_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    if std::env::var_os("NMH_DESKTOP_DATA_DIR").is_some() {
+        return Ok(data_dir.join("engines"));
+    }
+    Ok(app.path().app_local_data_dir()?.join("engines"))
+}
+
 impl GatewaySidecar {
-    fn launch(source: &RuntimeSource, data_dir: &std::path::Path) -> Result<(Self, u16), Box<dyn std::error::Error>> {
+    fn launch(source: &RuntimeSource, data_dir: &std::path::Path, engines_dir: &std::path::Path) -> Result<(Self, u16), Box<dyn std::error::Error>> {
         fs::create_dir_all(data_dir)?;
         // Installers bundle one runtime archive; it is unpacked into the user's local data dir before the
         // Gateway starts (and before the ready timer below). No archive means development: repo paths.
@@ -778,6 +790,8 @@ impl GatewaySidecar {
             .current_dir(gateway_dir)
             .env("NMH_PORT", "0")
             .env("NMH_DB_PATH", data_dir.join("neo.sqlite"))
+            // P7-16: engines, venvs, uv's cache and Python are large and machine-specific: local app data.
+            .env("NMH_ENGINES_DIR", engines_dir)
             .env("NMH_EXTENSIONS_DIR", extensions_dir)
             .env("NEO_MODE", "desktop")
             // Gateway exits when this pipe closes, so it never outlives the shell.
@@ -1007,11 +1021,12 @@ pub fn run() {
                 .map(PathBuf::from)
                 .map(Ok)
                 .unwrap_or_else(|| app.path().app_data_dir())?;
+            let engines_dir = engines_dir(app.handle(), &data_dir)?;
             app.manage(GatewayState(Mutex::new(None), AtomicBool::new(false)));
             let source = RuntimeSource::resolve(app.handle())?;
             if !source.needs_unpack() {
                 // Development, or the runtime is already unpacked: start synchronously, exactly as before.
-                let (sidecar, port) = GatewaySidecar::launch(&source, &data_dir)?;
+                let (sidecar, port) = GatewaySidecar::launch(&source, &data_dir, &engines_dir)?;
                 let gateway_pid = sidecar.child.id();
                 app.state::<GatewayState>().adopt(sidecar);
                 return finish_setup(app.handle(), &data_dir, port, gateway_pid);
@@ -1025,7 +1040,7 @@ pub fn run() {
                 .build()?;
             let handle = app.handle().clone();
             thread::spawn(move || {
-                let launched = match GatewaySidecar::launch(&source, &data_dir) {
+                let launched = match GatewaySidecar::launch(&source, &data_dir, &engines_dir) {
                     Ok((sidecar, port)) => {
                         let gateway_pid = sidecar.child.id();
                         if !handle.state::<GatewayState>().adopt(sidecar) {
@@ -1582,6 +1597,20 @@ mod tests {
     }
 
     #[test]
+    fn test_engines_live_in_local_app_data() {
+        let lib_rs = include_str!("lib.rs");
+        let rule = &lib_rs[lib_rs.find("fn engines_dir(").unwrap()..];
+        let rule = &rule[..rule.find("\n}\n").unwrap()];
+        let explicit = rule.find("var_os(\"NMH_ENGINES_DIR\")").unwrap();
+        let isolated = rule.find("data_dir.join(\"engines\")").unwrap();
+        let local = rule.find("app_local_data_dir()?.join(\"engines\")").unwrap();
+        assert!(explicit < isolated && isolated < local);
+        assert!(!rule.contains("app_data_dir()"), "never the roaming folder");
+        let launch = &lib_rs[lib_rs.find("fn launch(").unwrap()..];
+        assert!(launch[..launch.find("\n    }\n").unwrap()].contains(".env(\"NMH_ENGINES_DIR\", engines_dir)"));
+    }
+
+    #[test]
     fn test_setup_screen_only_when_unpacking_and_status_file_last() {
         let lib_rs = include_str!("lib.rs");
         let setup = &lib_rs[lib_rs.find(".setup(|app|").unwrap()..];
@@ -1589,7 +1618,7 @@ mod tests {
         // GatewayState exists before anything can exit, so RunEvent::Exit always finds it.
         let managed = setup.find("app.manage(GatewayState(").unwrap();
         let check = setup.find("if !source.needs_unpack() {").unwrap();
-        let sync_launch = setup.find("GatewaySidecar::launch(&source, &data_dir)?").unwrap();
+        let sync_launch = setup.find("GatewaySidecar::launch(&source, &data_dir, &engines_dir)?").unwrap();
         let setup_window = setup.find("WebviewUrl::App(SETUP_PAGE.into())").unwrap();
         let background = setup.find("thread::spawn(move ||").unwrap();
         assert!(managed < check && check < sync_launch && sync_launch < setup_window && setup_window < background);

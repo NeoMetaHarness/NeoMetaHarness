@@ -6,6 +6,7 @@ const mode = (process.env.NEO_MODE as 'desktop' | 'server') ?? (process.env.NMH_
 const gateway = await startGateway({
   databaseFile: process.env.NMH_DB_PATH ?? './.cache/neo.sqlite',
   extensionsDir: process.env.NMH_EXTENSIONS_DIR,
+  ...(process.env.NMH_ENGINES_DIR ? { enginesDir: process.env.NMH_ENGINES_DIR } : {}),
   port: Number(process.env.NMH_PORT ?? 0),
   mode,
 });
