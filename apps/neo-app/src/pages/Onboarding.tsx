@@ -143,13 +143,19 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
 
   async function createBot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!botName.trim() || busy || hermes !== 'ready') return;
+    if (!botName.trim() || busy) return;
+    if (hermes === 'missing') { setError('Install Hermes first: it runs your bots.'); return; }
     setBusy(true);
     setError('');
     try {
       const enabled = await api.extensions.enable({ id: 'engine-hermes' });
       if (enabled.status !== 'running') throw new Error(enabled.reason || 'Hermes engine unavailable');
-      if ((await api.x['engine-hermes'].install.status()).state !== 'ready') { setHermes('missing'); return; }
+      if ((await api.x['engine-hermes'].install.status()).state !== 'ready') {
+        setHermes('missing');
+        setError('Hermes is not installed yet. Install it above, then create your bot.');
+        return;
+      }
+      setHermes('ready');
       const existing = await api.x['engine-hermes'].profiles.list();
       const created = existing.profiles.find((profile) => profile.name === botName.trim())
         ?? await api.x['engine-hermes'].profiles.create({ name: botName.trim() });
@@ -263,7 +269,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
         {hermes === 'checking' && <p role="status">Checking Hermes…</p>}
         <form className="neo-onboarding-form" onSubmit={(event) => void createBot(event)}>
           <label>Bot name<input data-testid="onboarding-bot-name" value={botName} onChange={(event) => setBotName(event.target.value)} required /></label>
-          <Button label="Create first bot" data-testid="onboarding-bot-create" type="submit" isDisabled={!botName.trim() || busy || hermes !== 'ready'}>Create bot</Button>
+          <Button label="Create first bot" data-testid="onboarding-bot-create" type="submit" isDisabled={!botName.trim() || busy || hermes === 'missing'}>Create bot</Button>
         </form>
       </>}
       {stage === 'channel' && <>
