@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "test": "tsx test/e2e.test.ts", "typecheck": "tsc --noEmit" },
+  "scripts": { "test": "tsx test/e2e.test.ts", "test:install": "tsx test/install.test.ts", "typecheck": "tsc --noEmit" },
   "dependencies": { "@neometaharness/kernel": "workspace:*", "@neometaharness/computers": "workspace:*", "@neometaharness/vault": "workspace:*", "yaml": "^2.8.1" },
   "devDependencies": {
     "@neometaharness/contracts": "workspace:*",

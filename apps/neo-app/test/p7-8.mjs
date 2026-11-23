@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createTcpServer } from 'node:net';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -74,9 +76,9 @@ async function openWebview(port) {
   return {
     evaluate,
     field,
-    wait: async (expression, label) => {
+    wait: async (expression, label, attempts) => {
       try {
-        return await eventually(() => evaluate(expression), label);
+        return await eventually(() => evaluate(expression), label, attempts);
       } catch (error) {
         const alert = await evaluate('document.querySelector("[role=alert]")?.textContent ?? ""');
         throw new Error(`${error.message}. UI error: ${alert}`);
@@ -102,6 +104,40 @@ execFileSync(join(process.env.USERPROFILE, '.cargo/bin/cargo.exe'), ['build', '-
 
 const home = await mkdtemp(join(tmpdir(), 'nmh-p7-8-'));
 const statusFile = join(home, 'ready.json');
+
+// P7-16: P7_8_HERMES=install runs onboarding as on an installed app, where Hermes is not installed yet. The app
+// installs it from a local fixture tarball of the pinned commit (no network for the download) against a fixture lock.
+const installMode = process.env.P7_8_HERMES === 'install';
+let fixtureServer;
+let installEnv = {};
+if (installMode) {
+  const lock = JSON.parse(readFileSync(join(repoDir, 'upstream.lock.json'), 'utf8'));
+  const pin = lock.pins['hermes-agent'];
+  let cache = process.env.NMH_UPSTREAM_CACHE;
+  for (let dir = repoDir; !cache; dir = dirname(dir)) {
+    if (existsSync(join(dir, 'nmh-upstream-cache'))) cache = join(dir, 'nmh-upstream-cache');
+    else if (dirname(dir) === dir) throw new Error('P7_8_HERMES=install builds its fixture from the upstream cache (set NMH_UPSTREAM_CACHE)');
+  }
+  const fixture = execFileSync('git', ['-C', join(cache, `hermes-agent@${pin.ref}`), 'archive', '--format=tar.gz',
+    `--prefix=hermes-agent-${pin.ref.replace(/^v/, '')}/`, pin.commit], { maxBuffer: 512 * 1024 * 1024 });
+  lock.pins['hermes-agent'] = { ...pin, archive_sha256: createHash('sha256').update(fixture).digest('hex') };
+  const lockFile = join(home, 'upstream.lock.json');
+  writeFileSync(lockFile, JSON.stringify(lock, null, 2));
+  fixtureServer = createServer((request, response) => {
+    if (request.url !== `/${pin.upstream}/tar.gz/refs/tags/${pin.ref}`) { response.writeHead(404).end(); return; }
+    response.writeHead(200, { 'content-type': 'application/x-gzip', 'content-length': fixture.length }).end(fixture);
+  });
+  await new Promise((done) => fixtureServer.listen(0, '127.0.0.1', done));
+  installEnv = {
+    NODE_ENV: 'test',
+    NMH_TEST_UPSTREAM_LOCK: lockFile,
+    NMH_TEST_ENGINE_DOWNLOAD_BASE: `http://127.0.0.1:${fixtureServer.address().port}`,
+    NMH_UPSTREAM_CACHE: join(home, 'no-dev-cache'),
+    // The venv step reuses this checkout's uv cache and the user's uv-managed Pythons.
+    UV_CACHE_DIR: process.env.UV_CACHE_DIR ?? join(repoDir, 'extensions/engine-hermes/.cache/uv-cache'),
+    UV_PYTHON_INSTALL_DIR: process.env.UV_PYTHON_INSTALL_DIR ?? execFileSync('uv', ['python', 'dir'], { encoding: 'utf8' }).trim(),
+  };
+}
 const cdpPort = await availablePort();
 const model = createServer((request, response) => {
   if (request.headers.authorization !== 'Bearer scripted-key') {
@@ -146,6 +182,7 @@ const desktop = spawn(exe, [], {
     NMH_DESKTOP_STATUS_FILE: statusFile,
     WEBVIEW2_USER_DATA_FOLDER: join(home, 'webview'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
+    ...installEnv,
   },
 });
 let view;
@@ -163,10 +200,10 @@ try {
   const onboardingStart = performance.now();
   const stepTimes = {};
   let stepStart = onboardingStart;
-  const markStep = (name) => {
+  const markStep = (name, limit = 120_000) => {
     const elapsed = performance.now() - stepStart;
     stepTimes[name] = Math.round(elapsed);
-    assert.ok(elapsed < 120_000, `${name} step exceeded 120 seconds (${Math.round(elapsed)} ms)`);
+    assert.ok(elapsed < limit, `${name} step exceeded ${limit / 1000} seconds (${Math.round(elapsed)} ms)`);
     stepStart = performance.now();
     console.log(`P7-8_STEP ${name}=${Math.round(elapsed)}ms`);
   };
@@ -190,6 +227,20 @@ try {
   assert.equal((await rpc.onboarding.get()).workspaceName, initial.workspace);
   markStep('startup_workspace_owner');
 
+  if (installMode) {
+    // P7-16: the Extensions card offers Install Hermes instead of the upstream-cache error.
+    await view.evaluate('document.querySelector("[data-testid=onboarding-skip]").click()');
+    await view.wait('location.pathname === "/extensions" && !!document.querySelector("[data-testid=onboarding-reminder]")', 'setup skipped');
+    assert.equal((await rpc.extensions.enable({ id: 'engine-hermes' })).status, 'running', 'engine-hermes runs in install mode');
+    await view.wait('!!document.querySelector("[data-testid=extension-engine-hermes-install-start]")', 'Extensions card offers Install Hermes');
+    const card = await view.evaluate('document.querySelector("[data-testid=extension-engine-hermes]").textContent');
+    assert.doesNotMatch(card, /NMH_UPSTREAM_CACHE|upstream cache missing/i, 'no raw env-var error');
+    assert.match(card, /Install Hermes/);
+    await view.evaluate('document.querySelector("[data-testid=onboarding-reminder] button").click()');
+    await view.wait('!!document.querySelector("[data-testid=onboarding-owner-next]")', 'setup resumed');
+    markStep('extensions_card');
+  }
+
   await view.evaluate('document.querySelector("[data-testid=onboarding-owner-next]").click()');
   await view.wait('!!document.querySelector("[data-testid=onboarding-provider-save]")', 'inline provider form');
   await view.field('[data-testid=onboarding-provider-id]', 'scripted');
@@ -204,6 +255,17 @@ try {
   assert.equal((await rpc.x.models.roles.get()).default.model, 'scripted-model');
   assert.equal((await rpc.x.models.roles.get()).default.providerId, 'scripted');
   markStep('provider_model');
+
+  if (installMode) {
+    // P7-16: the bot step offers the same install, and Create bot waits for it.
+    await view.wait('!!document.querySelector("[data-testid=onboarding-hermes-install-start]")', 'bot step offers Install Hermes');
+    assert.equal(await view.evaluate('(() => { const b = document.querySelector("[data-testid=onboarding-bot-create]"); return b.disabled || b.getAttribute("aria-disabled") === "true"; })()'), true, 'Create bot waits for Hermes');
+    await view.evaluate('document.querySelector("[data-testid=onboarding-hermes-install-start]").click()');
+    await view.wait('!!document.querySelector("[data-testid=onboarding-hermes-install-progress]")', 'install progress shown');
+    await view.wait('!document.querySelector("[data-testid=onboarding-hermes-install]") && !document.querySelector("[role=status]")?.textContent?.includes("Checking Hermes")', 'Hermes installed from onboarding', 9000);
+    assert.equal((await rpc.x['engine-hermes'].install.status()).state, 'ready');
+    markStep('hermes_install', 900_000);
+  }
 
   await view.evaluate('document.querySelector("[data-testid=onboarding-bot-create]").click()');
   await view.wait('!!document.querySelector("[data-testid=onboarding-created-bot]")', 'first bot created');
@@ -227,7 +289,12 @@ try {
   assert.equal((await rpc.onboarding.get()).completed, true);
   const elapsedTotal = Math.round(performance.now() - onboardingStart);
   markStep('finish');
-  assert.ok(elapsedTotal < 240_000, `Onboarding exceeded 4-minute machine budget (${elapsedTotal} ms)`);
+  // The one-time Hermes install (install mode) is outside the onboarding budget.
+  const budgeted = elapsedTotal - (stepTimes.hermes_install ?? 0) - (stepTimes.extensions_card ?? 0);
+  assert.ok(budgeted < 240_000, `Onboarding exceeded 4-minute machine budget (${budgeted} ms)`);
+  if (installMode) {
+    await view.wait('!!document.querySelector("[data-testid=extension-engine-hermes]") && !document.querySelector("[data-testid=extension-engine-hermes-install]")', 'Extensions card no longer offers an install');
+  }
   console.log('P7-8_TIMES ' + JSON.stringify({ ...stepTimes, total: elapsedTotal, max_allowed: 240000 }));
 
   closeWindow(desktop.pid);
@@ -235,13 +302,14 @@ try {
   await eventually(async () => {
     try { await fetch(`${base}/health`); return false; } catch { return true; }
   }, 'gateway clean exit', 450);
-  console.log('P7-8 PASS build=true WebView2=true workspace=true owner=true model=scripted bot=true channel=optional chat=reply reload=false exit=clean');
+  console.log((installMode ? 'P7-8 PASS hermes=installed-from-onboarding extensions_card=install-button ' : 'P7-8 PASS ') + 'build=true WebView2=true workspace=true owner=true model=scripted bot=true channel=optional chat=reply reload=false exit=clean');
   passed = true;
 } finally {
   view?.close();
   if (alive(desktop.pid)) spawnSync('taskkill.exe', ['/PID', String(desktop.pid), '/T', '/F'], { windowsHide: true });
   if (status?.gatewayPid && alive(status.gatewayPid)) spawnSync('taskkill.exe', ['/PID', String(status.gatewayPid), '/T', '/F'], { windowsHide: true });
   await new Promise((done) => model.close(done));
+  if (fixtureServer) await new Promise((done) => fixtureServer.close(done));
   if (status?.gatewayPid) await eventually(() => !alive(status.gatewayPid), 'gateway exit before cleanup', 100).catch(() => {});
   // A cleanup error (e.g. EBUSY) must not replace a real failure, but on a passing run it is a leak and fails the test.
   await rm(home, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 }).catch((error) => {
