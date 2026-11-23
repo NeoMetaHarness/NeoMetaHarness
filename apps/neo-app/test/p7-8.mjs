@@ -124,7 +124,7 @@ if (installMode) {
   const lockFile = join(home, 'upstream.lock.json');
   writeFileSync(lockFile, JSON.stringify(lock, null, 2));
   fixtureServer = createServer((request, response) => {
-    if (request.url !== `/${pin.upstream}/tar.gz/refs/tags/${pin.ref}`) { response.writeHead(404).end(); return; }
+    if (request.url !== `/${pin.upstream}/tar.gz/${pin.commit}`) { response.writeHead(404).end(); return; }
     response.writeHead(200, { 'content-type': 'application/x-gzip', 'content-length': fixture.length }).end(fixture);
   });
   await new Promise((done) => fixtureServer.listen(0, '127.0.0.1', done));

@@ -129,7 +129,7 @@ export default function Extensions() {
             <p>{row.status === 'running' ? 'Running' : row.status === 'degraded' ? 'Needs attention' : 'Disabled'}
               {' · '}{row.health ? (row.health.ok ? 'Healthy' : 'Unhealthy') : 'Inactive'}</p>
             {row.reason && <p className="extension-reason">{row.reason}</p>}
-            {row.id === 'engine-hermes' && row.status === 'running' && row.health?.ok !== true && <HermesInstall
+            {row.id === 'engine-hermes' && row.status !== 'disabled' && <HermesInstall
               testId="extension-engine-hermes-install"
               onReady={() => { void http.extensions.list().then(setRows).catch(() => { /* the event stream refreshes */ }); }} />}
           </div>
