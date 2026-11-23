@@ -1,18 +1,21 @@
 /**
  * Engine sources (P7-16). Engines run from their source repos at the ref pinned in upstream.lock.json, unmodified.
  * Two places hold such a source, checked in this order:
- *   1. development: NMH_UPSTREAM_CACHE, or the nearest `nmh-upstream-cache` folder above the repository;
+ *   1. development: NMH_UPSTREAM_CACHE, or an `nmh-upstream-cache` folder inside a development checkout (the
+ *      search stops at the repository root, so an installed runtime never picks up a folder planted above it);
  *   2. installed apps: `<enginesDir>/<name>@<ref>`, which installEngineSource fills from the GitHub tarball of the
- *      pinned ref. The download is checked against the lock (archive sha256, and the commit git records in the
+ *      pinned commit. The download is checked against the lock (archive sha256, and the commit git records in the
  *      tarball), then extracted into a temp dir that gets a marker and is renamed into place, as the desktop shell
  *      does for its runtime archive. Entries that leave the folder, links and device files are refused.
  * Shared by every engine that needs a source checkout (Hermes, the super agent, T3).
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, readFileSync, statSync } from 'node:fs';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import http, { type IncomingMessage } from 'node:http';
+import https from 'node:https';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { Readable, Transform } from 'node:stream';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 
@@ -23,7 +26,7 @@ export interface EnginePin {
   upstream: string;
   /** Full commit SHA the ref points at; git writes it into the tarball's pax global header. */
   commit?: string;
-  /** sha256 of the GitHub tarball for `ref` (codeload.github.com/<upstream>/tar.gz/<ref path>). */
+  /** sha256 of the GitHub tarball of `commit` (codeload.github.com/<upstream>/tar.gz/<commit>). */
   archive_sha256?: string;
 }
 
@@ -34,7 +37,11 @@ export interface EngineSourceOptions {
   /** Key in upstream.lock.json `pins`, e.g. `hermes-agent`. */
   name: string;
   lockFile: string;
-  /** Where the upward search for `nmh-upstream-cache` starts (the repository or unpacked runtime root). */
+  /**
+   * Where the search for `nmh-upstream-cache` starts. It only runs inside a development checkout: from here up to
+   * the repository root (the first folder with `.git` or `pnpm-workspace.yaml`), never above it. An unpacked
+   * installer runtime has neither, so it uses the development cache only when one is named explicitly.
+   */
   searchFrom: string;
   /** App-data engines folder; without it only the development cache is used. */
   enginesDir?: string;
@@ -52,7 +59,8 @@ export interface EngineInstallOptions extends EngineSourceOptions {
   downloadBase?: string;
   onProgress?: (progress: EngineProgress) => void;
   signal?: AbortSignal;
-  fetch?: typeof fetch;
+  /** Proxy settings (HTTPS_PROXY, HTTP_PROXY, NO_PROXY); defaults to process.env. */
+  proxyEnv?: NodeJS.ProcessEnv;
 }
 
 export type EngineInstallErrorKind = 'network' | 'verify' | 'unsafe' | 'disk' | 'cancelled' | 'config';
@@ -78,13 +86,23 @@ export function readEnginePin(lockFile: string, name: string): EnginePin {
 /** `<name>@<ref>`: the folder name the development cache and the app-data folder share. */
 export function engineFolder(pin: EnginePin): string { return `${pin.name}@${pin.ref}`; }
 
+/** The development checkout containing `from`: the nearest folder with `.git` or `pnpm-workspace.yaml`. */
+export function repositoryRoot(from: string): string | undefined {
+  for (let dir = resolve(from); ; dir = dirname(dir)) {
+    if (existsSync(join(dir, '.git')) || existsSync(join(dir, 'pnpm-workspace.yaml'))) return dir;
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
 function devCacheRoot(options: EngineSourceOptions): string | undefined {
   const configured = options.upstreamCache ?? process.env.NMH_UPSTREAM_CACHE;
   if (configured) return configured;
+  const root = repositoryRoot(options.searchFrom);
+  if (!root) return undefined; // installed runtime: no implicit development cache
   for (let dir = resolve(options.searchFrom); ; dir = dirname(dir)) {
     const candidate = join(dir, 'nmh-upstream-cache');
     if (existsSync(candidate)) return candidate;
-    if (dirname(dir) === dir) return undefined;
+    if (dir === root || dirname(dir) === dir) return undefined;
   }
 }
 
@@ -117,8 +135,9 @@ export function engineDownloadUrl(pin: EnginePin, base = 'https://codeload.githu
   if (root.protocol !== 'https:' && !(root.protocol === 'http:' && loopback)) {
     throw new EngineInstallError('config', `Engine downloads use HTTPS (${root.origin})`);
   }
-  const ref = pin.kind === 'release' ? `refs/tags/${pin.ref}` : (pin.commit ?? pin.ref);
-  return new URL(`${root.pathname.replace(/\/$/, '')}/${pin.upstream}/tar.gz/${ref}`, root);
+  // The commit, not the tag: a tag moved upstream must neither change nor break what Neo installs.
+  if (!pin.commit) throw new EngineInstallError('config', `upstream.lock.json pins no commit for ${pin.name}`);
+  return new URL(`${root.pathname.replace(/\/$/, '')}/${pin.upstream}/tar.gz/${pin.commit}`, root);
 }
 
 const running = new Map<string, Promise<EngineSource>>();
@@ -128,12 +147,59 @@ export function installEngineSource(options: EngineInstallOptions): Promise<Engi
   const existing = resolveEngineSource(options);
   if (existing) return Promise.resolve(existing);
   const target = resolve(options.enginesDir, engineFolder(readEnginePin(options.lockFile, options.name)));
-  let work = running.get(target);
-  if (!work) {
-    work = install(options, target).finally(() => running.delete(target));
-    running.set(target, work);
+  const shared = running.get(target);
+  if (shared) {
+    // The running install belongs to another caller; if that caller cancelled it, this one starts its own.
+    return shared.catch((error: unknown) => {
+      if (error instanceof EngineInstallError && error.kind === 'cancelled' && !options.signal?.aborted) return installEngineSource(options);
+      throw error;
+    });
   }
+  const work = install(options, target).finally(() => running.delete(target));
+  running.set(target, work);
   return work;
+}
+
+const BUSY = new Set(['EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY']);
+/** Windows: antivirus and the indexer hold fresh files open for a while. Retry for up to ~30 s. */
+export async function retrying<T>(work: () => Promise<T>, signal?: AbortSignal, budgetMs = 30_000): Promise<T> {
+  const deadline = Date.now() + budgetMs;
+  for (let delay = 100; ; delay = Math.min(delay * 2, 2000)) {
+    try { return await work(); }
+    catch (error) {
+      if (!BUSY.has((error as NodeJS.ErrnoException).code ?? '') || Date.now() + delay > deadline || signal?.aborted) throw error;
+      await new Promise((done) => setTimeout(done, delay));
+    }
+  }
+}
+
+/** GET with the proxy settings (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) applied; redirects stay on HTTPS. */
+async function get(url: URL, signal: AbortSignal | undefined, proxyEnv: NodeJS.ProcessEnv, redirects = 5): Promise<IncomingMessage> {
+  const client = url.protocol === 'https:' ? https : http;
+  // Node 22.21+ applies HTTP(S)_PROXY / NO_PROXY for an agent given proxyEnv; older Nodes ignore the option.
+  const agent = new client.Agent({ proxyEnv } as http.AgentOptions);
+  const response = await new Promise<IncomingMessage>((done, fail) => {
+    const request = client.get(url, { agent, ...(signal ? { signal } : {}) }, done);
+    request.on('error', fail);
+  });
+  const location = response.headers.location;
+  if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && location) {
+    response.resume();
+    const next = new URL(location, url);
+    if (redirects <= 0 || (next.protocol !== 'https:' && next.origin !== url.origin)) {
+      throw new EngineInstallError('network', `Refused redirect of ${url.href} to ${next.href}`);
+    }
+    return get(next, signal, proxyEnv, redirects - 1);
+  }
+  return response;
+}
+
+/** Remove what an interrupted earlier install left behind (`.tmp-<name>-*` folders and tarballs). */
+async function removeLeftovers(enginesDir: string, name: string): Promise<void> {
+  const prefix = `.tmp-${name}-`;
+  for (const entry of await readdir(enginesDir).catch(() => [] as string[])) {
+    if (entry.startsWith(prefix)) await retrying(() => rm(join(enginesDir, entry), { recursive: true, force: true })).catch(() => {});
+  }
 }
 
 async function install(options: EngineInstallOptions, target: string): Promise<EngineSource> {
@@ -143,6 +209,7 @@ async function install(options: EngineInstallOptions, target: string): Promise<E
   }
   const url = engineDownloadUrl(pin, options.downloadBase);
   const enginesDir = resolve(options.enginesDir);
+  await removeLeftovers(enginesDir, pin.name);
   const temp = join(enginesDir, `.tmp-${pin.name}-${randomBytes(6).toString('hex')}`);
   const download = `${temp}.tar.gz`;
   const signal = options.signal;
@@ -152,14 +219,18 @@ async function install(options: EngineInstallOptions, target: string): Promise<E
     catch (error) { throw new EngineInstallError('disk', `Cannot create ${temp}: ${(error as Error).message}`, { cause: error }); }
 
     // 1. Download, hashing as it streams to disk.
-    let response: Response;
-    try { response = await (options.fetch ?? fetch)(url, { signal, redirect: 'follow' }); }
+    let response: IncomingMessage;
+    try { response = await get(url, signal, options.proxyEnv ?? process.env); }
     catch (error) {
       if (signal?.aborted) throw cancelled();
+      if (error instanceof EngineInstallError) throw error;
       throw new EngineInstallError('network', `Download of ${url.href} failed: ${(error as Error).message}`, { cause: error });
     }
-    if (!response.ok || !response.body) throw new EngineInstallError('network', `Download of ${url.href} returned HTTP ${response.status}`);
-    const total = Number(response.headers.get('content-length')) || undefined;
+    if (response.statusCode !== 200) {
+      response.resume();
+      throw new EngineInstallError('network', `Download of ${url.href} returned HTTP ${response.statusCode}`);
+    }
+    const total = Number(response.headers['content-length']) || undefined;
     const hash = createHash('sha256');
     let received = 0;
     const meter = new Transform({
@@ -169,7 +240,7 @@ async function install(options: EngineInstallOptions, target: string): Promise<E
         done(null, chunk);
       },
     });
-    try { await pipeline(Readable.fromWeb(response.body as import('node:stream/web').ReadableStream), meter, createWriteStream(download), { signal }); }
+    try { await pipeline(response, meter, createWriteStream(download), { signal }); }
     catch (error) {
       if (signal?.aborted) throw cancelled();
       const code = (error as NodeJS.ErrnoException).code;
@@ -217,17 +288,17 @@ async function install(options: EngineInstallOptions, target: string): Promise<E
         archive_sha256: pin.archive_sha256, installed_at: new Date().toISOString() }, null, 2) + '\n');
       if (existsSync(target)) {
         if (markerMatches(target, pin) && existsSync(join(target, options.probe))) return { path: target, origin: 'app-data', pin };
-        await rm(target, { recursive: true, force: true });
+        await retrying(() => rm(target, { recursive: true, force: true }), signal);
       }
-      await rename(temp, target);
+      await retrying(() => rename(temp, target), signal);
     } catch (error) {
       if (markerMatches(target, pin)) return { path: target, origin: 'app-data', pin }; // another process won the rename
       throw new EngineInstallError('disk', `Cannot move ${pin.name} into ${target}: ${(error as Error).message}`, { cause: error });
     }
     return { path: target, origin: 'app-data', pin };
   } finally {
-    await rm(download, { force: true }).catch(() => {});
-    await rm(temp, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+    await retrying(() => rm(download, { force: true })).catch(() => {});
+    await retrying(() => rm(temp, { recursive: true, force: true })).catch(() => {});
   }
 }
 
