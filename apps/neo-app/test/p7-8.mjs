@@ -251,6 +251,12 @@ try {
     assert.doesNotMatch(superagentCard, /NMH_UPSTREAM_CACHE|nmh-upstream-cache/i, 'no raw env-var error');
     assert.match(superagentCard, /Install the super agent/);
     assert.match(superagentCard, /Install Hermes first/);
+    // Hermes turned off is a different note than Hermes not installed.
+    const needsNote = 'document.querySelector("[data-testid=extension-engine-superagent-install-needs]")?.textContent ?? ""';
+    assert.equal((await rpc.extensions.disable({ id: 'engine-hermes' })).status, 'disabled');
+    await view.wait(`${needsNote}.includes("Turn on Hermes in Extensions")`, 'super agent card says to turn Hermes on', 100);
+    assert.equal((await rpc.extensions.enable({ id: 'engine-hermes' })).status, 'running');
+    await view.wait(`${needsNote}.includes("Install Hermes first")`, 'super agent card says to install Hermes again', 100);
     await view.evaluate('document.querySelector("[data-testid=onboarding-reminder] button").click()');
     await view.wait('!!document.querySelector("[data-testid=onboarding-owner-next]")', 'setup resumed');
     markStep('extensions_card');

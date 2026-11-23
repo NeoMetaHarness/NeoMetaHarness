@@ -36,6 +36,8 @@ const ENGINES: Record<InstallableEngine, {
   },
 };
 
+type NeedsNote = { title: string; detail: string };
+
 const installStatus = (engine: InstallableEngine): Promise<InstallStatus> => api.x[engine].install.status();
 const installStart = (engine: InstallableEngine): Promise<InstallStatus> => api.x[engine].install.start();
 
@@ -54,8 +56,9 @@ export default function EngineInstall({ engine = 'engine-hermes', onReady, testI
   const [round, setRound] = useState(0);
   /** The extension is degraded: its reason. The install routes are gone, so status calls fail. */
   const [unavailable, setUnavailable] = useState<string | null>(null);
-  /** The engine this one needs is not ready (false while unknown or when nothing is needed). */
-  const [needsMissing, setNeedsMissing] = useState(false);
+  /** What the engine this one needs is missing (null while unknown, when it is ready or nothing is needed). */
+  const [needsMissing, setNeedsMissing] = useState<NeedsNote | null>(null);
+  const needsNote = useRef<NeedsNote | null>(null);
   const installing = useRef(false);
   const notified = useRef(false);
   const ready = useRef(onReady);
@@ -92,19 +95,33 @@ export default function EngineInstall({ engine = 'engine-hermes', onReady, testI
     return () => { disposed = true; if (timer) window.clearTimeout(timer); };
   }, [round, engine, copy.title]);
 
-  // The needed engine: disabled or not installed counts as missing. While it is missing, look again every few
-  // seconds, so the note goes away once it is installed (from its own card or onboarding).
+  // The needed engine, from its Extensions row: turned off, needing attention (its reason) or not installed. While
+  // it is not ready, look again every few seconds, so the note follows it (its own card, onboarding, a restart).
   const needs = copy.needs?.engine;
   const shown = status !== null && status.state !== 'ready';
   useEffect(() => {
     if (!needs || !shown) return;
+    const other = ENGINES[needs];
     let disposed = false;
     let timer: number | undefined;
     const check = async () => {
-      const missing = await installStatus(needs).then((next) => next.state !== 'ready', () => true);
+      const rows = await api.extensions.list().catch(() => undefined);
       if (disposed) return;
-      setNeedsMissing(missing);
-      if (missing) timer = window.setTimeout(() => { void check(); }, 3000);
+      if (!rows) { timer = window.setTimeout(() => { void check(); }, 3000); return; } // Gateway unreachable: keep the note
+      const row = rows.find((item) => item.id === needs);
+      let note: NeedsNote | null = null;
+      if (!row || row.status === 'disabled') note = { title: `Turn on ${other.name} in Extensions`, detail: copy.needs!.why };
+      else if (row.status === 'degraded') note = { title: `${other.title} needs attention`, detail: row.reason ?? `${other.title} could not start.` };
+      else {
+        // Running: installed, or in install mode. No answer means it is restarting; that is not worth a note.
+        const state = await installStatus(needs).then((next) => next.state, () => undefined);
+        if (state && state !== 'ready') note = { title: `Install ${other.name} first`, detail: copy.needs!.why };
+        if (!state) note = needsNote.current;
+      }
+      if (disposed) return;
+      needsNote.current = note;
+      setNeedsMissing(note);
+      if (note || !row || row.status !== 'running') timer = window.setTimeout(() => { void check(); }, 3000);
     };
     void check();
     return () => { disposed = true; if (timer) window.clearTimeout(timer); };
@@ -145,10 +162,9 @@ export default function EngineInstall({ engine = 'engine-hermes', onReady, testI
     </div>
   </div>;
   if (!status || status.state === 'ready') return null;
-  const needed = copy.needs && needsMissing ? ENGINES[copy.needs.engine] : undefined;
   return <div className="hermes-install" data-testid={testId} data-state={status.state}>
-    {needed && copy.needs && <div data-testid={`${testId}-needs`}>
-      <Banner status="warning" title={`Install ${needed.name} first`} description={<Text as="p">{copy.needs.why}</Text>} />
+    {needsMissing && <div data-testid={`${testId}-needs`}>
+      <Banner status="warning" title={needsMissing.title} description={<Text as="p">{needsMissing.detail}</Text>} />
     </div>}
     {status.state === 'not_installed' && <>
       <Text as="p">{copy.about}</Text>
