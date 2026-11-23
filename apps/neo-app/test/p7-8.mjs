@@ -236,6 +236,13 @@ try {
     const card = await view.evaluate('document.querySelector("[data-testid=extension-engine-hermes]").textContent');
     assert.doesNotMatch(card, /NMH_UPSTREAM_CACHE|upstream cache missing/i, 'no raw env-var error');
     assert.match(card, /Install Hermes/);
+    // The super agent card offers its own install from the same panel, and says it needs Hermes first.
+    assert.equal((await rpc.extensions.enable({ id: 'engine-superagent' })).status, 'running', 'engine-superagent runs in install mode');
+    await view.wait('!!document.querySelector("[data-testid=extension-engine-superagent-install-start]") && !!document.querySelector("[data-testid=extension-engine-superagent-install-needs]")', 'Extensions card offers Install the super agent, after Hermes');
+    const superagentCard = await view.evaluate('document.querySelector("[data-testid=extension-engine-superagent]").textContent');
+    assert.doesNotMatch(superagentCard, /NMH_UPSTREAM_CACHE|nmh-upstream-cache/i, 'no raw env-var error');
+    assert.match(superagentCard, /Install the super agent/);
+    assert.match(superagentCard, /Install Hermes first/);
     await view.evaluate('document.querySelector("[data-testid=onboarding-reminder] button").click()');
     await view.wait('!!document.querySelector("[data-testid=onboarding-owner-next]")', 'setup resumed');
     markStep('extensions_card');
@@ -294,6 +301,7 @@ try {
   assert.ok(budgeted < 240_000, `Onboarding exceeded 4-minute machine budget (${budgeted} ms)`);
   if (installMode) {
     await view.wait('!!document.querySelector("[data-testid=extension-engine-hermes]") && !document.querySelector("[data-testid=extension-engine-hermes-install]")', 'Extensions card no longer offers an install');
+    await view.wait('!!document.querySelector("[data-testid=extension-engine-superagent-install-start]") && !document.querySelector("[data-testid=extension-engine-superagent-install-needs]")', 'super agent no longer waits for Hermes');
   }
   console.log('P7-8_TIMES ' + JSON.stringify({ ...stepTimes, total: elapsedTotal, max_allowed: 240000 }));
 
@@ -302,7 +310,7 @@ try {
   await eventually(async () => {
     try { await fetch(`${base}/health`); return false; } catch { return true; }
   }, 'gateway clean exit', 450);
-  console.log((installMode ? 'P7-8 PASS hermes=installed-from-onboarding extensions_card=install-button ' : 'P7-8 PASS ') + 'build=true WebView2=true workspace=true owner=true model=scripted bot=true channel=optional chat=reply reload=false exit=clean');
+  console.log((installMode ? 'P7-8 PASS hermes=installed-from-onboarding extensions_card=install-button superagent_card=install-button+needs-hermes ' : 'P7-8 PASS ') + 'build=true WebView2=true workspace=true owner=true model=scripted bot=true channel=optional chat=reply reload=false exit=clean');
   passed = true;
 } finally {
   view?.close();

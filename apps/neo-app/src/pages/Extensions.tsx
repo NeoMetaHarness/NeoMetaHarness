@@ -6,7 +6,11 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type ExtensionStatus, type GatewayEvent } from '@neometaharness/contracts';
 import { Switch } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
-import HermesInstall from './EngineInstall';
+import EngineInstall, { type InstallableEngine } from './EngineInstall';
+
+/** Engines whose card offers Install (P7-16). */
+const INSTALLABLE: readonly string[] = ['engine-hermes', 'engine-superagent'] satisfies InstallableEngine[];
+const isInstallable = (id: string): id is InstallableEngine => INSTALLABLE.includes(id);
 
 type Client = ContractRouterClient<typeof neoContract>;
 const http = createORPCClient<Client>(new HttpLink({
@@ -129,8 +133,8 @@ export default function Extensions() {
             <p>{row.status === 'running' ? 'Running' : row.status === 'degraded' ? 'Needs attention' : 'Disabled'}
               {' · '}{row.health ? (row.health.ok ? 'Healthy' : 'Unhealthy') : 'Inactive'}</p>
             {row.reason && <p className="extension-reason">{row.reason}</p>}
-            {row.id === 'engine-hermes' && row.status !== 'disabled' && <HermesInstall
-              testId="extension-engine-hermes-install"
+            {isInstallable(row.id) && row.status !== 'disabled' && <EngineInstall
+              key={row.id} engine={row.id} testId={`extension-${row.id}-install`}
               onReady={() => { void http.extensions.list().then(setRows).catch(() => { /* the event stream refreshes */ }); }} />}
           </div>
           <Switch label={`Enable ${row.id}`} value={row.desired} isLoading={busy === row.id}

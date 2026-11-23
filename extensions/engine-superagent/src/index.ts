@@ -7,7 +7,9 @@ import { z } from 'zod';
 import { defineExtension } from '@neometaharness/kernel';
 import type { AcceptMode, InboxEvent, InboxItem } from '@neometaharness/contracts';
 import type { VaultService } from '@neometaharness/vault';
-import { loadPinnedSuperagent } from './pinned.js';
+import { loadPinnedSuperagent, resolveSuperagentSource } from './pinned.js';
+import { READY as INSTALL_READY, SuperagentInstaller } from './install.js';
+import type { EngineSource } from '@neometaharness/kernel';
 import { modelHubFactory, type ModelFactory, type ModelHubResolver } from './model.js';
 import { ModelRouteRejected } from '../../models/src/hub.js';
 import { PresetWorkerHost, type WorkerHost } from './worker-host.js';
@@ -182,7 +184,7 @@ class SuperagentService {
   /** Inject the `neo upstream` check runner (tests use a scripted fake; production runs upstream:check). */
   useUpstreamChecker(checker: UpstreamChecker): void { this.upstreamChecker = checker; }
 
-  async start(home: string, gatewayUrl: () => string, tokenFile?: string, channel?: ChannelSource): Promise<void> {
+  async start(source: EngineSource, home: string, gatewayUrl: () => string, tokenFile?: string, channel?: ChannelSource): Promise<void> {
     this.inboxStore = new InboxStore(join(home, '..', 'inbox.json'));
     for (const item of this.inboxStore.load()) this.items.set(item.id, item);
     this.acceptModes = new AcceptModeStore(join(home, '..', 'accept-mode.json'));
@@ -198,7 +200,7 @@ class SuperagentService {
     this.workerHome = home;
     this.gatewayUrl = gatewayUrl;
     this.token = tokenFile;
-    const upstream = await loadPinnedSuperagent();
+    const upstream = await loadPinnedSuperagent(source);
     const repo = new upstream.MemoryRepositories();
     const kinds = ['neo/app', 'neo/cron', 'neo/channel', 'neo/upstream', 'neo/github'];
     const sourceKinds = kinds.map((kind) => ({
@@ -981,6 +983,28 @@ export default defineExtension({
     const vault = ctx.inject<VaultService>('vault');
     if (!gatewayUrl || !dataDir || !vault) throw new Error('Superagent needs Gateway, vault and isolated storage');
 
+    // P7-16: installed apps keep engine sources in the Gateway's engines folder (local app data). Without the
+    // pinned source, stay up with only the install routes so Extensions can install it; nothing else starts
+    // (no bridge key, no Inbox), and the install reactivates this extension.
+    const enginesDir = ctx.inject<string>('enginesDir');
+    const source = resolveSuperagentSource(enginesDir);
+    if (!source) {
+      const installer = new SuperagentInstaller({
+        enginesDir,
+        ...(process.env.NODE_ENV === 'test' && process.env.NMH_TEST_ENGINE_DOWNLOAD_BASE ? { downloadBase: process.env.NMH_TEST_ENGINE_DOWNLOAD_BASE } : {}),
+        onInstalled: () => { void ctx.reactivate().catch((error) => console.error('Super agent restart after install failed', error)); },
+        log: (message, error) => console.error(message, error),
+      });
+      ctx.effect(() => () => installer.cancel());
+      // Not installed is a normal state, not a fault: the UI reads install/status, not health.
+      ctx.health(() => ({ ok: true }));
+      ctx.route('install/status', () => installer.current());
+      ctx.route('install/start', () => installer.start());
+      return;
+    }
+    ctx.route('install/status', () => INSTALL_READY);
+    ctx.route('install/start', () => INSTALL_READY);
+
     // SEC-11: a 7-day member key for a real workspace owner, rotated daily
     // through an owner-only file the MCP bridge re-reads per call. Crash
     // leftovers are swept first. There is no fallback to NMH_GATEWAY_TOKEN:
@@ -1028,7 +1052,7 @@ export default defineExtension({
       const fake = await import(process.env.NMH_SUPERAGENT_TEST_UPSTREAM) as { createUpstreamChecker(): UpstreamChecker };
       service.useUpstreamChecker(fake.createUpstreamChecker());
     }
-    await service.start(join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
+    await service.start(source, join(dataDir, 'engine-superagent', 'dsh'), gatewayUrl, tokenFile, channel);
     const apps = ctx.inject<AppsRegistry>('appsRegistry');
     const desktopAcceptMode = ctx.inject<string>('deploymentMode') === 'desktop';
     const detachApps = apps?.attachGate({ submit: input => service.submitApp(input, desktopAcceptMode ? 'default' : input.actor.workspaceId) });

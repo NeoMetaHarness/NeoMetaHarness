@@ -49,7 +49,9 @@
       "kind": "commit",
       "ref": "8c32a9dc5d72",
       "upstream": "deepseek-ai/dsh-superagent-prototype",
-      "pinned_on": "2026-11-16"
+      "pinned_on": "2026-11-16",
+      "commit": "8c32a9dc5d72c033816c6a8110b37f40cf94fba4",
+      "archive_sha256": "64cf5bea00cbe7153adaa77b9e583d839f3f3818793e2e1541ddc789451485a6"
     }
   },
   "updated": "2026-11-16T23:38:39.219Z"

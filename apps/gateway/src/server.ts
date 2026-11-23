@@ -1359,6 +1359,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           }),
         },
       },
+      'engine-superagent': {
+        install: {
+          status: os.x['engine-superagent'].install.status.handler(async ({ context }) => {
+            authorize('x.engine-superagent.install.status', context);
+            return invokeInbox('install/status', {}) as Promise<any>;
+          }),
+          start: os.x['engine-superagent'].install.start.handler(async ({ context }) => {
+            authorize('x.engine-superagent.install.start', context);
+            return invokeInbox('install/start', {}) as Promise<any>;
+          }),
+        },
+      },
       'engine-hermes': {
         install: {
           status: os.x['engine-hermes'].install.status.handler(async ({ context }) => {

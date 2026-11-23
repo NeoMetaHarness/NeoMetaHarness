@@ -169,6 +169,22 @@ export const hermesInstallStatusSchema = z.object({
 });
 export type HermesInstallStatus = z.infer<typeof hermesInstallStatusSchema>;
 
+/** P7-16: installing the super agent on demand (installed apps ship without the dsh-superagent source). */
+export const superagentInstallStatusSchema = z.object({
+  state: z.enum(['not_installed', 'installing', 'ready', 'failed']),
+  phase: z.enum(['download', 'verify', 'extract', 'build', 'starting']).optional(),
+  progress: z.number().min(0).max(1).optional(),
+  message: z.string(),
+  error: z.string().optional(),
+});
+export type SuperagentInstallStatus = z.infer<typeof superagentInstallStatusSchema>;
+export const superagentContract = {
+  install: {
+    status: oc.output(superagentInstallStatusSchema),
+    start: oc.output(superagentInstallStatusSchema),
+  },
+};
+
 export const hermesContract = {
   install: {
     status: oc.output(hermesInstallStatusSchema),
@@ -593,7 +609,7 @@ const baseNeoContract = {
     backup: oc.input(z.object({ out: z.string().min(1), passphrase: z.string().min(12) }))
       .output(z.object({ out: z.string(), files: z.number().int(), format: z.number().int() })),
   },
-  x: { 'coding-workflow': codingWorkflowContract, 'models-router-panda': pandaContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract, metrics: metricsContract, 'voice-xai': voiceXaiContract, 'x-search': xSearchContract },
+  x: { 'coding-workflow': codingWorkflowContract, 'models-router-panda': pandaContract, 'engine-t3': t3Contract, 'engine-hermes': hermesContract, 'engine-superagent': superagentContract, 'engine-dsh': dshContract, 'memory-local': memoryContract, 'memory-honcho': honchoContract, 'skills-registry': skillsRegistryContract, models: modelsContract, channels: channelsContract, metrics: metricsContract, 'voice-xai': voiceXaiContract, 'x-search': xSearchContract },
   onboarding: {
     get: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), workspaceName: z.string(), mode: z.enum(['desktop', 'server']) })),
     complete: oc.output(z.object({ completed: z.boolean(), completedAt: z.string().nullable(), ownerName: z.string(), workspaceName: z.string(), mode: z.enum(['desktop', 'server']) })),
