@@ -91,6 +91,9 @@ execFileSync(process.execPath, [join(appDir, 'node_modules/vite/bin/vite.js'), '
 console.log('Running installer-check unit checks (checked-in owner key accepted; placeholder, differing and malformed keys rejected)...');
 const { runInstallerCheck } = await import('../../../scripts/installer-check.mjs');
 const baseTauriConf = JSON.parse(await readFile(join(appDir, 'src-tauri/tauri.conf.json'), 'utf8'));
+// The fake update is always one minor version above the app, so a release version bump never breaks this test.
+const [appMajor, appMinor] = String(baseTauriConf.version).split('.').map(Number);
+const updateVersion = `${appMajor}.${appMinor + 1}.0`;
 
 // The checked-in key is the owner's real public key, and it is accepted as is (no override, no bypass).
 const PLACEHOLDER_KEY = 'REPLACE_WITH_BASE64_MINISIGN_PUBLIC_KEY';
@@ -829,8 +832,8 @@ const updateServer = createServer((request, response) => {
     updateRequestCount++;
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({
-      version: '0.2.0',
-      notes: 'Neo Meta Harness 0.2.0 update notes',
+      version: updateVersion,
+      notes: `Neo Meta Harness ${updateVersion} update notes`,
       pub_date: '2026-11-20T12:00:00Z',
       platforms: {
         'windows-x86_64': {
@@ -843,7 +846,7 @@ const updateServer = createServer((request, response) => {
   }
   if (request.url === '/download/redirect') {
     redirectFollowedCount++;
-    response.writeHead(302, { Location: `http://127.0.0.1:${updateServer.address().port}/download/neo-app-0.2.0.msi.zip` });
+    response.writeHead(302, { Location: `http://127.0.0.1:${updateServer.address().port}/download/neo-app-${updateVersion}.msi.zip` });
     response.end();
     return;
   }
@@ -898,7 +901,7 @@ try {
 
   // Verify UI displays available version and "Install and restart" button
   await view.wait(
-    'document.querySelector("[data-testid=settings-update-available]") !== null || document.body.textContent.includes("0.2.0")',
+    `document.querySelector("[data-testid=settings-update-available]") !== null || document.body.textContent.includes("${updateVersion}")`,
     'update available status displayed'
   );
   await view.wait(
@@ -907,7 +910,7 @@ try {
   );
 
   const text = await view.evaluate('document.body.textContent');
-  assert.ok(text.includes('0.2.0'), 'UI text contains version 0.2.0');
+  assert.ok(text.includes(updateVersion), `UI text contains version ${updateVersion}`);
   assert.ok(text.includes('Update available'), 'UI text contains "Update available"');
   assert.ok(text.includes('Install and restart'), 'UI text contains "Install and restart"');
 
@@ -924,7 +927,7 @@ try {
     try { await fetch(`${base}/health`); return false; } catch { return true; }
   }, 'gateway clean exit', 450);
 
-  console.log('P1-11 PASS fake_update_server=true version=0.2.0 ui_shown=true install_not_executed=true clean_exit=true');
+  console.log(`P1-11 PASS fake_update_server=true version=${updateVersion} ui_shown=true install_not_executed=true clean_exit=true`);
 } finally {
   view?.close();
   if (alive(desktop.pid)) spawnSync('taskkill.exe', ['/PID', String(desktop.pid), '/T', '/F'], { windowsHide: true });
