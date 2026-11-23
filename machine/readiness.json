@@ -622,9 +622,10 @@
     },
     "P7-16": {
       "title": "Install Hermes, the super agent and T3 on demand in the desktop app",
-      "status": "not_started",
-      "owner": "unassigned",
-      "evidence": "Owner report 2026-11-23 on the installed v1.0.0 (Windows): engine-hermes and engine-superagent inactive with 'upstream cache missing (set NMH_UPSTREAM_CACHE)', channels inactive (depends on engine-hermes), engine-t3 running but unhealthy (no T3 server to connect to); bot creation in onboarding fails. Owner chose in-app on-demand install; v1.0.0 stays published and the fix ships as an update."
+      "status": "in_progress",
+      "owner": "helper (opus)",
+      "evidence": "Owner report 2026-11-23 on the installed v1.0.0 (Windows): engine-hermes and engine-superagent inactive with 'upstream cache missing (set NMH_UPSTREAM_CACHE)', channels inactive (depends on engine-hermes), engine-t3 running but unhealthy (no T3 server to connect to); bot creation in onboarding fails. Owner chose in-app on-demand install; v1.0.0 stays published and the fix ships as an update. Step 1 of 3 (Hermes) merged 2026-11-24 as db6e175 after PM review (11 commits from work/opus-p716): shared engine-source resolver/installer in packages/kernel (dev cache only from an explicit NMH_UPSTREAM_CACHE or inside a checkout; app-data install by pinned commit with sha256 + commit verification, safe tar extraction, Windows rename retries, leftover cleanup), ctx.reactivate kernel seam, engine-hermes install mode with plain-language errors and managed-Python venv check, uv 0.12.14 bundled and checksum-verified, engines in local app data (NMH_ENGINES_DIR), Install Hermes panel on Extensions and in onboarding. An independent code review found 10 issues (one high: the dev-cache search reached C: in installed apps); all fixed. Review: test:p7-16 x2, kernel, engine-hermes, p7-8 default and install mode, installer:check, cargo test, gateway, toggle, check, secret scan OK; full regression ok=70 fail=0. Real unsigned NSIS build (141 MB) run in place with isolated data: setup screen shown, Hermes installed from GitHub with the bundled uv in 77 s, engine-hermes and channels running, bot created, gateway exits on close.",
+      "remaining": "Step 2: super agent on demand. Step 3: T3 (start or connect a T3 server). Then ship as an update to v1.0.0."
     },
     "P7-17": {
       "title": "Subscription sign-in in onboarding and Model Hub",
