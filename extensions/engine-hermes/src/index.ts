@@ -2,11 +2,12 @@ import { defineExtension } from '@neometaharness/kernel';
 import { timingSafeEqual } from 'node:crypto';
 import type { ComputerRegistry } from '@neometaharness/computers';
 import { projectHermesComputer } from '@neometaharness/computers/hermes';
-import { HermesRuntime, ProfileFileCredentials, VaultCredentials } from './runtime.js';
+import { HermesRuntime, ProfileFileCredentials, VaultCredentials, hermesVenvReady, resolveHermesSource } from './runtime.js';
+import { HermesInstaller, READY } from './install.js';
 import { projectHermesMemory, type MemoryBridge } from './memory.js';
 import type { ComputerMcpBridge, McpProjectionBridge, SkillsBridge } from '@neometaharness/kernel';
 import type { VaultService } from '@neometaharness/vault';
-import { resolve, join } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 
@@ -15,8 +16,30 @@ type ModelProjector = { projectHermes(profile: string, home: string): Promise<st
 export default defineExtension({
   async activate(ctx) {
     const storage = ctx.inject<string>('extensionDataDir');
+    // P7-16: installed apps keep engine sources, venvs and uv's cache in <data>/engines, outside the versioned runtime.
+    const enginesDir = ctx.inject<string>('enginesDir') ?? (storage ? join(dirname(storage), 'engines') : undefined);
+    const source = resolveHermesSource(enginesDir);
+    if (!source || (source.origin === 'app-data' && !await hermesVenvReady(source.path, source.layout))) {
+      // Not installed: stay up so Extensions and onboarding can install Hermes. No agentRuntime is provided, so
+      // channels reports that it needs Hermes until the install reactivates this extension.
+      const installer = new HermesInstaller({
+        enginesDir,
+        ...(process.env.NODE_ENV === 'test' && process.env.NMH_TEST_ENGINE_DOWNLOAD_BASE ? { downloadBase: process.env.NMH_TEST_ENGINE_DOWNLOAD_BASE } : {}),
+        onInstalled: () => { void ctx.reactivate().catch((error) => console.error('Hermes restart after install failed', error)); },
+        log: (message, error) => console.error(message, error),
+      });
+      ctx.effect(() => () => installer.cancel());
+      ctx.health(() => ({ ok: false }));
+      ctx.route('install/status', () => installer.current());
+      ctx.route('install/start', () => installer.start());
+      return;
+    }
+    ctx.route('install/status', () => READY);
+    ctx.route('install/start', () => READY);
     const restoredHome = storage ? join(storage, 'engine-hermes', 'home') : undefined;
-    const home = resolve(process.env.NMH_HERMES_HOME ?? (restoredHome && existsSync(restoredHome) ? restoredHome : fileURLToPath(new URL('../.cache/home', import.meta.url))));
+    // An app-data install also keeps the Hermes home (bots, sessions) in the data folder, so updates keep it.
+    const home = resolve(process.env.NMH_HERMES_HOME ?? (restoredHome && (existsSync(restoredHome) || source.origin === 'app-data')
+      ? restoredHome : fileURLToPath(new URL('../.cache/home', import.meta.url))));
     const vault = ctx.inject<VaultService>('vault');
     const credentials = vault ? new VaultCredentials(vault, home) : new ProfileFileCredentials(home);
     const computers = ctx.inject<ComputerRegistry>('computers');
@@ -36,7 +59,7 @@ export default defineExtension({
       // computer capability never requires restarting this Hermes bot.
       return JSON.stringify([computerBinding ? 'neo_vnc' : undefined, memoryVersion, skillsVersion, modelVersion, computerMcp ? true : undefined, appsMcp ? true : undefined]);
     }, home);
-    await service.start();
+    await service.start(source);
     ctx.provide('agentRuntime', service);
     ctx.provide('hermesScreen', {
       async connect(profile: string, workspaceId: string, token: string) {

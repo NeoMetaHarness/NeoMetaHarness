@@ -6,6 +6,7 @@ import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type ModelProviderRecord } from '@neometaharness/contracts';
 import { Button } from '@neometaharness/ui';
 import { gatewayToken, gatewayUrl } from '../config';
+import HermesInstall from './EngineInstall';
 import './onboarding.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -43,6 +44,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
   const [providerKey, setProviderKey] = useState('');
   const [botName, setBotName] = useState('first-bot');
   const [createdBot, setCreatedBot] = useState('');
+  const [hermes, setHermes] = useState<'checking' | 'missing' | 'ready'>('checking');
   const [message, setMessage] = useState('Hi! Please introduce yourself in one sentence.');
   const [reply, setReply] = useState('');
   const [chatReady, setChatReady] = useState(false);
@@ -125,14 +127,29 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
     finally { setBusy(false); }
   }
 
+  // P7-16: installed apps ship without Hermes. The bot step offers the install instead of an error.
+  useEffect(() => {
+    if (stage !== 'bot') return;
+    let mounted = true;
+    void api.extensions.enable({ id: 'engine-hermes' })
+      .then(async (enabled) => {
+        if (enabled.status !== 'running') throw new Error(enabled.reason || 'Hermes engine unavailable');
+        const install = await api.x['engine-hermes'].install.status();
+        if (mounted) setHermes(install.state === 'ready' ? 'ready' : 'missing');
+      })
+      .catch((reason) => { if (mounted) { setHermes('ready'); setError(`Cannot start Hermes: ${String(reason)}`); } });
+    return () => { mounted = false; };
+  }, [stage]);
+
   async function createBot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!botName.trim() || busy) return;
+    if (!botName.trim() || busy || hermes !== 'ready') return;
     setBusy(true);
     setError('');
     try {
       const enabled = await api.extensions.enable({ id: 'engine-hermes' });
       if (enabled.status !== 'running') throw new Error(enabled.reason || 'Hermes engine unavailable');
+      if ((await api.x['engine-hermes'].install.status()).state !== 'ready') { setHermes('missing'); return; }
       const existing = await api.x['engine-hermes'].profiles.list();
       const created = existing.profiles.find((profile) => profile.name === botName.trim())
         ?? await api.x['engine-hermes'].profiles.create({ name: botName.trim() });
@@ -242,9 +259,11 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
       {stage === 'bot' && <>
         <h2>Create your first bot</h2>
         <p>Give your bot a name. You can add more bots later.</p>
+        {hermes === 'missing' && <HermesInstall testId="onboarding-hermes-install" onReady={() => setHermes('ready')} />}
+        {hermes === 'checking' && <p role="status">Checking Hermes…</p>}
         <form className="neo-onboarding-form" onSubmit={(event) => void createBot(event)}>
           <label>Bot name<input data-testid="onboarding-bot-name" value={botName} onChange={(event) => setBotName(event.target.value)} required /></label>
-          <Button label="Create first bot" data-testid="onboarding-bot-create" type="submit" isDisabled={!botName.trim() || busy}>Create bot</Button>
+          <Button label="Create first bot" data-testid="onboarding-bot-create" type="submit" isDisabled={!botName.trim() || busy || hermes !== 'ready'}>Create bot</Button>
         </form>
       </>}
       {stage === 'channel' && <>

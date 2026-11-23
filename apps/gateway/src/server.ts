@@ -361,6 +361,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     dshMemoryBridge,
     skillsBridge,
     extensionDataDir,
+    // P7-16: engine sources installed on demand, their venvs and caches (outside the versioned runtime).
+    ...(options.dataDir || options.databaseFile !== ':memory:' ? { enginesDir: join(dataDir, 'engines') } : {}),
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
     // P1-13: where an extension keeps a workspace's own configuration (Model Hub, Panda). Desktop has one
     // ('default', unchanged); server mode keeps each workspace apart, and 'default' is the deployment's.
@@ -1355,6 +1357,16 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         },
       },
       'engine-hermes': {
+        install: {
+          status: os.x['engine-hermes'].install.status.handler(async ({ context }) => {
+            authorize('x.engine-hermes.install.status', context);
+            return invokeHermes('install/status', {}) as Promise<any>;
+          }),
+          start: os.x['engine-hermes'].install.start.handler(async ({ context }) => {
+            authorize('x.engine-hermes.install.start', context);
+            return invokeHermes('install/start', {}) as Promise<any>;
+          }),
+        },
         skills: {
           list: os.x['engine-hermes'].skills.list.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.skills.list', context);

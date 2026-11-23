@@ -159,7 +159,21 @@ export type VaultOperation = 'list' | 'put' | 'rotate' | 'delete';
 export const hermesEventSchema = t3EventSchema;
 export type HermesEvent = z.infer<typeof hermesEventSchema>;
 
+/** P7-16: installing Hermes on demand (installed apps ship without its source or Python environment). */
+export const hermesInstallStatusSchema = z.object({
+  state: z.enum(['not_installed', 'installing', 'ready', 'failed']),
+  phase: z.enum(['download', 'verify', 'extract', 'python', 'dependencies', 'starting']).optional(),
+  progress: z.number().min(0).max(1).optional(),
+  message: z.string(),
+  error: z.string().optional(),
+});
+export type HermesInstallStatus = z.infer<typeof hermesInstallStatusSchema>;
+
 export const hermesContract = {
+  install: {
+    status: oc.output(hermesInstallStatusSchema),
+    start: oc.output(hermesInstallStatusSchema),
+  },
   skills: {
     list: oc.input(z.object({ profile: z.string().min(1) })).output(z.array(z.object({
       name: z.string(), provenance: z.string().optional(), usage: z.number().optional(),

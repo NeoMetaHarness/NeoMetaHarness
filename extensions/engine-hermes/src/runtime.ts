@@ -1,12 +1,13 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { HermesEvent } from '@neometaharness/contracts';
+import { engineFolder, resolveEngineSource, type EngineSource, type EngineSourceOrigin } from '@neometaharness/kernel';
 import { DshProjector, type VaultService, type VaultScope } from '@neometaharness/vault';
 
 const exec = promisify(execFile);
@@ -20,46 +21,100 @@ export async function hermesBaseEnvironment(): Promise<Record<string, string>> {
   return new DshProjector([]).project(new Map());
 }
 
-function upstreamPath(): string {
-  const lock = JSON.parse(readFileSync(join(repoDir, 'upstream.lock.json'), 'utf8')) as {
-    pins: Record<string, { ref: string }>;
-  };
-  let root = process.env.NMH_UPSTREAM_CACHE;
-  if (!root) {
-    for (let dir = repoDir; ; dir = dirname(dir)) {
-      const candidate = join(dir, 'nmh-upstream-cache');
-      if (existsSync(candidate)) { root = candidate; break; }
-      if (dirname(dir) === dir) throw new Error('Hermes upstream cache missing (set NMH_UPSTREAM_CACHE)');
-    }
-  }
-  const pinned = join(root!, `hermes-agent@${lock.pins['hermes-agent']!.ref}`);
-  if (!existsSync(join(pinned, 'gateway/platforms/api_server.py'))) throw new Error(`Pinned Hermes not found: ${pinned}`);
-  return pinned;
+/** The pinned Hermes checkout (P7-16): the development cache, else the app-data engines folder. */
+export const HERMES_PIN = 'hermes-agent';
+const HERMES_PROBE = 'gateway/platforms/api_server.py';
+
+/**
+ * upstream.lock.json of this repository or unpacked runtime. Isolated tests (NODE_ENV=test) may point at a
+ * fixture lock whose pin matches a local fixture tarball; production always verifies against the shipped lock.
+ */
+export function hermesLockFile(): string {
+  const fixture = process.env.NODE_ENV === 'test' ? process.env.NMH_TEST_UPSTREAM_LOCK : undefined;
+  return fixture ?? join(repoDir, 'upstream.lock.json');
 }
 
-async function pythonPath(upstream: string): Promise<string> {
-  const venv = join(cacheDir, 'venv');
-  const python = process.platform === 'win32' ? join(venv, 'Scripts/python.exe') : join(venv, 'bin/python');
-  const marker = join(venv, '.neo-hermes-upstream');
-  const installed = await readFile(marker, 'utf8').catch(() => '');
-  const dependencySet = `${upstream}|web,sms,telegram,mcp`;
-  if (existsSync(python) && installed.trim() === dependencySet) return python;
+/** Where a Hermes venv, uv's cache and uv-managed Python live for one source. */
+export interface HermesLayout { venv: string; uvCache: string; pythonInstallDir?: string; requirements: string }
+export interface HermesSource { path: string; origin: EngineSourceOrigin; layout: HermesLayout }
 
-  await mkdir(cacheDir, { recursive: true });
-  const uvEnv = { ...await hermesBaseEnvironment(), UV_CACHE_DIR: join(cacheDir, 'uv-cache') };
-  if (!existsSync(python)) {
-    await exec('uv', ['venv', venv, '--python', '3.14'], { env: uvEnv, maxBuffer: 2_000_000 });
+export function hermesLayout(source: Pick<EngineSource, 'origin' | 'pin'>, enginesDir?: string): HermesLayout {
+  if (source.origin === 'dev-cache' || !enginesDir) {
+    // Development: unchanged, next to the extension.
+    return { venv: join(cacheDir, 'venv'), uvCache: join(cacheDir, 'uv-cache'), requirements: join(cacheDir, 'requirements.txt') };
   }
-  const requirements = join(cacheDir, 'requirements.txt');
+  // Installed apps: the unpacked runtime is versioned and replaced on update, so everything Hermes needs to run
+  // lives in the app data folder. An explicit UV_CACHE_DIR / UV_PYTHON_INSTALL_DIR still wins (tests share caches).
+  const folder = engineFolder(source.pin);
+  return {
+    venv: join(enginesDir, 'venvs', folder),
+    uvCache: process.env.UV_CACHE_DIR ?? join(enginesDir, 'uv-cache'),
+    pythonInstallDir: process.env.UV_PYTHON_INSTALL_DIR ?? join(enginesDir, 'python'),
+    requirements: join(enginesDir, 'venvs', `${folder}.requirements.txt`),
+  };
+}
+
+export function hermesSourceOptions(enginesDir?: string) {
+  return { name: HERMES_PIN, lockFile: hermesLockFile(), searchFrom: repoDir, probe: HERMES_PROBE, ...(enginesDir ? { enginesDir } : {}) };
+}
+
+export function resolveHermesSource(enginesDir?: string): HermesSource | undefined {
+  const source = resolveEngineSource(hermesSourceOptions(enginesDir));
+  return source && { path: source.path, origin: source.origin, layout: hermesLayout(source, enginesDir) };
+}
+
+/**
+ * uv, in order: NMH_UV, the uv the installer bundles next to the Gateway sidecar (the sidecar is the Node
+ * executable running this process), then PATH.
+ */
+export function uvExecutable(): string {
+  const name = process.platform === 'win32' ? 'uv.exe' : 'uv';
+  const configured = process.env.NMH_UV;
+  if (configured && existsSync(configured)) return configured;
+  const bundled = join(dirname(process.execPath), name);
+  if (existsSync(bundled)) return bundled;
+  return 'uv';
+}
+
+const DEPENDENCY_SET = 'web,sms,telegram,mcp';
+function pythonExecutable(layout: HermesLayout): string {
+  return process.platform === 'win32' ? join(layout.venv, 'Scripts/python.exe') : join(layout.venv, 'bin/python');
+}
+
+/** True when the venv for this exact source and dependency set is ready (no uv run needed). */
+export async function hermesVenvReady(upstream: string, layout: HermesLayout): Promise<boolean> {
+  const installed = await readFile(join(layout.venv, '.neo-hermes-upstream'), 'utf8').catch(() => '');
+  return existsSync(pythonExecutable(layout)) && installed.trim() === `${upstream}|${DEPENDENCY_SET}`;
+}
+
+/** Create or sync the Hermes venv with uv. `step` names each uv step for progress reporting. */
+export async function hermesPython(upstream: string, layout: HermesLayout, options: {
+  signal?: AbortSignal; step?: (step: 'python' | 'dependencies') => void;
+} = {}): Promise<string> {
+  const python = pythonExecutable(layout);
+  const marker = join(layout.venv, '.neo-hermes-upstream');
+  const dependencySet = `${upstream}|${DEPENDENCY_SET}`;
+  if (await hermesVenvReady(upstream, layout)) return python;
+
+  await mkdir(dirname(layout.venv), { recursive: true });
+  await mkdir(dirname(layout.requirements), { recursive: true });
+  const uv = uvExecutable();
+  const uvEnv: Record<string, string> = { ...await hermesBaseEnvironment(), UV_CACHE_DIR: layout.uvCache,
+    ...(layout.pythonInstallDir ? { UV_PYTHON_INSTALL_DIR: layout.pythonInstallDir } : {}) };
+  const run = (args: string[], maxBuffer: number) => exec(uv, args, { env: uvEnv, maxBuffer, signal: options.signal, windowsHide: true });
+  if (!existsSync(python)) {
+    options.step?.('python');
+    await run(['venv', layout.venv, '--python', '3.14'], 2_000_000);
+  }
+  options.step?.('dependencies');
   // Hermes places the dashboard in [web] and the run API's aiohttp in [sms].
   // MCP discovery requires the optional SDK (pinned Hermes pyproject.toml:430-434;
   // tools/mcp_tool_discovery.py:639-641 otherwise silently returns no tools).
   // Use Hermes's frozen lock so both surfaces have pinned, reproducible deps.
-  await exec('uv', ['export', '--project', upstream, '--frozen', '--no-dev',
+  await run(['export', '--project', upstream, '--frozen', '--no-dev',
     '--no-emit-project', '--extra', 'web', '--extra', 'sms', '--extra', 'telegram', '--extra', 'mcp',
-    '--format', 'requirements-txt', '--output-file', requirements, '--quiet'],
-  { env: uvEnv, maxBuffer: 4_000_000 });
-  await exec('uv', ['pip', 'sync', '--python', python, requirements], { env: uvEnv, maxBuffer: 2_000_000 });
+    '--format', 'requirements-txt', '--output-file', layout.requirements, '--quiet'], 4_000_000);
+  await run(['pip', 'sync', '--python', python, layout.requirements], 2_000_000);
   await writeFile(marker, `${dependencySet}\n`, 'utf8');
   return python;
 }
@@ -224,9 +279,11 @@ export class HermesRuntime {
     await writeFile(file, `model:\n  provider: custom\n  default: fake-model\nproviders:\n  custom:\n    base_url: ${modelUrl}\n    api_key: dummy-key\n`, 'utf8');
   }
 
-  async start(): Promise<void> {
-    this.upstream = upstreamPath();
-    this.python = await pythonPath(this.upstream);
+  /** Start on a resolved source; without one, the development cache (as before P7-16). */
+  async start(source: HermesSource | undefined = resolveHermesSource()): Promise<void> {
+    if (!source) throw new Error('Hermes is not installed');
+    this.upstream = source.path;
+    this.python = await hermesPython(this.upstream, source.layout);
     await mkdir(this.home, { recursive: true });
     await this.ensureModelConfig(this.home);
     await this.onProfileReady?.('default', this.home);
