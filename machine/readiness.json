@@ -619,6 +619,18 @@
       "status": "done",
       "owner": "helper (opus)",
       "evidence": "Approved by the owner 2026-11-23 (overnight blanket approval; first launch showed nothing for ~50 s). review/p715 (2 commits, reviewed as 8bb6090): runtime::needs_unpack (marker-only check); when unpacking is needed the shell opens the main window on index.html?setup=1 (Astryx Heading/Text/ProgressBar/Banner, lazily loaded, no Gateway calls), unpacks and starts the Gateway on a background thread, then finish_setup navigates the same window to the app; otherwise startup is unchanged. Errors show on the setup page; a Gateway that becomes ready after exit started is stopped. Real install test of the unsigned NSIS installer: setup screen shown (shell log line), ready in 47 s, POST /extensions/list 200 with 28 extensions incl. engine-dsh, gateway exits on close, uninstall clean. Review: cargo test (59) x2, neo-app build, test:p1-5, test:p7-8, test:p1-11, gateway, toggle, check, secret scan OK; full regression ok=70 fail=0."
+    },
+    "P7-16": {
+      "title": "Install Hermes, the super agent and T3 on demand in the desktop app",
+      "status": "not_started",
+      "owner": "unassigned",
+      "evidence": "Owner report 2026-11-23 on the installed v1.0.0 (Windows): engine-hermes and engine-superagent inactive with 'upstream cache missing (set NMH_UPSTREAM_CACHE)', channels inactive (depends on engine-hermes), engine-t3 running but unhealthy (no T3 server to connect to); bot creation in onboarding fails. Owner chose in-app on-demand install; v1.0.0 stays published and the fix ships as an update."
+    },
+    "P7-17": {
+      "title": "Subscription sign-in in onboarding and Model Hub",
+      "status": "not_started",
+      "owner": "unassigned",
+      "evidence": "Owner report 2026-11-23: the onboarding model step offers only an OpenAI-compatible API, but PRD APP-4 and CM-2 (P0) call for subscription sign-ins. Depends on P7-16."
     }
   },
   "p6_tasks": {

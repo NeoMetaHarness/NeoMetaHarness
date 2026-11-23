@@ -83,6 +83,8 @@ gantt
 - P7-13: fix the docs that disagree with the code (sweep of 2026-11-21; the code is the source of truth).
 - P7-14: installers ship the Gateway runtime (production dependencies only, one shared flat node_modules) as a single archive that the desktop shell unpacks into the app data folder on first launch and after each update (decided 2026-11-22: loose files broke the Windows installer build on path length and bundling time). On-demand engine downloads are a later optimisation.
 - P7-15: the desktop app shows a "Setting up Neo" screen while it unpacks the runtime archive (first launch and after an update), instead of showing nothing for tens of seconds.
+- P7-16: the desktop app installs Hermes, the super agent and T3 on demand (decided 2026-11-23 after the v1.0.0 Windows install showed only DSH working: the other engines need the pinned upstream source cache, `uv`/Python or a running T3 server, none of which the installer ships). The installer bundles `uv`. Extensions shows Install for each engine; it downloads the engine's pinned ref from `upstream.lock.json` into the app data folder, verifies it against the lock, prepares it (Hermes venv, super agent build, T3 server) with progress, and reports failures in plain language. Engines stay unmodified; the dev `NMH_UPSTREAM_CACHE` path keeps working. Shipped as an update to v1.0.0.
+- P7-17: the onboarding model step and Model Hub offer subscription sign-in (ChatGPT/Codex and Claude) through the sign-in flows Hermes and T3 already provide, stored in the vault and projected to every engine, next to the OpenAI-compatible API option (PRD APP-4, CM-2). Depends on P7-16.
 - **v1.0 public release.**
 
 ## After v1
