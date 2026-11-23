@@ -1,7 +1,7 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -81,10 +81,23 @@ function pythonExecutable(layout: HermesLayout): string {
   return process.platform === 'win32' ? join(layout.venv, 'Scripts/python.exe') : join(layout.venv, 'bin/python');
 }
 
-/** True when the venv for this exact source and dependency set is ready (no uv run needed). */
+/**
+ * True when the venv for this exact source and dependency set is ready (no uv run needed). The venv python is
+ * actually run: a venv whose base interpreter was removed (uninstalled system Python, cleared uv cache) is broken
+ * even though its files and marker remain.
+ */
 export async function hermesVenvReady(upstream: string, layout: HermesLayout): Promise<boolean> {
   const installed = await readFile(join(layout.venv, '.neo-hermes-upstream'), 'utf8').catch(() => '');
-  return existsSync(pythonExecutable(layout)) && installed.trim() === `${upstream}|${DEPENDENCY_SET}`;
+  const python = pythonExecutable(layout);
+  if (!existsSync(python) || installed.trim() !== `${upstream}|${DEPENDENCY_SET}`) return false;
+  return exec(python, ['-c', ''], { timeout: 30_000, windowsHide: true }).then(() => true, () => false);
+}
+
+/** Proxy and CA settings uv needs behind a corporate proxy; the vault projection carries OS variables only. */
+const UV_PASSTHROUGH = ['HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'ALL_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', 'all_proxy',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR', 'UV_NATIVE_TLS'];
+export function uvPassthrough(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return Object.fromEntries(UV_PASSTHROUGH.flatMap((key) => (env[key] ? [[key, env[key]!]] : [])));
 }
 
 /** Create or sync the Hermes venv with uv. `step` names each uv step for progress reporting. */
@@ -99,9 +112,14 @@ export async function hermesPython(upstream: string, layout: HermesLayout, optio
   await mkdir(dirname(layout.venv), { recursive: true });
   await mkdir(dirname(layout.requirements), { recursive: true });
   const uv = uvExecutable();
-  const uvEnv: Record<string, string> = { ...await hermesBaseEnvironment(), UV_CACHE_DIR: layout.uvCache,
-    ...(layout.pythonInstallDir ? { UV_PYTHON_INSTALL_DIR: layout.pythonInstallDir } : {}) };
+  // Installed apps use only uv-managed Python under the engines folder, so the venv never depends on a system
+  // Python the user may later remove or upgrade.
+  const uvEnv: Record<string, string> = { ...await hermesBaseEnvironment(), ...uvPassthrough(), UV_CACHE_DIR: layout.uvCache,
+    ...(layout.pythonInstallDir ? { UV_PYTHON_INSTALL_DIR: layout.pythonInstallDir, UV_PYTHON_PREFERENCE: 'only-managed' } : {}) };
   const run = (args: string[], maxBuffer: number) => exec(uv, args, { env: uvEnv, maxBuffer, signal: options.signal, windowsHide: true });
+  if (existsSync(python) && !await exec(python, ['-c', ''], { timeout: 30_000, windowsHide: true }).then(() => true, () => false)) {
+    await rm(layout.venv, { recursive: true, force: true }); // broken venv: rebuild it
+  }
   if (!existsSync(python)) {
     options.step?.('python');
     await run(['venv', layout.venv, '--python', '3.14'], 2_000_000);

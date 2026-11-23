@@ -89,7 +89,8 @@ async function stopGateway(child?: ChildProcess) {
 
 const temp = await mkdtemp(join(tmpdir(), 'nmh-hermes-install-'));
 const data = join(temp, 'state');
-const engines = join(data, 'engines');
+// The desktop shell passes local app data (NMH_ENGINES_DIR), separate from the roaming data folder.
+const engines = join(temp, 'local', 'engines');
 let fixtureServer: Server | undefined;
 let model: Server | undefined;
 let app: Awaited<ReturnType<typeof startGateway>> | undefined;
@@ -107,7 +108,7 @@ try {
   let mode: 'unavailable' | 'corrupt' | 'good' = 'unavailable';
   let downloads = 0;
   fixtureServer = createServer((req, res) => {
-    if (req.url !== `/${pin.upstream}/tar.gz/refs/tags/${pin.ref}`) { res.writeHead(404).end(); return; }
+    if (req.url !== `/${pin.upstream}/tar.gz/${pin.commit}`) { res.writeHead(404).end(); return; }
     downloads++;
     if (mode === 'unavailable') { res.writeHead(503).end(); return; }
     const body = mode === 'corrupt' ? Buffer.concat([fixture.subarray(0, 4096), Buffer.alloc(1024, 1)]) : fixture;
@@ -126,7 +127,7 @@ try {
     UV_CACHE_DIR: process.env.UV_CACHE_DIR ?? join(extension, '.cache', 'uv-cache'),
     UV_PYTHON_INSTALL_DIR: process.env.UV_PYTHON_INSTALL_DIR ?? uvPython,
     NMH_HERMES_MODEL_URL: `http://127.0.0.1:${(model.address() as { port: number }).port}/v1`,
-    NMH_DB_PATH: join(data, 'neo.sqlite'), NMH_EXTENSIONS_DIR: join(repo, 'extensions'),
+    NMH_DB_PATH: join(data, 'neo.sqlite'), NMH_ENGINES_DIR: engines, NMH_EXTENSIONS_DIR: join(repo, 'extensions'),
     NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1',
   };
   await mkdir(data, { recursive: true });
@@ -142,7 +143,7 @@ try {
   assert.equal((await http.extensions.enable({ id: 'sample-ts' })).status, 'running');
   const enabled = await http.extensions.enable({ id: 'engine-hermes' });
   assert.equal(enabled.status, 'running', 'engine-hermes stays up to offer the install');
-  assert.equal(enabled.health?.ok, false);
+  assert.equal(enabled.health?.ok, true, 'not installed is not a fault');
   assert.deepEqual(await status(), { state: 'not_installed', message: 'Hermes is not installed yet.' });
   const channels = await http.extensions.enable({ id: 'channels' });
   assert.equal(channels.status, 'degraded', 'channels needs Hermes');
@@ -216,8 +217,26 @@ try {
   assert.equal((await app.http.x['engine-hermes'].install.status()).state, 'ready');
   assert.ok((await app.http.x['engine-hermes'].profiles.list()).profiles.some((profile) => profile.name === 'first-bot'));
   assert.equal(downloads - before, 1, 'no second download');
+  assert.ok(!existsSync(join(data, 'engines')), 'nothing installed into the roaming data folder');
 
-  console.log('P7-16 HERMES INSTALL PASS not_installed=install-action network=plain-error verify=refused disable=cancel+healthy install=ready channels=recovered bot=created reply=ok restart=reused');
+  // A venv whose base Python disappeared is detected by running it: install mode again, and the install rebuilds
+  // the venv from the installed source without downloading.
+  await stopGateway(app.child);
+  const venvConfig = join(engines, 'venvs', `hermes-agent@${pin.ref}`, 'pyvenv.cfg');
+  await writeFile(venvConfig, readFileSync(venvConfig, 'utf8').replace(/^home = .*$/m, `home = ${join(temp, 'removed-python')}`));
+  app = await startGateway(env);
+  const broken = app.http;
+  assert.equal((await broken.x['engine-hermes'].install.status()).state, 'not_installed', 'a broken venv is not ready');
+  await broken.x['engine-hermes'].install.start();
+  await eventually(async () => {
+    const current = await broken.x['engine-hermes'].install.status().catch(() => undefined);
+    if (current?.state === 'failed') throw new Error(`repair failed: ${current.error} ${app!.stderr}`);
+    return current?.state === 'ready';
+  }, 'broken venv rebuilt', 600000);
+  assert.ok((await broken.x['engine-hermes'].profiles.list()).profiles.some((profile) => profile.name === 'first-bot'));
+  assert.equal(downloads - before, 1, 'the repair did not download again');
+
+  console.log('P7-16 HERMES INSTALL PASS not_installed=install-action network=plain-error verify=refused disable=cancel+healthy install=ready channels=recovered bot=created reply=ok restart=reused broken_venv=rebuilt');
 } finally {
   await stopGateway(app?.child);
   await new Promise<void>((done) => fixtureServer ? fixtureServer.close(() => done()) : done());

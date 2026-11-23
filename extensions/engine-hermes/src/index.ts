@@ -7,7 +7,7 @@ import { HermesInstaller, READY } from './install.js';
 import { projectHermesMemory, type MemoryBridge } from './memory.js';
 import type { ComputerMcpBridge, McpProjectionBridge, SkillsBridge } from '@neometaharness/kernel';
 import type { VaultService } from '@neometaharness/vault';
-import { dirname, resolve, join } from 'node:path';
+import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 
@@ -16,8 +16,9 @@ type ModelProjector = { projectHermes(profile: string, home: string): Promise<st
 export default defineExtension({
   async activate(ctx) {
     const storage = ctx.inject<string>('extensionDataDir');
-    // P7-16: installed apps keep engine sources, venvs and uv's cache in <data>/engines, outside the versioned runtime.
-    const enginesDir = ctx.inject<string>('enginesDir') ?? (storage ? join(dirname(storage), 'engines') : undefined);
+    // P7-16: installed apps keep engine sources, venvs and uv's cache in the Gateway's engines folder (local app
+    // data), outside the versioned runtime. Without one (an in-memory Gateway) nothing is installed.
+    const enginesDir = ctx.inject<string>('enginesDir');
     const source = resolveHermesSource(enginesDir);
     if (!source || (source.origin === 'app-data' && !await hermesVenvReady(source.path, source.layout))) {
       // Not installed: stay up so Extensions and onboarding can install Hermes. No agentRuntime is provided, so
@@ -29,7 +30,8 @@ export default defineExtension({
         log: (message, error) => console.error(message, error),
       });
       ctx.effect(() => () => installer.cancel());
-      ctx.health(() => ({ ok: false }));
+      // Not installed is a normal state, not a fault: the UI reads install/status, not health.
+      ctx.health(() => ({ ok: true }));
       ctx.route('install/status', () => installer.current());
       ctx.route('install/start', () => installer.start());
       return;
