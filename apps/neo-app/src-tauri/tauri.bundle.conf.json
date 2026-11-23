@@ -14,7 +14,8 @@
       "deb"
     ],
     "externalBin": [
-      "binaries/neo-gateway"
+      "binaries/neo-gateway",
+      "binaries/uv"
     ],
     "resources": {
       "installer-runtime/": "runtime/"

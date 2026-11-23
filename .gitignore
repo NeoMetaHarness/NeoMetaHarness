@@ -16,6 +16,8 @@ src-tauri/target/
 /apps/neo-app/src-tauri/installer-payload/
 /apps/neo-app/src-tauri/installer-runtime/
 /apps/neo-app/src-tauri/binaries/neo-gateway-*
+/apps/neo-app/src-tauri/binaries/uv-*
+/apps/neo-app/src-tauri/installer-tools/
 /apps/docs/src/content.ts
 
 # Claude Code local files

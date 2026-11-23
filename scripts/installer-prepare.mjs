@@ -109,6 +109,46 @@ const nodeLicense = licenses.find((path) => path && existsSync(path));
 if (!nodeLicense) throw new Error('Node distribution license missing. Set NMH_NODE_LICENSE to its path.');
 copyFileSync(nodeLicense, join(runtime, 'NODE-LICENSE.txt'));
 if (process.platform !== 'win32') chmodSync(sidecar, 0o755);
+
+// uv (P7-16): Hermes is installed on demand and needs uv to build its Python environment. Bundle the pinned,
+// checksum-verified uv release next to the Gateway sidecar (Tauri externalBin binaries/uv -> <install dir>/uv[.exe]).
+// NMH_UV_ARCHIVE points at an already downloaded release archive (offline builds); it is verified the same way.
+await bundleUv();
+async function bundleUv() {
+  const uv = readJson(join(root, 'scripts', 'installer-tools.json')).uv;
+  const expected = uv.sha256[target];
+  if (!/^[a-f0-9]{64}$/.test(expected ?? '')) throw new Error(`scripts/installer-tools.json pins no uv ${uv.version} for ${target}.`);
+  const ext = target.includes('windows') ? 'zip' : 'tar.gz';
+  const work = join(tauri, 'installer-tools');
+  rmSync(work, { recursive: true, force: true });
+  mkdirSync(join(work, 'extract'), { recursive: true });
+  try {
+    let archivePath = process.env.NMH_UV_ARCHIVE;
+    if (!archivePath) {
+      const url = uv.url.replace('{version}', uv.version).replace('{target}', target).replace('{ext}', ext);
+      const response = await fetch(url, { redirect: 'follow' });
+      if (!response.ok) throw new Error(`uv download failed: HTTP ${response.status} for ${url}`);
+      archivePath = join(work, `uv-${target}.${ext}`);
+      writeFileSync(archivePath, Buffer.from(await response.arrayBuffer()));
+    }
+    const actual = createHash('sha256').update(readFileSync(archivePath)).digest('hex');
+    if (actual !== expected) throw new Error(`uv archive ${archivePath} has sha256 ${actual}; scripts/installer-tools.json pins ${expected}.`);
+    // bsdtar (Windows System32, macOS) reads zip and tar.gz; relative paths keep GNU tar from reading C: as a host.
+    const systemTar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+    const extracted = spawnSync(process.platform === 'win32' && existsSync(systemTar) ? systemTar : 'tar',
+      ['-xf', relative(work, resolve(archivePath)), '-C', 'extract'], { cwd: work, stdio: 'inherit' });
+    if (extracted.status !== 0) throw new Error(`Extracting uv failed: ${extracted.error?.message ?? extracted.status}`);
+    const name = `uv${suffix}`;
+    const found = [join(work, 'extract', name), join(work, 'extract', `uv-${target}`, name)].find((path) => existsSync(path));
+    if (!found) throw new Error(`uv archive for ${target} has no ${name}.`);
+    const destination = join(binaries, `uv-${target}${suffix}`);
+    copyFileSync(found, destination);
+    if (process.platform !== 'win32') chmodSync(destination, 0o755);
+    console.log(`Bundled uv ${uv.version} for ${target} (sha256 ${expected}).`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
 // Bundle the payload as ONE uncompressed tar (Tauri resource installer-runtime/ -> runtime/). The shell unpacks it
 // into the user's local data dir on first launch, so installers carry one file instead of ~100k loose ones.
 // pnpm links packages (junctions on Windows, symlinks elsewhere). tar follows them (-h), as Tauri's resource copy

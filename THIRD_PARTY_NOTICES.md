@@ -12,6 +12,7 @@ Neo Meta Harness builds on these projects. Engines are used unmodified as separa
 | [Honcho](https://github.com/plastic-labs/honcho) | see upstream | Memory service (unmodified) |
 | [Panda Router](https://github.com/aicodeking/PandaOrchestrator) | MIT | Model router process (unmodified) |
 | [Astryx](https://github.com/meta/astryx) | MIT | Design system (npm dependency) |
+| [uv](https://github.com/astral-sh/uv) | MIT OR Apache-2.0 | Unmodified release binary bundled with the desktop installers (version and checksums in `scripts/installer-tools.json`); builds the Hermes Python environment when Hermes is installed from the app |
 | [Compose Specification](https://github.com/compose-spec/compose-spec) | MIT | Unmodified offline JSON Schema at commit `6b3a2a93e77c30ded1aa8264307e74d1208a6eae`; [license](deploy/schema/LICENSE) and [provenance](deploy/schema/README.md) |
 
 ## bot-hq license (verbatim, commit decf9a215cdd)

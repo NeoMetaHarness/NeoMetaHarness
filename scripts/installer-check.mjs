@@ -313,7 +313,7 @@ export function runInstallerCheck(options = {}) {
   for (const target of ['nsis', 'msi', 'dmg', 'appimage', 'deb']) {
     assert.ok(bundle.targets.includes(target), `missing installer target ${target}`);
   }
-  assert.deepEqual(bundle.externalBin, ['binaries/neo-gateway'], 'gateway executable is bundled');
+  assert.deepEqual(bundle.externalBin, ['binaries/neo-gateway', 'binaries/uv'], 'gateway executable and uv are bundled');
   assert.deepEqual(bundle.resources, { 'installer-runtime/': 'runtime/' }, 'only the runtime archive directory is bundled');
   assert.match(effectiveConfig.build.beforeBuildCommand ?? '', /installer:prepare/, 'installer stages runtime before packaging');
   assert.match(effectiveConfig.build.beforeBundleCommand ?? '', /installer-check/, 'installer runs installer-check before packaging bundles');
@@ -393,6 +393,20 @@ export function runInstallerCheck(options = {}) {
   assert.match(load('.gitignore'), /apps\/neo-app\/src-tauri\/installer-runtime/, 'generated runtime archive ignored');
   assert.match(load('scripts/installer-prepare.mjs'), /'--format=pax'/, 'runtime archive keeps long paths (pax)');
   assert.match(load('.gitignore'), /apps\/neo-app\/src-tauri\/binaries\/neo-gateway-/, 'generated node sidecar ignored');
+
+  // P7-16: uv ships next to the sidecar, pinned and checksum-verified; Hermes finds it there before PATH.
+  const tools = JSON.parse(load('scripts/installer-tools.json'));
+  assert.match(tools.uv?.version ?? '', /^\d+\.\d+\.\d+$/, 'uv version pinned');
+  for (const triple of ['x86_64-pc-windows-msvc', 'aarch64-apple-darwin', 'x86_64-unknown-linux-gnu']) {
+    assert.match(tools.uv.sha256?.[triple] ?? '', /^[a-f0-9]{64}$/, `uv sha256 pinned for ${triple}`);
+  }
+  assert.match(tools.uv.url, /^https:\/\/github\.com\/astral-sh\/uv\/releases\/download\/\{version\}\//, 'uv comes from its GitHub release');
+  const prepare = load('scripts/installer-prepare.mjs');
+  assert.match(prepare, /installer-tools\.json/, 'installer:prepare reads the uv pin');
+  assert.match(prepare, /has sha256 \$\{actual\}; scripts\/installer-tools\.json pins/, 'installer:prepare refuses a uv archive that does not match its pin');
+  assert.match(prepare, /binaries, `uv-\$\{target\}\$\{suffix\}`/, 'uv is staged as the Tauri externalBin binaries/uv-<target>');
+  assert.match(load('.gitignore'), /apps\/neo-app\/src-tauri\/binaries\/uv-/, 'staged uv ignored');
+  assert.match(load('extensions/engine-hermes/src/runtime.ts'), /join\(dirname\(process\.execPath\), name\)/, 'Hermes uses the uv bundled next to the Gateway sidecar');
 
   console.log(`PASS installer:check - identifiers, five installer targets, gateway sidecar, runtime archive, CSP, updater endpoints and allowed hosts, effective merged config enforcement, and secret hygiene`);
 }
