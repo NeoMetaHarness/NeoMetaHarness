@@ -90,7 +90,12 @@ export async function hermesVenvReady(upstream: string, layout: HermesLayout): P
   const installed = await readFile(join(layout.venv, '.neo-hermes-upstream'), 'utf8').catch(() => '');
   const python = pythonExecutable(layout);
   if (!existsSync(python) || installed.trim() !== `${upstream}|${DEPENDENCY_SET}`) return false;
-  return exec(python, ['-c', ''], { timeout: 30_000, windowsHide: true }).then(() => true, () => false);
+  return pythonRuns(python);
+}
+
+/** The interpreter starts. execFile throws synchronously for some bad executables on Windows (spawn UNKNOWN). */
+async function pythonRuns(python: string): Promise<boolean> {
+  try { await exec(python, ['-c', ''], { timeout: 30_000, windowsHide: true }); return true; } catch { return false; }
 }
 
 /** Proxy and CA settings uv needs behind a corporate proxy; the vault projection carries OS variables only. */
@@ -117,7 +122,7 @@ export async function hermesPython(upstream: string, layout: HermesLayout, optio
   const uvEnv: Record<string, string> = { ...await hermesBaseEnvironment(), ...uvPassthrough(), UV_CACHE_DIR: layout.uvCache,
     ...(layout.pythonInstallDir ? { UV_PYTHON_INSTALL_DIR: layout.pythonInstallDir, UV_PYTHON_PREFERENCE: 'only-managed' } : {}) };
   const run = (args: string[], maxBuffer: number) => exec(uv, args, { env: uvEnv, maxBuffer, signal: options.signal, windowsHide: true });
-  if (existsSync(python) && !await exec(python, ['-c', ''], { timeout: 30_000, windowsHide: true }).then(() => true, () => false)) {
+  if (existsSync(python) && !await pythonRuns(python)) {
     await rm(layout.venv, { recursive: true, force: true }); // broken venv: rebuild it
   }
   if (!existsSync(python)) {

@@ -222,11 +222,17 @@ try {
   // A venv whose base Python disappeared is detected by running it: install mode again, and the install rebuilds
   // the venv from the installed source without downloading.
   await stopGateway(app.child);
-  const venvConfig = join(engines, 'venvs', `hermes-agent@${pin.ref}`, 'pyvenv.cfg');
-  await writeFile(venvConfig, readFileSync(venvConfig, 'utf8').replace(/^home = .*$/m, `home = ${join(temp, 'removed-python')}`));
+  // uv's Windows launcher embeds the base interpreter path (pyvenv.cfg `home` is not read), so stand in for a removed
+  // base Python with a venv python that cannot run. Remove first: on POSIX it is a symlink to the shared Python.
+  const venvPython = join(engines, 'venvs', `hermes-agent@${pin.ref}`, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+  await rm(venvPython, { force: true });
+  await writeFile(venvPython, 'not a program', { mode: 0o755 });
   app = await startGateway(env);
   const broken = app.http;
-  assert.equal((await broken.x['engine-hermes'].install.status()).state, 'not_installed', 'a broken venv is not ready');
+  const brokenStatus = await eventually(async () => broken.x['engine-hermes'].install.status().catch(async (error) => {
+    throw new Error(`${String(error)} row=${JSON.stringify((await broken.extensions.list()).find((item) => item.id === 'engine-hermes'))}`);
+  }), 'engine-hermes back in install mode', 60000);
+  assert.equal(brokenStatus.state, 'not_installed', 'a broken venv is not ready');
   await broken.x['engine-hermes'].install.start();
   await eventually(async () => {
     const current = await broken.x['engine-hermes'].install.status().catch(() => undefined);
