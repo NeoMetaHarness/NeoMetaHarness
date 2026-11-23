@@ -20,7 +20,7 @@ export { coerceSettingValues, dependencyProblem, loadManifest, resolveOrder, Set
 export type { ExtensionManifest, LocatedExtension, ExtensionSettingsSchema, SettingPropertySchema, SettingPropertyType } from './manifest.js';
 
 export type RouteHandler = (input: { method: string; body?: unknown; signal?: AbortSignal }) => unknown | Promise<unknown>;
-export type Health = { ok: boolean; pid?: number };
+export type Health = { ok: boolean; pid?: number; reason?: string };
 
 export interface ExtensionContext {
   readonly signal: AbortSignal;
@@ -473,6 +473,12 @@ export class NeoKernel {
     });
     this.operation = work.catch(() => {});
     return work;
+  }
+
+  /** Reload an active extension after its stored configuration changes. */
+  refresh(id: string): Promise<void> {
+    const generation = this.active.get(id);
+    return generation ? this.reactivate(id, generation) : Promise.resolve();
   }
 
   private async retire(id: string, generation: ExtensionGeneration) {

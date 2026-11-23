@@ -1312,6 +1312,22 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       },
       'coding-workflow': codingWorkflowRouter(kernel),
       'engine-t3': {
+        install: {
+          status: os.x['engine-t3'].install.status.handler(async ({ context }) => {
+            authorize('x.engine-t3.install.status', context);
+            return invokeT3('install/status', {}) as Promise<any>;
+          }),
+          start: os.x['engine-t3'].install.start.handler(async ({ context }) => {
+            authorize('x.engine-t3.install.start', context);
+            return invokeT3('install/start', {}) as Promise<any>;
+          }),
+        },
+        runtime: {
+          start: os.x['engine-t3'].runtime.start.handler(async ({ context }) => {
+            authorize('x.engine-t3.runtime.start', context);
+            return invokeT3('runtime/start', {}) as Promise<any>;
+          }),
+        },
         create: os.x['engine-t3'].create.handler(async ({ input, context }) => {
           authorize('x.engine-t3.create', context);
           return invokeT3('create', input) as Promise<{ sequence: number }>;
@@ -1580,6 +1596,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         let sanitized: Record<string, unknown>;
         try {
           sanitized = await kernel.saveSettings(input.extension, input.values, workspace);
+          if (input.extension === 'engine-t3') await kernel.refresh('engine-t3');
         } catch (error) {
           if (error instanceof SettingsValidationError) throw new ORPCError('BAD_REQUEST', { message: error.message });
           throw error;

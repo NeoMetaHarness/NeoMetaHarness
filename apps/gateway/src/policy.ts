@@ -109,6 +109,9 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'apps.run': 'member',
   'apps.grant': 'member',
   // x.engine-t3
+  'x.engine-t3.install.status': 'viewer',
+  'x.engine-t3.install.start': 'admin',
+  'x.engine-t3.runtime.start': 'admin',
   'x.engine-t3.create': 'member',
   'x.engine-t3.send': 'member',
   'x.engine-t3.events': 'viewer',

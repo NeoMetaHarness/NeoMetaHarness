@@ -19,7 +19,16 @@
       "kind": "release",
       "ref": "v0.1.9",
       "upstream": "pingdotgg/t3code",
-      "pinned_on": "2026-11-16"
+      "pinned_on": "2026-11-16",
+      "commit": "24e77473ecf41bc1f7142529c7911c1c1aae1d76",
+      "archive_sha256": "5f54e655d61d14a3daf9efd9291802fd04f0f265476053a9aacceed4d31d049d",
+      "cli_assets": {
+        "win32-x64": "aeebee6a1a97ce546ef53d38a30e36dfe264c2586b4268fb9a0a37690c6082d9",
+        "win32-arm64": "bcdbdf4e3ac72ca70d0d7ba09a82f34c66bcdad5149125a3f2f14fdb18d8a308",
+        "linux-x64": "0141025335da334759cecd8db3483e09772f3600ca03674698524e7d94291362",
+        "linux-arm64": "52023bc5728a4dee4de361ad6fef7c236f1efb2742ff25e29d5c55e2fb662eea",
+        "darwin-arm64": "7d2eb8c0687b70ca03a9d35498381852d3792983589e82d1fb1831c08f0b2301"
+      }
     },
     "honcho": {
       "kind": "release",

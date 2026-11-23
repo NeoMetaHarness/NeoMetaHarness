@@ -7,7 +7,7 @@ export const extensionStatusSchema = z.object({
   desired: z.boolean(),
   status: z.enum(['running', 'disabled', 'degraded']),
   reason: z.string().optional(),
-  health: z.object({ ok: z.boolean(), pid: z.number().optional() }).optional(),
+  health: z.object({ ok: z.boolean(), pid: z.number().optional(), reason: z.string().optional() }).optional(),
   routes: z.array(z.string()).optional(),
   settings: z.record(z.string(), z.unknown()).optional(),
   settingsVisible: z.boolean().optional(),
@@ -74,7 +74,23 @@ export type T3Event = z.infer<typeof t3EventSchema>;
 export { codingWorkflowContract } from './coding-workflow.js';
 import { codingWorkflowContract } from './coding-workflow.js';
 
+export const t3InstallStatusSchema = z.object({
+  state: z.enum(['not_installed', 'installing', 'ready', 'failed']),
+  phase: z.enum(['download', 'verify', 'extract', 'dependencies', 'starting']).optional(),
+  progress: z.number().min(0).max(1).optional(),
+  message: z.string(),
+  error: z.string().optional(),
+  connected: z.boolean().optional(),
+  external: z.boolean().optional(),
+});
+export type T3InstallStatus = z.infer<typeof t3InstallStatusSchema>;
+
 export const t3Contract = {
+  install: {
+    status: oc.output(t3InstallStatusSchema),
+    start: oc.output(t3InstallStatusSchema),
+  },
+  runtime: { start: oc.output(t3InstallStatusSchema) },
   providers: {
     list: oc.output(z.object({ providers: z.array(z.object({
       id: z.string(), name: z.string(), status: z.string(),

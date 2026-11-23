@@ -3,5 +3,12 @@
   "version": "0.1.0",
   "displayName": "T3 coding control plane",
   "kind": ["engine"],
-  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" },
+  "settings": {
+    "type": "object",
+    "properties": {
+      "existingServerUrl": { "type": "string", "title": "Existing T3 server URL", "description": "HTTP(S) URL of a running T3 server. Leave empty for the local server.", "default": "" },
+      "scopedSession": { "type": "string", "title": "Existing T3 scoped session", "description": "Scoped orchestration session token from your T3 server.", "secret": true }
+    }
+  }
 }
