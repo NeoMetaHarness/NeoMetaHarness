@@ -8,13 +8,25 @@ import { HermesProjector, type VaultService } from '@neometaharness/vault';
 export const MODEL_ROLES = ['default', 'fast', 'reasoning', 'coding', 'eval'] as const;
 export type ModelRole = typeof MODEL_ROLES[number];
 
-export interface ModelProvider {
+export interface ApiModelProvider {
   id: string;
   kind: 'openai-compatible';
   name: string;
   baseUrl: string;
   hasKey: boolean;
 }
+export interface SubscriptionModelProvider {
+  id: string;
+  kind: 'subscription';
+  name: string;
+  vendor: 'openai' | 'anthropic';
+  engines: { hermes?: { status: string; profile?: string }; t3?: { status: string } };
+  accountEmail?: string;
+  status: string;
+}
+export type ModelProvider = ApiModelProvider | SubscriptionModelProvider;
+type ProviderInput = (Omit<ApiModelProvider, 'name' | 'hasKey'> & { apiKey?: string; name?: string })
+  | (Omit<SubscriptionModelProvider, 'name'> & { name?: string });
 export interface ModelSelection { providerId: string; model: string }
 /** workspace: whose provider keys, roles and router settings serve the task (P1-13); absent = deployment. */
 export interface RoutedTask { text: string; ticketId?: string; source?: string; workspace?: string }
@@ -37,7 +49,7 @@ export interface ModelRouter {
   recordAttempt?(entry: RouteAttempt): Promise<void>;
 }
 export interface ResolvedModel extends ModelSelection { baseUrl: string; apiKey?: string }
-type ProviderRecord = Omit<ModelProvider, 'hasKey'> & { hasKey?: boolean };
+type ProviderRecord = (Omit<ApiModelProvider, 'hasKey'> & { hasKey?: boolean }) | SubscriptionModelProvider;
 type HubSettings = {
   providers: ProviderRecord[];
   roles: Partial<Record<ModelRole, ModelSelection>>;
@@ -47,6 +59,8 @@ type HubSettings = {
 
 const emptySettings = (): HubSettings => ({ providers: [], roles: {}, overrides: {}, revision: 0 });
 const providerId = /^[a-z][a-z0-9-]{0,47}$/;
+const subscriptionApiError = 'DeepSeek Harness and the super agent need an API key or a local model';
+const requiresApi = (role: ModelRole) => role === 'coding' || role === 'eval';
 
 /** Gateway service: which storage a caller's workspace maps to (desktop: always the one 'default'). */
 export interface WorkspaceDirectory {
@@ -120,6 +134,7 @@ export class ModelHub {
         if (!(await this.storage.inheritsDeployment(key))) return emptySettings();
         const inherited = structuredClone(this.workspaces.get(DEPLOYMENT)!);
         for (const provider of inherited.providers) {
+          if (provider.kind === 'subscription') continue;
           const secret = await this.vault.get(this.storage.scope(DEPLOYMENT), credentialName(provider.id));
           if (secret !== undefined) await this.vault.put(this.storage.scope(key), credentialName(provider.id), secret);
         }
@@ -149,7 +164,9 @@ export class ModelHub {
     const { settings } = await this.settingsOf(workspace);
     return {
       active: this.active,
-      providers: settings.providers.map(({ id, name, baseUrl, hasKey }) => ({ id, kind: 'openai-compatible' as const, name, baseUrl, hasKey: !!hasKey })),
+      providers: settings.providers.map((provider): ModelProvider => provider.kind === 'subscription'
+        ? structuredClone(provider)
+        : { id: provider.id, kind: provider.kind, name: provider.name, baseUrl: provider.baseUrl, hasKey: !!provider.hasKey }),
       roles: settings.roles,
       overrides: settings.overrides,
     };
@@ -188,15 +205,35 @@ export class ModelHub {
     await this.pending;
   }
 
-  async saveProvider(input: { id: string; kind: 'openai-compatible'; name?: string; baseUrl: string; apiKey?: string }, workspace?: string): Promise<ModelProvider> {
+  async saveProvider(input: ProviderInput, workspace?: string): Promise<ModelProvider> {
     if (!providerId.test(input.id)) throw new Error('Invalid provider ID');
-    if (input.kind !== 'openai-compatible') throw new Error('Unsupported model provider kind');
-    const url = new URL(input.baseUrl);
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid model endpoint URL');
     const { key, settings } = await this.settingsOf(workspace);
     const previous = settings.providers.find((item) => item.id === input.id);
-    if (input.apiKey) await this.vault.put(this.storage.scope(key), credentialName(input.id), input.apiKey);
-    const record = { id: input.id, kind: 'openai-compatible' as const, name: input.name?.trim() || previous?.name || input.id, baseUrl: url.href.replace(/\/$/, ''), hasKey: Boolean(input.apiKey || previous?.hasKey) };
+    const name = input.name?.trim() || previous?.name || input.id;
+    let record: ModelProvider;
+    if (input.kind === 'subscription') {
+      if (MODEL_ROLES.some((role) => requiresApi(role) && settings.roles[role]?.providerId === input.id)) {
+        throw new Error(subscriptionApiError);
+      }
+      if (input.vendor !== 'openai' && input.vendor !== 'anthropic') throw new Error('Unsupported subscription vendor');
+      const { hermes, t3 } = input.engines;
+      if (typeof input.status !== 'string' || (hermes && typeof hermes.status !== 'string') || (t3 && typeof t3.status !== 'string')) {
+        throw new Error('Invalid subscription status');
+      }
+      if (input.accountEmail !== undefined && typeof input.accountEmail !== 'string') throw new Error('Invalid account email');
+      record = { id: input.id, kind: input.kind, name, vendor: input.vendor, status: input.status,
+        engines: {
+          ...(hermes ? { hermes: { status: hermes.status, ...(hermes.profile ? { profile: hermesProfile(hermes.profile) } : {}) } } : {}),
+          ...(t3 ? { t3: { status: t3.status } } : {}),
+        }, ...(input.accountEmail ? { accountEmail: input.accountEmail } : {}) };
+      if (previous?.kind === 'openai-compatible') await this.vault.delete(this.storage.scope(key), credentialName(input.id));
+    } else if (input.kind === 'openai-compatible') {
+      const url = new URL(input.baseUrl);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid model endpoint URL');
+      if (input.apiKey) await this.vault.put(this.storage.scope(key), credentialName(input.id), input.apiKey);
+      record = { id: input.id, kind: input.kind, name, baseUrl: url.href.replace(/\/$/, ''),
+        hasKey: Boolean(input.apiKey || (previous?.kind === 'openai-compatible' && previous.hasKey)) };
+    } else throw new Error('Unsupported model provider kind');
     settings.providers = [...settings.providers.filter((item) => item.id !== input.id), record];
     await this.persist(key);
     return record;
@@ -204,11 +241,12 @@ export class ModelHub {
 
   async deleteProvider(id: string, workspace?: string): Promise<{ deleted: boolean }> {
     const { key, settings } = await this.settingsOf(workspace);
-    if (!settings.providers.some((item) => item.id === id)) return { deleted: false };
+    const provider = settings.providers.find((item) => item.id === id);
+    if (!provider) return { deleted: false };
     settings.providers = settings.providers.filter((item) => item.id !== id);
     for (const role of MODEL_ROLES) if (settings.roles[role]?.providerId === id) delete settings.roles[role];
     for (const [bot, binding] of Object.entries(settings.overrides)) if (binding.providerId === id) delete settings.overrides[bot];
-    await this.vault.delete(this.storage.scope(key), credentialName(id));
+    if (provider.kind === 'openai-compatible') await this.vault.delete(this.storage.scope(key), credentialName(id));
     await this.persist(key);
     return { deleted: true };
   }
@@ -217,6 +255,7 @@ export class ModelHub {
     const { key: storageKey, settings } = await this.settingsOf(workspace);
     const provider = settings.providers.find((item) => item.id === id);
     if (!provider) throw new Error('Unknown provider');
+    if (provider.kind === 'subscription') throw new Error('Subscription sign-in status is managed by the engine');
     const key = await this.vault.get(this.storage.scope(storageKey), credentialName(id));
     const response = await fetch(provider.baseUrl + '/models', {
       headers: key ? { authorization: `Bearer ${key}` } : {}, signal: AbortSignal.timeout(8000),
@@ -229,6 +268,9 @@ export class ModelHub {
     if (!MODEL_ROLES.includes(input.role)) throw new Error('Unknown model role');
     const { key, settings } = await this.settingsOf(workspace);
     const selection = this.validateSelection(settings, input);
+    if (requiresApi(input.role) && settings.providers.some((provider) => provider.id === selection.providerId && provider.kind === 'subscription')) {
+      throw new Error(subscriptionApiError);
+    }
     settings.roles[input.role] = selection;
     await this.persist(key);
     return { role: input.role, selection };
@@ -255,20 +297,25 @@ export class ModelHub {
     if (!this.active) throw new Error('Model Hub extension is disabled');
     const { key, settings } = await this.settingsOf(workspace);
     const override = profile ? settings.overrides[hermesProfile(profile)] : undefined;
-    let selection = override ?? settings.roles[role];
-    if (!selection) throw new Error(`Model role ${role} is unconfigured`);
+    const initialSelection = override ?? settings.roles[role];
+    if (!initialSelection) throw new Error(`Model role ${role} is unconfigured`);
+    if (settings.providers.some((provider) => provider.id === initialSelection.providerId && provider.kind === 'subscription')) {
+      throw new Error(subscriptionApiError);
+    }
+    let selection = initialSelection;
     // Explicit profile overrides bypass automatic routing. Router failure preserves direct service.
     if (!override && this.router) {
       const router = this.router;
       try {
         const routed = await router.select(role, { ...selection }, { text: '', ...task, workspace });
         if (this.active && this.router === router && routed?.model.trim()
-          && settings.providers.some((item) => item.id === routed.providerId)) selection = routed;
+          && settings.providers.some((item) => item.id === routed.providerId && item.kind === 'openai-compatible')) selection = routed;
       } catch { /* Direct binding is the fallback; never expose upstream errors or secrets. */ }
     }
     if (!this.active) throw new Error('Model Hub extension is disabled');
     const provider = settings.providers.find((item) => item.id === selection.providerId);
     if (!provider) throw new Error(`Model provider ${selection.providerId} is unavailable`);
+    if (provider.kind === 'subscription') throw new Error(subscriptionApiError);
     const apiKey = await this.vault.get(this.storage.scope(key), credentialName(provider.id));
     return { ...selection, baseUrl: provider.baseUrl, ...(apiKey ? { apiKey } : {}) };
   }
@@ -328,7 +375,9 @@ export class ModelHub {
     const deployment = this.workspaces.get(DEPLOYMENT)!;
     const selection = deployment.overrides[canonical] ?? deployment.roles.default;
     if (!selection) return undefined;
-    const binding = await this.resolve('default', canonical, undefined, DEPLOYMENT);
+    const provider = deployment.providers.find((item) => item.id === selection.providerId);
+    const subscription = provider?.kind === 'subscription';
+    const binding = subscription ? undefined : await this.resolve('default', canonical, undefined, DEPLOYMENT);
     await mkdir(home, { recursive: true });
     const configFile = join(home, 'config.yaml');
     const original = await readFile(configFile, 'utf8').catch((error: NodeJS.ErrnoException) => {
@@ -341,15 +390,17 @@ export class ModelHub {
     delete model.key_env;
     delete model.api_key;
     delete model.api_key_env;
-    config.model = { ...model, provider: 'neo_model', default: binding.model };
-    const providers = { ...(typeof config.providers === 'object' && config.providers ? config.providers : {}) };
-    config.providers = { ...providers, neo_model: { base_url: binding.baseUrl, key_env: 'NEO_MODEL_API_KEY' } };
+    config.model = { ...model, provider: binding ? 'neo_model' : 'openai-codex', default: binding?.model ?? selection.model };
+    const providers = { ...(typeof config.providers === 'object' && config.providers ? config.providers : {}) } as Record<string, unknown>;
+    if (binding) providers.neo_model = { base_url: binding.baseUrl, key_env: 'NEO_MODEL_API_KEY' };
+    else delete providers.neo_model;
+    config.providers = providers;
     const updated = stringify(config);
     if (original !== updated) await writeFile(configFile, updated, 'utf8');
-    await new HermesProjector(resolve(home), ['NEO_MODEL_API_KEY']).project(new Map([
+    await new HermesProjector(resolve(home), ['NEO_MODEL_API_KEY']).project(binding ? new Map([
       ['NEO_MODEL_API_KEY', binding.apiKey ?? 'local-no-key'],
-    ]));
-    const version = `${binding.providerId}/${binding.model}/${binding.baseUrl}/${deployment.revision}`;
+    ]) : new Map());
+    const version = `${binding?.providerId ?? selection.providerId}/${binding?.model ?? selection.model}/${binding?.baseUrl ?? 'openai-codex'}/${deployment.revision}`;
     this.projections.set(canonical, version);
     return version;
   }
