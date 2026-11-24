@@ -140,7 +140,7 @@ test('P7-12 metrics route is authenticated, workspace-isolated and toggle-safe',
     assert.equal(unavailable.value.finishedTickets, null);
     assert.equal(unavailable.value.completedTickets, null);
     assert.equal(unavailable.value.attention.withRecordedApproval, null);
-    assert.match(unavailable.value.attention.reason, /engine-superagent is missing or disabled/i);
+    assert.match(unavailable.value.attention.reason, /engine-superagent is not installed, or is missing or disabled/i);
 
     assert.equal((await post('extensions/disable', { id: 'metrics' }, ownerA)).status, 200);
     assert.equal((await summary(ownerA)).status, 404);

@@ -11,7 +11,7 @@ test('missing superagent stays unavailable while an empty healthy workspace repo
   assert.equal(withoutSuperagent.attention.withRecordedApproval, null);
   assert.equal(withoutSuperagent.attention.observedWithoutFinalApprovalShare, null);
   assert.equal(withoutSuperagent.firstValue.onboardingToFirstReplyMinutes, null);
-  assert.match(withoutSuperagent.attention.reason, /engine-superagent is missing or disabled/i);
+  assert.match(withoutSuperagent.attention.reason, /engine-superagent is not installed, or is missing or disabled/i);
 
   const emptyWorkspace = await new SuccessMetrics({
     inbox: () => [],
