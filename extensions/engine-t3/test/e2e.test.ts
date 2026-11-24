@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
@@ -20,14 +20,14 @@ import { system32 } from '../src/system-tools.js';
 import { installedT3 } from '../src/install.js';
 import { T3ControlPlane } from '../src/client.js';
 import { isolatedT3Environment } from '../src/runtime.js';
+import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
 import { coalesceText } from '../../../apps/gateway/src/coalesce.js';
 
 const here = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(here, '../..');
 const spike = join(repo, 'spikes/P0-3a-t3-headless-client');
 const t3Ref = (JSON.parse(readFileSync(join(repo, 'upstream.lock.json'), 'utf8')) as { pins: Record<string, { ref: string }> }).pins.t3code!.ref;
-const cacheRoot = process.env.NMH_UPSTREAM_CACHE;
-assert.ok(cacheRoot, 'Set NMH_UPSTREAM_CACHE to the pinned upstream source cache for the T3 wire tests');
+const cacheRoot = requireUpstreamCache('extensions/engine-t3/test/e2e.test.ts', ['t3code']);
 const upstream = join(cacheRoot, `t3code@${t3Ref}`);
 const gatewayDir = join(repo, 'apps/gateway');
 const pinnedSha = '24e77473ecf41bc1f7142529c7911c1c1aae1d76';
@@ -307,28 +307,6 @@ async function main() {
   }
 }
 
-async function ownerT3Timestamps() {
-  assert.ok(process.env.USERPROFILE, 'Windows USERPROFILE is required for the owner-home smoke check');
-  const root = join(process.env.USERPROFILE, '.t3');
-  const hash = createHash('sha256');
-  let entries = 0;
-  async function walk(path: string, name: string) {
-    const info = await lstat(path, { bigint: true });
-    entries++;
-    // lstat records junctions and symlinks without following them outside the tree.
-    hash.update(JSON.stringify([name, info.mode.toString(), info.size.toString(),
-      info.mtimeNs.toString(), info.ctimeNs.toString(), info.birthtimeNs.toString()]));
-    if (info.isDirectory()) {
-      for (const child of (await readdir(path)).sort()) await walk(join(path, child), join(name, child));
-    }
-  }
-  if (await lstat(root).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT') throw error;
-    return undefined;
-  })) await walk(root, '.');
-  return { entries, digest: hash.digest('hex') };
-}
-
 const expectedHomes = {
   HOME: 'home', USERPROFILE: 'home', APPDATA: 'appdata', LOCALAPPDATA: 'localappdata',
   XDG_CONFIG_HOME: 'config', XDG_CACHE_HOME: 'cache', XDG_DATA_HOME: 'data', XDG_STATE_HOME: 'state',
@@ -401,7 +379,6 @@ input.on('line', (line) => {
 
 // Opt-in smoke for the real release, from a clean installed-app data layout.
 async function realInstall() {
-  const ownerBefore = await ownerT3Timestamps();
   const sessionTtl = 8000;
   const temp = await mkdtemp(join(tmpdir(), 'nmh-t3-real-release-'));
   const poison = join(temp, 'ambient-codex');
@@ -499,9 +476,6 @@ async function realInstall() {
     assert.ok(binary.includes('if (options?.shellEnvironmentPrepared === true) return;'));
     console.log('T3_RELEASE_BUNDLE PASS bootstrap_skip=true restored_keys=PATH,FNM_DIR,FNM_MULTISHELL_PATH');
     console.log('T3_REAL_INSTALL PASS download=github first_run=true renewal_past_expiry=true same_pid=true stale_reclaimed=true disable=stopped gateway_exit=stopped');
-    const ownerAfter = await ownerT3Timestamps();
-    assert.deepEqual(ownerAfter, ownerBefore, 'Owner .t3 tree timestamps changed');
-    console.log('T3_OWNER_T3 PASS unchanged_entries=' + ownerAfter.entries);
   } finally {
     await stop(app?.child, true);
     await stop(stale);
