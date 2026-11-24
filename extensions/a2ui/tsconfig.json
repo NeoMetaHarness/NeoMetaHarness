@@ -1,0 +1,4 @@
+{
+  "extends": "../../apps/neo-app/tsconfig.json",
+  "include": ["src", "test"]
+}

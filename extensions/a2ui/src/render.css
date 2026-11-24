@@ -1,0 +1,13 @@
+.neo-a2ui-surface {
+  min-inline-size: 0;
+  padding: var(--neo-space-3, 0.75rem);
+  color: var(--neo-text, inherit);
+  background: var(--neo-surface, transparent);
+  border: 1px solid var(--neo-border, currentColor);
+  border-radius: var(--neo-radius-md, 0.5rem);
+  overflow-wrap: anywhere;
+}
+
+.neo-a2ui-surface pre {
+  overflow: auto;
+}

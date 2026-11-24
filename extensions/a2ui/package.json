@@ -3,9 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@a2ui/markdown-it": "file:vendor/a2ui-markdown-it-0.2.3.tgz",
     "@a2ui/web_core": "file:vendor/a2ui-web_core-0.16.0.tgz",
+    "@neometaharness/ui": "workspace:*",
+    "react": "^19.2.0",
     "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.13",
+    "@types/react": "^19.2.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
   }
 }
