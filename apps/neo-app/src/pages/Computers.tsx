@@ -4,7 +4,7 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type GatewayEvent } from '@neometaharness/contracts';
-import { Button } from '@neometaharness/ui';
+import { AlertDialog, Badge, Banner, Button, EmptyState, Heading, MoreMenu, Dialog, ResizeHandle, ScrollableArea, Section, SelectableCard, Selector, StatusDot, TextInput, useResizable } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './computers.css';
 import VncAttach from './VncAttach';
@@ -30,6 +30,10 @@ export default function Computers() {
   const [engine, setEngine] = useState<'hermes' | 'dsh'>('hermes');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [killPending, setKillPending] = useState(false);
+  const [confirmation, setConfirmation] = useState<'resume' | 'share' | null>(null);
+  const [attachOpen, setAttachOpen] = useState<'hermes' | 'vnc' | null>(null);
+  const sidebar = useResizable({ defaultSize: 285, minSize: 235, maxSize: 420 });
   const frame = useRef<HTMLImageElement>(null);
   const active = useRef<string | null>(null);
   const lastSequence = useRef(0);
@@ -131,37 +135,73 @@ export default function Computers() {
     }
   }
 
+  async function setGlobalStop(engaged: boolean) {
+    if (killPending) return;
+    setKillPending(true);
+    setError('');
+    try {
+      await http.computers.kill({ engaged });
+      setKillEngaged(engaged);
+      await refresh();
+    } catch (reason) { setError(String(reason)); }
+    finally { setKillPending(false); }
+  }
+
+  function shareDesktop() {
+    void perform(async () => {
+      if (!local.available) await http.extensions.enable({ id: 'computer-local' });
+      await http.computers.local.set({ enabled: true });
+      const added = await http.computers.attach({ providerId: 'computer-local', target: 'local-desktop' });
+      setSelected(added.id);
+    });
+  }
+
+  function attachChrome() {
+    void perform(async () => {
+      const available = await http.extensions.list();
+      if (available.find(({ id }) => id === 'computer-headless-chrome')?.status !== 'running') {
+        await http.extensions.enable({ id: 'computer-headless-chrome' });
+      }
+      const added = await http.computers.attach({ providerId: 'computer-headless-chrome', target: `chrome-${crypto.randomUUID()}` });
+      setSelected(added.id);
+    });
+  }
+
   return <section className="computers-page" data-testid="computers-page" aria-label="Computers">
     <header className="page-header computers-header">
       <div><h1>Computers</h1><p>Private screens shared by assigned agents.</p></div>
-      <Button label={killEngaged ? 'Resume agents' : 'Stop all agents'} data-testid="stop-all-agents" onClick={() => void perform(() => http.computers.kill({ engaged: !killEngaged }))}
-        isDisabled={busy}>{killEngaged ? 'Resume agents' : 'Stop all agents'}</Button>
+      <Button label={killEngaged ? 'Resume agents' : 'Stop all agents'} data-testid="stop-all-agents"
+        variant={killEngaged ? 'secondary' : 'destructive'} isDisabled={killPending}
+        onClick={() => { if (killEngaged) setConfirmation('resume'); else void setGlobalStop(true); }}>
+        {killEngaged ? 'Resume agents' : 'Stop all agents'}
+      </Button>
     </header>
-    {killEngaged && <p className="computers-stopped" role="status">Agents stopped globally. Screen viewing remains available.</p>}
-    {error && <p role="alert" className="page-error">{error}</p>}
+    {killEngaged && <Banner status="warning" title="Agents stopped globally" description="Screen viewing remains available." />}
+    {error && <Banner status="error" title={error} />}
     <div className="computers-layout">
-      <aside className="computers-sidebar">
-        <h2>Attached computers</h2>
-        <p data-testid="local-consent-status" role="status">Your desktop · {local.enabled ? 'Sharing enabled' : 'Off'}</p>
-        <Button label={local.enabled ? 'Stop sharing my desktop' : 'Allow my desktop'} data-testid="local-consent" isDisabled={busy}
-          onClick={() => void perform(async () => {
-            if (local.enabled) {
-              await http.computers.local.set({ enabled: false });
-              return;
-            }
-            if (!local.available) await http.extensions.enable({ id: 'computer-local' });
-            await http.computers.local.set({ enabled: true });
-            const added = await http.computers.attach({ providerId: 'computer-local', target: 'local-desktop' });
-            setSelected(added.id);
-          })}>{local.enabled ? 'Stop sharing my desktop' : 'Allow my desktop'}</Button>
-        <Button label="Attach Chrome" data-testid="attach-chrome" isDisabled={busy} onClick={() => void perform(async () => {
-          const available = await http.extensions.list();
-          if (available.find(({ id }) => id === 'computer-headless-chrome')?.status !== 'running') {
-            await http.extensions.enable({ id: 'computer-headless-chrome' });
-          }
-          const added = await http.computers.attach({ providerId: 'computer-headless-chrome', target: `chrome-${crypto.randomUUID()}` });
-          setSelected(added.id);
-        })}>Attach Chrome</Button>
+      <aside className="computers-sidebar" style={{ width: sidebar.size }}>
+        <ScrollableArea label="Attached computers" height="100%" padding={2}>
+        <Heading level={2}>Attached computers</Heading>
+        <Section padding={2}>
+          <Heading level={3}>Your desktop</Heading>
+          <div data-testid="local-consent-status" role="status"><StatusDot variant={local.enabled ? 'success' : 'neutral'} label={local.enabled ? 'Sharing enabled' : 'Off'} /></div>
+          <Button label={local.enabled ? 'Stop sharing my desktop' : 'Allow my desktop'} data-testid="local-consent" isDisabled={busy}
+            variant={local.enabled ? 'destructive' : 'secondary'} onClick={() => {
+              if (local.enabled) void perform(() => http.computers.local.set({ enabled: false }));
+              else setConfirmation('share');
+            }}>{local.enabled ? 'Stop sharing my desktop' : 'Allow my desktop'}</Button>
+        </Section>
+        <div className="computers-attach-actions">
+          <Button label="Attach Chrome" data-testid="attach-chrome" isDisabled={busy} onClick={attachChrome}>Attach Chrome</Button>
+          <MoreMenu label="Other attachment types" isDisabled={busy} items={[
+            { label: 'Hermes bot screen', onClick: () => setAttachOpen('hermes') },
+            { label: 'VNC screen', onClick: () => setAttachOpen('vnc') },
+          ]} />
+        </div>
+        <Dialog aria-label={attachOpen === 'hermes' ? 'Attach Hermes bot screen' : 'Attach VNC screen'} isOpen={attachOpen !== null} onOpenChange={open => { if (!open) setAttachOpen(null); }}>
+          <div className="computers-attach-dialog">
+          <Heading level={2}>{attachOpen === 'hermes' ? 'Attach Hermes bot screen' : 'Attach VNC screen'}</Heading>
+          {attachOpen === 'hermes' ?
         <form className="computers-vnc" aria-label="Attach Hermes bot screen" onSubmit={event => {
           event.preventDefault();
           const profile = hermesProfile.trim();
@@ -173,37 +213,44 @@ export default function Computers() {
             }
             const added = await http.computers.attach({ providerId: 'computer-hermes-screen', target: `hermes-screen:${profile}` });
             setSelected(added.id);
+            setAttachOpen(null);
           });
         }}>
-          <label>Hermes bot profile<input aria-label="Hermes bot profile" data-testid="hermes-screen-profile" value={hermesProfile}
-            onChange={event => setHermesProfile(event.target.value)} placeholder="default" required /></label>
+          <TextInput label="Hermes bot profile" data-testid="hermes-screen-profile" value={hermesProfile}
+            onChange={setHermesProfile} placeholder="default" isRequired />
           <Button type="submit" label="Attach Hermes bot screen" data-testid="attach-hermes-screen" isDisabled={busy || !hermesProfile.trim()}>
             Attach Hermes bot screen
           </Button>
-        </form>
-        <VncAttach busy={busy} attach={target => void perform(async () => {
+        </form> : <VncAttach busy={busy} attach={target => void perform(async () => {
           const available = await http.extensions.list();
           if (available.find(({ id }) => id === 'computer-vnc')?.status !== 'running') {
             await http.extensions.enable({ id: 'computer-vnc' });
           }
           const added = await http.computers.attach({ providerId: 'computer-vnc', target });
           setSelected(added.id);
-        })} />
+          setAttachOpen(null);
+        })} />}
+          <Button label="Cancel" variant="secondary" onClick={() => setAttachOpen(null)}>Cancel</Button>
+          </div>
+        </Dialog>
         <div className="computers-list" aria-label="Attached computers">
-          {computers.map((computer) => <button type="button" key={computer.id} data-testid={`computer-${computer.id}`}
-            className={selected === computer.id ? 'computer-row selected' : 'computer-row'}
-            onClick={() => { setSelected(computer.id); setActing(null); }}>
+          {computers.map(computer => <SelectableCard key={computer.id} label={computer.id} data-testid={`computer-${computer.id}`}
+            className="computer-row" isSelected={selected === computer.id} padding={2}
+            onChange={() => { setSelected(computer.id); setActing(null); }}>
             <strong>{computer.id}</strong><span>{computer.providerId}</span>
-            <small>{computer.holder === 'human' ? 'Human control' : 'Agent control'}</small>
-          </button>)}
-          {computers.length === 0 && <p>No computers attached.</p>}
+            <Badge label={computer.holder === 'human' ? 'Human control' : 'Agent control'} variant={computer.holder === 'human' ? 'neutral' : 'success'} />
+            <Badge label={`${computer.assignments.length} assigned`} />
+          </SelectableCard>)}
+          {computers.length === 0 && <EmptyState title="No computers attached" description="Attach a screen to share with agents." />}
         </div>
+        </ScrollableArea>
       </aside>
+      <div className="computers-resize"><ResizeHandle resizable={sidebar.props} direction="horizontal" hasDivider label="Resize computers list" /></div>
       <div className="computers-detail">
         {selectedRow ? <>
           <div className="computers-controlbar">
-            <div><h2>{selectedRow.id}</h2>
-              <p data-testid="computer-acting" role="status">{acting ? `Agent acting · ${acting}` : selectedRow.holder === 'human' ? 'You have control' : 'Agent ready'}</p></div>
+            <div><Heading level={2}>{selectedRow.id}</Heading>
+              <div data-testid="computer-acting" role="status"><Badge label={acting ? `Agent acting · ${acting}` : selectedRow.holder === 'human' ? 'You have control' : 'Agent ready'} variant={acting ? 'warning' : 'neutral'} /></div></div>
             <div className="computers-actions">
               <Button label={selectedRow.holder === 'agent' ? 'Take over' : 'Hand back'} data-testid="computer-lease" isDisabled={busy} onClick={() => void perform(() =>
                 http.computers.lease({ id: selectedRow.id, holder: selectedRow.holder === 'agent' ? 'human' : 'agent' }))}>
@@ -216,22 +263,24 @@ export default function Computers() {
           <div className="computer-viewer" aria-label="Live computer screen">
             <img data-testid="computer-frame" ref={frame} alt={`Live screen of ${selectedRow.id}`} />
           </div>
-          <section className="computers-assignments" aria-label="Assignments">
-            <h3>Assigned agents</h3>
+          <Section className="computers-assignments" aria-label="Assignments" padding={3}>
+            <Heading level={3}>Assigned agents</Heading>
             {selectedRow.assignments.length ? <ul>{selectedRow.assignments.map(({ engine: name, targetId }) =>
-              <li key={`${name}/${targetId}`}>{name} · {targetId}</li>)}</ul> : <p>No agents assigned.</p>}
+              <li key={`${name}/${targetId}`}><Badge label={`${name} / ${targetId}`} /></li>)}</ul> : <p>No agents assigned.</p>}
             <form onSubmit={(event) => { event.preventDefault(); void perform(() =>
               http.computers.assign({ engine, targetId: target.trim(), computerId: selectedRow.id })); }}>
-              <label>Engine <select aria-label="Engine" value={engine} onChange={(event) => setEngine(event.target.value as 'hermes' | 'dsh')}>
-                <option value="hermes">Hermes bot</option><option value="dsh">DSH session</option>
-              </select></label>
-              <label>Bot or session ID <input data-testid="computer-target" value={target} onChange={(event) => setTarget(event.target.value)}
-                placeholder="Name or session ID" required /></label>
+              <Selector label="Engine" value={engine} onChange={value => setEngine(value as typeof engine)} options={[{ value: 'hermes', label: 'Hermes bot' }, { value: 'dsh', label: 'DSH session' }]} isDisabled={busy} />
+              <TextInput label="Bot or session ID" data-testid="computer-target" value={target} onChange={setTarget} placeholder="Name or session ID" isRequired isDisabled={busy} />
               <Button label="Assign" type="submit" isDisabled={busy || !target.trim()}>Assign</Button>
             </form>
-          </section>
-        </> : <div className="computers-empty"><h2>Choose a computer</h2><p>Attach an isolated Chrome screen to begin.</p></div>}
+          </Section>
+        </> : <EmptyState title="Choose a computer" description="Attach an isolated Chrome screen to begin." actions={<Button label="Attach Chrome" isDisabled={busy} onClick={attachChrome}>Attach Chrome</Button>} />}
       </div>
     </div>
+    <AlertDialog isOpen={confirmation !== null} onOpenChange={open => { if (!open) setConfirmation(null); }}
+      title={confirmation === 'resume' ? 'Resume all agents?' : 'Share your desktop?'}
+      description={confirmation === 'resume' ? 'Allow agents to resume computer operations globally.' : 'Enable local desktop sharing and attach this screen for assigned agents.'}
+      actionLabel={confirmation === 'resume' ? 'Resume agents' : 'Allow sharing'}
+      onAction={() => { const choice = confirmation; setConfirmation(null); if (choice === 'resume') void setGlobalStop(false); else if (choice === 'share') shareDesktop(); }} />
   </section>;
 }
