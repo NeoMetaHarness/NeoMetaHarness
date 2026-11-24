@@ -360,7 +360,7 @@ try {
     await view.wait('document.querySelector(".connection")?.textContent === "Live"', 'Inbox connection live');
     await sleep(2000);
     const notInstalled = await view.evaluate(`({ connection: document.querySelector('.connection')?.textContent,
-      prompt: document.querySelector('#inbox-prompt').disabled, text: document.querySelector('[data-testid=inbox-not-installed]')?.textContent,
+      prompt: document.querySelector('#inbox-prompt').getAttribute('aria-disabled') === 'true', text: document.querySelector('[data-testid=inbox-not-installed]')?.textContent,
       disabledNotice: !!document.querySelector('[data-testid=inbox-disabled]') })`);
     assert.equal(notInstalled.connection, 'Live', 'no reconnect loop while the super agent is not installed');
     assert.equal(notInstalled.prompt, true, 'Ask is disabled until the super agent is installed');
@@ -369,7 +369,7 @@ try {
     await assert.rejects(rpc.inbox.list(), /not installed/, 'the Gateway says not installed, not disabled');
     // Installing from the Inbox brings the Inbox up in place.
     await view.evaluate('document.querySelector("[data-testid=inbox-superagent-install-start]").click()');
-    await view.wait('!document.querySelector("[data-testid=inbox-not-installed]") && !document.querySelector("#inbox-prompt").disabled && document.querySelector(".connection")?.textContent === "Live"', 'Inbox ready after installing the super agent', 1200);
+    await view.wait('!document.querySelector("[data-testid=inbox-not-installed]") && document.querySelector("#inbox-prompt").getAttribute("aria-disabled") !== "true" && document.querySelector(".connection")?.textContent === "Live"', 'Inbox ready after installing the super agent', 1200);
     assert.equal((await rpc.x['engine-superagent'].install.status()).state, 'ready');
     assert.deepEqual(await rpc.inbox.list(), []);
   }

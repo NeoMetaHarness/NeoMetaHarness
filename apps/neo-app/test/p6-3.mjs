@@ -320,6 +320,14 @@ async function pageSession(chrome, url) {
   const { sessionId } = await chrome.send('Target.attachToTarget', { targetId, flatten: true });
   await chrome.send('Runtime.enable', {}, sessionId);
   await chrome.send('Page.enable', {}, sessionId);
+  await chrome.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+    window.WebSocket = class extends WebSocket {
+      constructor(...args) {
+        super(...args);
+        if (new URL(args[0]).pathname === '/ws') window.inboxTestSocket = this;
+      }
+    };
+  ` }, sessionId);
   await chrome.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
   await chrome.send('Page.navigate', { url }, sessionId);
   const evaluate = async (expression) => {
@@ -481,7 +489,15 @@ async function trial(previewPort) {
       .find((item) => item.id === question.id && item.status === 'question'), 'question waiting', 120000);
     assert.equal(waiting.kind, 'question');
     await page.eventually(`!!document.querySelector('[data-testid="inbox-${question.id}"] [data-testid="inbox-question"] textarea')`, 'question input');
-    await page.evaluate(`(() => { const row = document.querySelector('[data-testid="inbox-${question.id}"]'); const answer = row.querySelector('textarea'); answer.value = 'Project Orion'; row.querySelector('[data-action=reply]').click(); return true })()`);
+    await page.evaluate(`(() => { const row = document.querySelector('[data-testid="inbox-${question.id}"]'); window.inboxTestAnswer = row.querySelector('textarea'); window.inboxTestAnswer.focus(); return true })()`);
+    await page.typeText('Project Orion');
+    await page.eventually(`document.querySelector('[data-testid="inbox-${question.id}"] [data-action=reply]').getAttribute('aria-disabled') !== 'true'`, 'reply enabled');
+    await page.evaluate(`(() => { window.inboxPreviousSocket = window.inboxTestSocket; window.inboxPreviousSocket.close(); return true })()`);
+    await page.eventually(`window.inboxTestSocket !== window.inboxPreviousSocket && document.querySelector('.connection')?.textContent === 'Live'`, 'Inbox reconnected');
+    await sleep(500);
+    assert.equal(await page.evaluate(`(() => { const row = document.querySelector('[data-testid="inbox-${question.id}"]'); const answer = row.querySelector('textarea'); return answer === window.inboxTestAnswer && answer === document.activeElement && answer.value === 'Project Orion' && row.querySelector('[data-action=reply]').getAttribute('aria-disabled') !== 'true' })()`), true, 'Draft, focus, and reply state survive snapshot and event replay');
+    console.log('P6-3_DRAFT PASS reconnect=true identity=true focus=true draft=true reply_enabled=true');
+    await page.evaluate(`document.querySelector('[data-testid="inbox-${question.id}"] [data-action=reply]').click()`);
     const resumedQuestion = await eventually(async () => (await rpc.inbox.list())
       .find((item) => item.id === question.id && item.status === 'ready'), 'question resumed', 120000);
     assert.equal(resumedQuestion.report.status, 'ready');

@@ -4,7 +4,8 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type AcceptMode, type InboxItem } from '@neometaharness/contracts';
-import { Button } from '@neometaharness/ui';
+import { createPortal } from 'react-dom';
+import { AlertDialog, Banner, Button, TextArea, TextInput, Switch, SegmentedControl, SegmentedControlItem, Selector } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import EngineInstall from './EngineInstall';
 import './inbox.css';
@@ -26,6 +27,74 @@ function textNode(tag: string, content: string, className?: string): HTMLElement
   return element;
 }
 
+type ControlItem = Pick<InboxItem, 'id' | 'status' | 'source' | 'botId' | 'destructive'> & {
+  question: string;
+  approvalReason: string;
+  approvalDestructive: boolean;
+};
+type ControlEntry = { host: HTMLElement; item: ControlItem };
+
+function InboxControls({ item, onResult, onError }: {
+  item: ControlItem;
+  onResult: (item: InboxItem) => void;
+  onError: (message: string) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<'accept' | 'approve' | null>(null);
+  const upstream = item.source === 'neo/upstream';
+  const run = async (label: string, call: () => Promise<InboxItem>) => {
+    setBusy(true);
+    onError('');
+    try { onResult(await call()); }
+    catch (error) { onError(`Could not ${label}: ${String(error)}`); }
+    finally { setBusy(false); }
+  };
+  const accept = () => void run('accept suggestion', () => http.inbox.accept({ id: item.id }));
+  const decide = (decision: 'approve' | 'deny') => {
+    if (!draft.trim()) return;
+    void run(decision, () => http.inbox.approval.decide({ id: item.id, decision, reason: draft.trim() }));
+  };
+  return <>
+    {item.status === 'suggestion' && <div className="inbox-suggestion" data-testid="inbox-suggestion">
+      {upstream ? <Banner status="warning" title={item.botId === 'neo-system'
+        ? 'Configure a bot for upstream work to approve this bump'
+        : 'Upgrade: an admin must approve; the bot bumps on a branch and reports'} />
+        : item.destructive && <Banner status="warning" title="Destructive: an admin must accept" />}
+      {(!upstream || item.botId !== 'neo-system') && <Button label={upstream ? 'Approve bump' : 'Accept'}
+        data-action="accept" isDisabled={busy} variant={item.destructive ? 'destructive' : 'primary'}
+        onClick={() => { if (item.destructive || upstream) setConfirm('accept'); else accept(); }} />}
+      <Button label="Dismiss" data-action="dismiss" variant="secondary" isDisabled={busy}
+        onClick={() => void run('dismiss suggestion', () => http.inbox.dismiss({ id: item.id }))} />
+    </div>}
+    {item.status === 'question' && <form className="inbox-response" data-testid="inbox-question" onSubmit={event => {
+      event.preventDefault();
+      if (!busy && draft.trim()) void run('reply', () => http.inbox.reply({ id: item.id, answer: draft.trim() }));
+    }}>
+      <TextArea label={item.question} value={draft} onChange={setDraft} isRequired isDisabled={busy}
+        ref={el => { if (el) { el.name = 'answer'; el.setAttribute('aria-label', 'Answer question'); } }} rows={3} />
+      <Button type="submit" label="Reply" data-action="reply" isDisabled={busy || !draft.trim()} />
+    </form>}
+    {item.status === 'approval' && <div className="inbox-response" data-testid="inbox-approval">
+      <Banner status="warning" title={item.approvalDestructive ? 'Admin approval required' : 'Approval requested'} description={item.approvalReason} />
+      <TextArea label="Reason" value={draft} onChange={setDraft} isRequired isDisabled={busy}
+        ref={el => { if (el) { el.name = 'reason'; el.setAttribute('aria-label', 'Approval reason'); } }} rows={3} />
+      <div className="inbox-suggestion">
+        <Button label="Deny" data-action="deny" variant="secondary" isDisabled={busy || !draft.trim()} onClick={() => decide('deny')} />
+        <Button label="Approve" data-action="approve" variant={item.approvalDestructive ? 'destructive' : 'primary'}
+          isDisabled={busy || !draft.trim()} onClick={() => { if (item.approvalDestructive) setConfirm('approve'); else decide('approve'); }} />
+      </div>
+    </div>}
+    {item.status === 'failed' && <Button label="Retry" data-action="retry" variant="secondary" isDisabled={busy}
+      onClick={() => void run('retry', () => http.inbox.retry({ id: item.id }))} />}
+    <AlertDialog isOpen={confirm !== null} onOpenChange={open => { if (!open) setConfirm(null); }}
+      title={confirm === 'approve' ? 'Approve this action?' : 'Accept this suggestion?'}
+      description={item.approvalDestructive || item.destructive ? 'This work is marked destructive and requires an admin decision.' : 'This will authorize the proposed upstream upgrade.'}
+      actionLabel={confirm === 'approve' ? 'Confirm approval' : 'Confirm acceptance'}
+      onAction={() => { const action = confirm; setConfirm(null); if (action === 'approve') decide('approve'); if (action === 'accept') accept(); }} />
+  </>;
+}
+
 export default function Inbox() {
   const [bots, setBots] = useState<{ id: string; name: string }[]>([]);
   const [botId, setBotId] = useState('');
@@ -45,6 +114,7 @@ export default function Inbox() {
   const [acceptMode, setAcceptMode] = useState<AcceptMode | ''>('');
   const list = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<string, HTMLElement>());
+  const [controls, setControls] = useState<Record<string, ControlEntry>>({});
   const latest = useRef(0);
   const gatewayCursor = useRef(0);
   const active = useRef(true);
@@ -53,15 +123,24 @@ export default function Inbox() {
   function renderItem(item: InboxItem) {
     if (!active.current || !list.current) return;
     let row = rows.current.get(item.id);
+    // A reconnect lists current items before replaying historical events.
+    // Ignore older snapshots so a previous status cannot unmount a live draft.
+    if (row && Number(row.dataset.updatedAt) > item.updatedAt) return;
     if (!row) {
       row = document.createElement('article');
       row.className = 'inbox-item';
       row.dataset.testid = `inbox-${item.id}`;
+      for (const region of ['content', 'controls', 'report']) {
+        const host = document.createElement('div');
+        host.dataset.region = region;
+        row.append(host);
+      }
       rows.current.set(item.id, row);
       list.current.prepend(row);
     }
     row.dataset.status = item.status;
-    if (new URLSearchParams(window.location.search).get('openInbox') === item.id) {
+    row.dataset.updatedAt = String(item.updatedAt);
+    if (!row.dataset.deepLinkSelected && new URLSearchParams(window.location.search).get('openInbox') === item.id) {
       row.dataset.deepLinkSelected = 'true';
       requestAnimationFrame(() => row?.scrollIntoView({ block: 'center' }));
     }
@@ -88,110 +167,28 @@ export default function Inbox() {
       }
       content.push(details);
     }
-    if (item.status === 'suggestion') {
-      // Suggestions: proposed work a member accepts (policy-checked by the gateway) or dismisses.
-      const actions = document.createElement('div');
-      actions.className = 'inbox-suggestion';
-      actions.dataset.testid = 'inbox-suggestion';
-      const upstream = item.source === 'neo/upstream';
-      if (upstream) {
-        actions.append(textNode('p', item.botId === 'neo-system'
-          ? 'Configure a bot for upstream work to approve this bump'
-          : 'Upgrade: an admin must approve; the bot bumps on a branch and reports', 'inbox-blocked'));
-      } else if (item.destructive) actions.append(textNode('p', 'Destructive: an admin must accept', 'inbox-blocked'));
-      const buttons: HTMLButtonElement[] = [];
-      const run = async (label: string, call: () => Promise<InboxItem>) => {
-        for (const control of buttons) control.disabled = true;
-        setError('');
-        try { renderItem(await call()); }
-        catch (reason) {
-          setError(`Could not ${label} suggestion: ${String(reason)}`);
-          for (const control of buttons) control.disabled = false;
-        }
-      };
-      // An upstream bump can be approved only once a bot is assigned to do it.
-      if (!upstream || item.botId !== 'neo-system') {
-        const accept = textNode('button', upstream ? 'Approve bump' : 'Accept', 'inbox-accept') as HTMLButtonElement;
-        accept.type = 'button';
-        accept.dataset.action = 'accept';
-        accept.onclick = () => run('accept', () => http.inbox.accept({ id: item.id }));
-        buttons.push(accept);
+    const contentHost = row.children[0] as HTMLElement;
+    const controlsHost = row.children[1] as HTMLElement;
+    const reportHost = row.children[2] as HTMLElement;
+    contentHost.replaceChildren(...content);
+    content.length = 0;
+    // The portal stays mounted through same-status events and reconnect snapshots.
+    const controlItem: ControlItem = {
+      id: item.id, status: item.status, source: item.source, botId: item.botId,
+      destructive: item.destructive,
+      question: item.report?.question || item.report?.summary || 'Your answer',
+      approvalReason: item.approval?.reason || 'Approval requested',
+      approvalDestructive: !!item.approval?.destructive,
+    };
+    setControls(previous => {
+      const entry = previous[item.id];
+      if (!['suggestion', 'question', 'approval', 'failed'].includes(item.status)) {
+        if (!entry) return previous;
+        const next = { ...previous }; delete next[item.id]; return next;
       }
-      const dismiss = textNode('button', 'Dismiss', 'inbox-accept') as HTMLButtonElement;
-      dismiss.type = 'button';
-      dismiss.dataset.action = 'dismiss';
-      dismiss.onclick = () => run('dismiss', () => http.inbox.dismiss({ id: item.id }));
-      buttons.push(dismiss);
-      actions.append(...buttons);
-      content.push(actions);
-    }
-    if (item.status === 'question') {
-      const form = document.createElement('form');
-      form.className = 'inbox-response';
-      form.dataset.testid = 'inbox-question';
-      const label = textNode('label', item.report?.question || item.report?.summary || 'Your answer');
-      const answer = document.createElement('textarea');
-      answer.name = 'answer';
-      answer.required = true;
-      answer.setAttribute('aria-label', 'Answer question');
-      const submit = textNode('button', 'Reply', 'inbox-accept') as HTMLButtonElement;
-      submit.type = 'submit';
-      submit.dataset.action = 'reply';
-      label.append(answer);
-      form.append(label, submit);
-      form.onsubmit = async (event) => {
-        event.preventDefault();
-        if (!answer.value.trim()) return;
-        submit.disabled = true;
-        setError('');
-        try { renderItem(await http.inbox.reply({ id: item.id, answer: answer.value.trim() })); }
-        catch (reason) { setError(`Could not reply: ${String(reason)}`); submit.disabled = false; }
-      };
-      content.push(form);
-    }
-    if (item.status === 'approval') {
-      const form = document.createElement('form');
-      form.className = 'inbox-response';
-      form.dataset.testid = 'inbox-approval';
-      form.append(textNode('p', item.approval?.reason || 'Approval requested'));
-      if (item.approval?.destructive) form.append(textNode('p', 'Admin approval required'));
-      const label = textNode('label', 'Reason');
-      const reason = document.createElement('textarea');
-      reason.name = 'reason';
-      reason.required = true;
-      reason.setAttribute('aria-label', 'Approval reason');
-      label.append(reason);
-      form.append(label);
-      for (const decision of ['approve', 'deny'] as const) {
-        const button = textNode('button', decision === 'approve' ? 'Approve' : 'Deny', 'inbox-accept') as HTMLButtonElement;
-        button.type = 'button';
-        button.dataset.action = decision;
-        button.onclick = async () => {
-          if (!reason.value.trim()) { reason.reportValidity(); return; }
-          for (const control of form.querySelectorAll('button')) control.disabled = true;
-          setError('');
-          try { renderItem(await http.inbox.approval.decide({ id: item.id, decision, reason: reason.value.trim() })); }
-          catch (error) {
-            setError(`Could not ${decision}: ${String(error)}`);
-            for (const control of form.querySelectorAll('button')) control.disabled = false;
-          }
-        };
-        form.append(button);
-      }
-      content.push(form);
-    }
-    if (item.status === 'failed') {
-      const retry = textNode('button', 'Retry', 'inbox-accept') as HTMLButtonElement;
-      retry.type = 'button';
-      retry.dataset.action = 'retry';
-      retry.onclick = async () => {
-        retry.disabled = true;
-        setError('');
-        try { renderItem(await http.inbox.retry({ id: item.id })); }
-        catch (error) { setError(`Could not retry: ${String(error)}`); retry.disabled = false; }
-      };
-      content.push(retry);
-    }
+      if (entry?.host === controlsHost && JSON.stringify(entry.item) === JSON.stringify(controlItem)) return previous;
+      return { ...previous, [item.id]: { host: controlsHost, item: controlItem } };
+    });
     if (item.report) {
       const report = document.createElement('section');
       report.className = 'inbox-report';
@@ -249,7 +246,7 @@ export default function Inbox() {
       content.push(report);
       if (item.status === 'blocked') content.push(textNode('p', item.report.risks[0] ?? item.report.summary, 'inbox-blocked'));
     }
-    row.replaceChildren(...content);
+    reportHost.replaceChildren(...content);
   }
 
   useEffect(() => {
@@ -277,8 +274,11 @@ export default function Inbox() {
     async function refresh() {
       const items = await http.inbox.list();
       if (closed || !list.current) return;
-      rows.current.clear();
-      list.current.replaceChildren();
+      const ids = new Set(items.map(item => item.id));
+      for (const [id, row] of rows.current) {
+        if (!ids.has(id)) { row.remove(); rows.current.delete(id); }
+      }
+      setControls(previous => Object.fromEntries(Object.entries(previous).filter(([id]) => ids.has(id))));
       for (const item of items.sort((a, b) => a.createdAt - b.createdAt)) renderItem(item);
     }
     async function listen() {
@@ -337,12 +337,16 @@ export default function Inbox() {
       }
     }
     void listen();
-    return () => { closed = true; active.current = false; socket?.close(); rows.current.clear(); };
+    return () => { closed = true; active.current = false; socket?.close(); };
   }, [round]);
 
   async function ask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!draft.trim() || !botId || busy || !enabled) return;
+    if (notify && (!notifyProfile.trim() || !/^[0-9]{6,20}$/.test(notifyNumber))) {
+      setError('Enter a WhatsApp connection and a recipient number with 6 to 20 digits.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -372,36 +376,44 @@ export default function Inbox() {
     {!enabled && !notInstalled && <p className="page-error" role="status" data-testid="inbox-disabled">Superagent extension is disabled. Enable it on Extensions to use Ask Neo.</p>}
     {error && <p role="alert" className="page-error">{error}</p>}
     <form className="inbox-composer" onSubmit={(event) => { void ask(event); }}>
-      <label htmlFor="inbox-prompt">Ask Neo</label>
-      <textarea id="inbox-prompt" rows={3} placeholder="What should Neo work on?" value={draft}
-        onChange={(event) => setDraft(event.target.value)} disabled={!enabled || busy} />
-      <fieldset><legend>Completion notification</legend>
-        <label><input data-testid="inbox-notify" type="checkbox" checked={notify} onChange={event => setNotify(event.target.checked)} disabled={!enabled || busy} />Notify on WhatsApp</label>
-        {notify && <>
-          <label>WhatsApp connection <input data-testid="inbox-notify-profile" value={notifyProfile} onChange={event => setNotifyProfile(event.target.value)} required disabled={!enabled || busy} /></label>
-          <label>Recipient number <input data-testid="inbox-notify-number" value={notifyNumber} onChange={event => setNotifyNumber(event.target.value)} placeholder="International digits" pattern="[0-9]{6,20}" required disabled={!enabled || busy} /></label>
-        </>}
-      </fieldset>
+      <TextArea label="Ask Neo" id="inbox-prompt" rows={3} placeholder="What should Neo work on?" value={draft}
+        onChange={setDraft} isDisabled={!enabled || busy} />
       <div className="inbox-controls">
-        <label>Agent <select aria-label="Agent" value={botId} onChange={(event) => setBotId(event.target.value)} disabled={!enabled || busy}>
-          {!bots.length && <option value="">Create an agent first</option>}
-          {bots.map((bot) => <option value={bot.id} key={bot.id}>{bot.name}</option>)}
-        </select></label>
-        <fieldset className="inbox-modes"><legend>Mode</legend>
-          <label><input type="radio" name="mode" value="observe" checked={mode === 'observe'} onChange={() => setMode('observe')} />Observe</label>
-          <label><input type="radio" name="mode" value="act" checked={mode === 'act'} onChange={() => setMode('act')} />Act</label>
-        </fieldset>
-        <Button type="submit" label={busy ? 'Sending…' : 'Ask Neo'} isDisabled={!enabled || !botId || !draft.trim() || busy} />
+        <Selector label="Agent" htmlName="inbox-agent" value={botId} onChange={setBotId}
+          options={bots.map(bot => ({ value: bot.id, label: bot.name }))} isDisabled={!enabled || busy || !bots.length} />
+        <div className="inbox-mode-control">
+          <SegmentedControl label="Mode" value={mode} onChange={value => setMode(value as 'observe' | 'act')} isDisabled={!enabled || busy}>
+            <SegmentedControlItem label="Observe" value="observe" />
+            <SegmentedControlItem label="Act" value="act" />
+          </SegmentedControl>
+          <p>{mode === 'observe' ? 'Suggest work for your review.' : 'Start work immediately, subject to approval policies.'}</p>
+        </div>
+      </div>
+      <div className="inbox-notify">
+        <Switch label="Notify on WhatsApp" value={notify} onChange={setNotify} isDisabled={!enabled || busy}
+          ref={el => { if (el) el.dataset.testid = 'inbox-notify'; }} />
+        {notify && <>
+          <TextInput label="WhatsApp connection" value={notifyProfile} onChange={setNotifyProfile} isRequired isDisabled={!enabled || busy}
+            ref={el => { if (el) el.dataset.testid = 'inbox-notify-profile'; }} />
+          <TextInput label="Recipient number" value={notifyNumber} onChange={setNotifyNumber} placeholder="International digits" isRequired isDisabled={!enabled || busy}
+            ref={el => { if (el) { el.dataset.testid = 'inbox-notify-number'; el.pattern = '[0-9]{6,20}'; } }} />
+        </>}
+      </div>
+      <div className="inbox-controls">
+        <Button type="submit" label={busy ? 'Sending…' : 'Ask Neo'} isDisabled={!enabled || !botId || !draft.trim() || busy || (notify && (!notifyProfile.trim() || !/^[0-9]{6,20}$/.test(notifyNumber)))} />
       </div>
     </form>
-    {enabled && acceptMode && <label className="inbox-accept-mode">
-      Accept mode for @neo comments and failing checks{' '}
-      <select aria-label="Accept mode" value={acceptMode} onChange={(event) => { void changeAcceptMode(event.target.value as AcceptMode); }}>
-        <option value="observe">Observe: suggest only</option>
-        <option value="act-with-approval">Act with approval</option>
-        <option value="act">Act</option>
-      </select>
-    </label>}
+    {enabled && acceptMode && <div className="inbox-accept-mode">
+      <Selector label="Accept mode for @neo comments and failing checks" htmlName="inbox-accept-mode" value={acceptMode}
+        onChange={value => { void changeAcceptMode(value as AcceptMode); }} options={[
+          { value: 'observe', label: 'Observe: suggest only' },
+          { value: 'act-with-approval', label: 'Act with approval' },
+          { value: 'act', label: 'Act' },
+        ]} />
+      <p>Only admins can change this policy. Destructive work still requires admin approval.</p>
+    </div>}
     <div className="inbox-items" aria-label="Inbox items" ref={list} />
+    {Object.values(controls).map(({ host, item }) => createPortal(
+      <InboxControls key={`${item.id}:${item.status}`} item={item} onResult={renderItem} onError={setError} />, host, item.id))}
   </section>;
 }

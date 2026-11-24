@@ -399,7 +399,7 @@ async function trial(previewPort) {
     stage = 'Inbox UI';
     chrome = await startChrome(join(temporary, 'chrome'));
     page = await pageSession(chrome, `http://127.0.0.1:${previewPort}/inbox?gateway=${encodeURIComponent(base)}&token=${encodeURIComponent(AUTH)}`);
-    await page.eventually('document.querySelector("select[aria-label=\'Accept mode\']")?.value === "observe"', 'accept mode selector');
+    await page.eventually('document.querySelector("input[name=inbox-accept-mode]")?.value === "observe"', 'accept mode selector');
     const row = (id) => `document.querySelector('[data-testid="inbox-${id}"]')`;
     await page.eventually(`!!${row(commentSuggestion.id)}?.querySelector('[data-testid=inbox-suggestion] [data-action=accept]') && !!${row(commentSuggestion.id)}?.querySelector('[data-action=dismiss]')`, 'comment Suggestion card');
     await page.eventually(`!!${row(checkSuggestion.id)}?.querySelector('[data-action=dismiss]')`, 'check Suggestion card');
@@ -452,6 +452,8 @@ async function trial(previewPort) {
     await assert.rejects(member.inbox.accept({ id: destructive.id }), forbidden, 'member must get 403 accepting destructive work');
     assert.equal((await list()).find((item) => item.id === destructive.id)?.status, 'suggestion');
     await page.evaluate(`${row(destructive.id)}.querySelector('[data-action=accept]').click()`);
+    await page.eventually('!!document.querySelector("[role=alertdialog]")', 'destructive confirmation');
+    await page.evaluate(`Array.from(document.querySelectorAll('[role=alertdialog] button')).find(button => button.textContent.trim() === 'Confirm acceptance').click()`);
     const destructiveDone = await find((item) => item.id === destructive.id && item.status === 'approval'
       && item.report?.status === 'ready', 'admin-accepted destructive work', 120000);
     assert.ok(delegated('delete the stale release branches'));

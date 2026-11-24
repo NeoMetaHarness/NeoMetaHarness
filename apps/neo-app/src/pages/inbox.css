@@ -1,25 +1,18 @@
 .inbox-page { max-width: 980px; margin: 0 auto; }
 .inbox-composer { display: grid; gap: 14px; padding: 24px; border: 1px solid var(--neo-color-border); }
-.inbox-composer > label { font-weight: 700; font-size: 18px; }
-.inbox-composer textarea, .inbox-composer select { font: inherit; background: transparent; color: inherit; padding: 12px; border: 1px solid var(--neo-color-control-border); }
-.inbox-composer textarea { resize: vertical; width: 100%; }
-.inbox-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 18px; }
-.inbox-controls > label { display: grid; gap: 6px; }
-.inbox-modes { display: flex; gap: 14px; padding: 4px 12px 8px; border: 1px solid var(--neo-color-border); }
-.inbox-modes legend { font-size: 12px; }
-.inbox-modes label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.inbox-composer { background: var(--neo-color-surface); }
+.inbox-controls { display: flex; flex-wrap: wrap; align-items: start; gap: var(--neo-space-4); }
+.inbox-controls > * { min-width: 0; }
+.inbox-mode-control, .inbox-notify { display: grid; gap: var(--neo-space-2); }
+.inbox-mode-control p, .inbox-accept-mode p { margin: 0; color: var(--neo-color-text-muted); font-size: 0.875rem; }
 .inbox-items { margin-top: 28px; display: grid; gap: 14px; }
-.inbox-item { border: 1px solid var(--neo-color-border); padding: 20px; overflow-wrap: anywhere; }
+.inbox-item { background: var(--neo-color-surface); border: 1px solid var(--neo-color-border); padding: 20px; overflow-wrap: anywhere; }
 .inbox-item-header { display: flex; gap: 16px; align-items: center; justify-content: space-between; text-transform: capitalize; }
 .inbox-mode { color: var(--neo-color-text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
 .inbox-status { border: 1px solid currentColor; padding: 4px 10px; font-size: 12px; }
 .inbox-request { font-size: 17px; margin: 14px 0; }
-.inbox-accept { cursor: pointer; font: inherit; font-weight: 700; border: 1px solid var(--neo-color-control-border); padding: 8px 16px; color: inherit; background: transparent; }
-.inbox-accept:hover { outline: 2px solid currentColor; }
-.inbox-accept:disabled { opacity: .5; cursor: default; }
-.inbox-response { display: grid; gap: 10px; justify-items: start; margin-top: 12px; }
-.inbox-response label { display: grid; gap: 6px; width: min(100%, 600px); font-weight: 650; }
-.inbox-response textarea { box-sizing: border-box; width: 100%; min-height: 72px; padding: 8px; background: transparent; color: inherit; border: 1px solid var(--neo-color-control-border); font: inherit; }
+.inbox-response { display: grid; gap: var(--neo-space-3); margin-block: var(--neo-space-3); }
+.inbox-response > * { min-width: 0; }
 .inbox-upstream { padding: 10px 0; }
 .inbox-upstream p { margin: 5px 0; }
 .inbox-report { border-top: 1px solid var(--neo-color-border); padding-top: 14px; }
@@ -28,5 +21,13 @@
 .inbox-report-group p { margin: 5px 0; }
 .inbox-blocked { font-weight: 650; border-left: 3px solid currentColor; padding-left: 12px; }
 .inbox-suggestion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.inbox-suggestion p { flex-basis: 100%; margin: 0; }
-.inbox-accept-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; }
+.inbox-suggestion > div { flex-basis: 100%; }
+.inbox-accept-mode { display: grid; gap: var(--neo-space-2); margin-block: var(--neo-space-4); }
+.inbox-item[data-status="suggestion"] .inbox-status,
+.inbox-item[data-status="approval"] .inbox-status,
+.inbox-item[data-status="question"] .inbox-status { color: var(--neo-color-warning); background: var(--neo-color-warning-surface); }
+.inbox-item[data-status="ready"] .inbox-status { color: var(--neo-color-success); background: var(--neo-color-success-surface); }
+.inbox-item[data-status="failed"] .inbox-status,
+.inbox-item[data-status="blocked"] .inbox-status { color: var(--neo-color-danger); background: var(--neo-color-danger-surface); }
+.inbox-blocked { color: var(--neo-color-warning); }
+@media (max-width: 600px) { .inbox-composer, .inbox-item { padding: var(--neo-space-3); } .inbox-controls { flex-direction: column; align-items: stretch; } }

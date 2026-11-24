@@ -295,11 +295,11 @@ async function trial(previewPort) {
     chrome = await startChrome(join(temporary, 'chrome'));
     page = await pageSession(chrome, `http://127.0.0.1:${previewPort}/inbox?gateway=${encodeURIComponent(base)}&token=${encodeURIComponent(AUTH)}`);
     await page.eventually('document.querySelector(".inbox-page") && document.querySelector(".connection")?.textContent === "Live"', 'Inbox lazy page and event stream');
-    await page.eventually(`document.querySelector('select[aria-label="Agent"]')?.value === '${bot.id}'`, 'bot selector');
-    assert.equal(await page.evaluate('document.querySelector("input[name=mode]:checked")?.value'), 'observe');
+    await page.eventually(`document.querySelector('input[name="inbox-agent"]')?.value === '${bot.id}'`, 'bot selector');
+    assert.equal(await page.evaluate('document.querySelector("[role=radio][aria-checked=true][data-value]")?.dataset.value'), 'observe');
 
     async function submit(prompt, mode) {
-      await page.evaluate(`document.querySelector('input[name="mode"][value="${mode}"]').click()`);
+      await page.evaluate(`document.querySelector('[role="radio"][data-value="${mode}"]').click()`);
       await page.evaluate(`(() => {
         const input = document.querySelector('#inbox-prompt');
         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
