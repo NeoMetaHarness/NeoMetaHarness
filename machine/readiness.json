@@ -637,8 +637,8 @@
       "title": "Premium UI/UX on Astryx with light and dark themes",
       "status": "in_progress",
       "owner": "helpers (codex af5c3637 theme; sol-web eca02da1, c11a3980 audits; antigravity 9578dbf6 inventory)",
-      "evidence": "Owner request 2026-11-25: make the UI premium on Astryx (meta/astryx, already used as @astryxdesign/core 0.7.16), with both dark and light themes.",
-      "remaining": "Step 1: theme foundation (light/dark tokens, mode switch) and a page-by-page UX audit; then page polish."
+      "evidence": "Owner request 2026-11-25: make the UI premium on Astryx (meta/astryx, already used as @astryxdesign/core 0.7.16), with both dark and light themes. Step 1 (theme foundation) merged 2026-11-25 after PM review: Astryx 0.7.17; one Neo theme (packages/ui/src/theme.css, ~40 --neo-* tokens) in light and dark feeding Astryx and every page stylesheet; Settings > Appearance System/Light/Dark, saved per user profile; mode set before first paint; PWA theme-color and the Tauri title bar and background follow it. Review: test:p7-18 x2 (bootstrap, 49 contrast pairs per mode at WCAG AA: text 4.5, controls 3), p1-9, p7-8, p1-11, installer:check, gateway, toggle, check, secret scan OK; full regression ok=65 fail=6, none from the theme: p7-3/p2-9/p2-12 were a P7-16 lock-path bug fixed in 7042656, engine-t3/p5-5 ran the owner's updated desktop T3 v0.1.11 (pinning in progress), p1-5 a load timeout; all rerun on the fixed main PASS (p1-5 x2).",
+      "remaining": "Step 2: page polish from the UX audits (a: shell, onboarding, setup, Settings, Model Hub; b: engines, operations, Coding, Inbox, chat) on the --neo-* tokens."
     },
     "P7-19": {
       "title": "Interactive agent UI with A2UI for Hermes and T3",
