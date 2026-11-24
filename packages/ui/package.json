@@ -10,8 +10,8 @@
     "./styles.css": "./src/styles.css"
   },
   "dependencies": {
-    "@astryxdesign/core": "0.7.16",
-    "@astryxdesign/theme-neutral": "0.7.16",
+    "@astryxdesign/core": "0.7.17",
+    "@astryxdesign/theme-neutral": "0.7.17",
     "react": "^19.2.0"
   },
   "devDependencies": {
