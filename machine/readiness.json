@@ -632,6 +632,20 @@
       "owner": "helper (opus)",
       "evidence": "Owner report 2026-11-23: the onboarding model step offers only an OpenAI-compatible API, but PRD APP-4 and CM-2 (P0) call for subscription sign-ins. Depends on P7-16.",
       "remaining": "Step 1: design note (Hermes and T3 sign-in seams, vault storage, projection to every engine, onboarding and Model Hub UI, scripted-fake tests) for PM approval; then build."
+    },
+    "P7-18": {
+      "title": "Premium UI/UX on Astryx with light and dark themes",
+      "status": "in_progress",
+      "owner": "helpers (codex, sol-web x3, antigravity)",
+      "evidence": "Owner request 2026-11-25: make the UI premium on Astryx (meta/astryx, already used as @astryxdesign/core 0.7.16), with both dark and light themes.",
+      "remaining": "Step 1: theme foundation (light/dark tokens, mode switch) and a page-by-page UX audit; then page polish."
+    },
+    "P7-19": {
+      "title": "Interactive agent UI with A2UI for Hermes and T3",
+      "status": "in_progress",
+      "owner": "helper (codex)",
+      "evidence": "Owner request 2026-11-25: add ubermensch-site/a2ui-intrective-UI-for-chatbots (fork of a2ui-project/a2ui, Apache-2.0) as an extension for the T3 and Hermes engines.",
+      "remaining": "Step 1: design note (how A2UI reaches Neo from unmodified engines, Astryx catalog, action round-trip, pinning); then build."
     }
   },
   "p6_tasks": {
