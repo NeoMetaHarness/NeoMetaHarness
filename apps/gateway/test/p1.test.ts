@@ -190,9 +190,9 @@ async function coldT3(): Promise<void> {
   const engines = join(temp, 'engines');
   const cold = { NMH_UPSTREAM_CACHE: join(temp, 'empty-cache'), NMH_ENGINES_DIR: engines,
     NMH_T3_URL: '', NMH_T3_SCOPED_SESSION: '' };
-  let ticketRequests = Promise.withResolvers<void>();
+  let onTicketRequest: (() => void) | undefined;
   // A hanging ticket request must outlive the ready signal. No response is sent.
-  const fixture = createServer(() => ticketRequests.resolve());
+  const fixture = createServer(() => onTicketRequest?.());
   await new Promise<void>((done) => fixture.listen(0, '127.0.0.1', done));
   const address = fixture.address() as { port: number };
   let gateway: RunningGateway | undefined;
@@ -213,7 +213,7 @@ async function coldT3(): Promise<void> {
     assert.equal((await rpc().x['engine-t3'].install.status()).external, true);
     await gateway.close();
 
-    ticketRequests = Promise.withResolvers<void>();
+    const ticketRequested = new Promise<void>((done) => { onTicketRequest = done; });
     const began = Date.now();
     gateway = await start(db, false, cold);
     const startupMs = Date.now() - began;
@@ -222,7 +222,7 @@ async function coldT3(): Promise<void> {
     assert.equal(status.phase, 'starting');
     let timeout: NodeJS.Timeout | undefined;
     try {
-      await Promise.race([ticketRequests.promise, new Promise<never>((_, reject) => {
+      await Promise.race([ticketRequested, new Promise<never>((_, reject) => {
         timeout = setTimeout(() => reject(new Error('T3 did not request a ticket')), 3000);
       })]);
     } finally { clearTimeout(timeout); }
