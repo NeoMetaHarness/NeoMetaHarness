@@ -15,11 +15,12 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { createORPCClient } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type T3Event } from '@neometaharness/contracts';
-import { build } from 'esbuild';
+import { build, stop as stopEsbuild } from 'esbuild';
 import { system32 } from '../src/system-tools.js';
 import { installedT3 } from '../src/install.js';
 import { T3ControlPlane } from '../src/client.js';
 import { isolatedT3Environment } from '../src/runtime.js';
+import { extensionIntegrity } from '@neometaharness/kernel';
 import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
 import { coalesceText } from '../../../apps/gateway/src/coalesce.js';
 
@@ -377,9 +378,156 @@ input.on('line', (line) => {
   console.log(`T3_PROVIDER_ENV PASS paths_inside_t3_home=${keys.length} os_home=isolated credential=absent private_path=absent`);
 }
 
+type T3Session = { sessionId: string; issuedAt: string; expiresAt: string };
+
+async function t3Sessions(root: string, executable: string): Promise<T3Session[]> {
+  const { stdout } = await promisify(execFile)(executable, ['auth', 'session', 'list', '--base-dir', join(root, 'state'), '--json'],
+    { cwd: root, env: await isolatedT3Environment(root), windowsHide: true, timeout: 30_000 });
+  return JSON.parse(stdout) as T3Session[];
+}
+
+/** A run waiting on approval and a terminal stream both outlive a session renewal; the old session is revoked. */
+async function streamsAcrossRenewal(root: string, executable: string, serverPort: number,
+  app: { ready: number; token: string; child: ChildProcess; error: string }, sessionTtl: number) {
+  const http = createORPCClient<Client>(new HttpLink({ url: 'http://127.0.0.1:' + app.ready,
+    headers: () => ({ authorization: 'Bearer ' + app.token }) }));
+  const environment = await isolatedT3Environment(root);
+  const { stdout } = await promisify(execFile)(executable, ['auth', 'session', 'issue', '--base-dir', join(root, 'state'),
+    '--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'providers:manage',
+    '--ttl', '2m', '--label', 'nmh-renewal-setup', '--json'], { cwd: root, env: environment, windowsHide: true, timeout: 30_000 });
+  const setupSession = JSON.parse(stdout) as { sessionId: string; token: string };
+  const projectId = randomUUID();
+  const providerId = 'nmhRenewalAcp';
+  const setup = spawn(process.execPath, [await buildWireBundle(join(root, 'renewal-bundle'))], {
+    cwd: root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    env: { ...environment, T3_TEST_URL: 'http://127.0.0.1:' + serverPort, T3_TEST_SESSION: setupSession.token,
+      T3_TEST_PROVIDER: providerId, T3_TEST_PROJECT: projectId, T3_TEST_WORKSPACE: join(root, 'renewal-workspace'),
+      T3_TEST_FAKE_ACP: join(spike, 'fake-acp.mjs') },
+  });
+  assert.match(await within(capture(setup), 20_000, 'T3 renewal setup'), /T3_ISOLATED_SETUP PASS/);
+  assert.equal((await http.extensions.enable({ id: 'coding-workflow' })).status, 'running');
+  const threadId = randomUUID();
+  await http.x['engine-t3'].create({ threadId, projectId, providerId, title: 'Renewal', model: 'default' });
+
+  const sockets: WebSocket[] = [];
+  const stream = () => {
+    const socket = new WebSocket(`ws://127.0.0.1:${app.ready}/ws`, ['bearer.' + app.token]);
+    sockets.push(socket);
+    return createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
+  };
+  const events: T3Event[] = [];
+  let threadEnded = false;
+  const synchronized = Promise.withResolvers<void>();
+  const approval = Promise.withResolvers<string>();
+  const completed = Promise.withResolvers<void>();
+  const threadStream = (async () => {
+    for await (const event of await stream().x['engine-t3'].events({ threadId })) {
+      events.push(event);
+      if (event.kind === 'snapshot' || event.kind === 'synchronized') synchronized.resolve();
+      const payload = event.payload as { id?: string; status?: string } | undefined;
+      if (event.type === 'runtime-request.updated' && payload?.status === 'pending') approval.resolve(payload.id!);
+      if (event.type === 'run.updated' && payload?.status === 'completed') completed.resolve();
+    }
+    threadEnded = true;
+  })();
+  let streamError: unknown;
+  for (const pending of [synchronized, approval, completed]) pending.promise.catch(() => {});
+  threadStream.catch((error) => { streamError = error; synchronized.reject(error); approval.reject(error); completed.reject(error); });
+  await within(synchronized.promise, 20_000, 'thread subscription');
+  await http.x['engine-t3'].send({ threadId, text: 'Stream across a session renewal.' });
+  const requestId = await within(approval.promise, 40_000, 'run waiting on approval');
+  console.log('T3_RENEWAL_STREAMS thread waiting on approval');
+
+  const opened = await http.x['coding-workflow'].terminal.open({ threadId });
+  let terminal = '';
+  let terminalEnded = false;
+  const terminalStream = (async () => {
+    for await (const item of await stream().x['coding-workflow'].terminal.output({ threadId, terminalId: opened.terminalId })) {
+      const event = item as { type: string; data?: string; snapshot?: { history?: string } };
+      terminal += event.type === 'output' ? event.data ?? '' : event.type === 'snapshot' ? event.snapshot?.history ?? '' : '';
+    }
+    terminalEnded = true;
+  })();
+  terminalStream.catch((error) => { streamError ??= error; terminalEnded = true; });
+
+  // Renewal replaces the Gateway's T3 socket and revokes the session it used.
+  const ownSessions = new Set([setupSession.sessionId]);
+  const gatewaySession = (await t3Sessions(root, executable)).filter((session) => !ownSessions.has(session.sessionId))
+    .sort((left, right) => Date.parse(right.issuedAt) - Date.parse(left.issuedAt))[0];
+  assert.ok(gatewaySession, 'the Gateway holds a T3 session');
+  const initial = t3SocketAddresses(serverPort, app.child.pid!);
+  const deadline = Date.now() + sessionTtl * 2;
+  for (;;) {
+    assert.ok(Date.now() < deadline, 'Scoped session did not renew during the streams');
+    await new Promise((done) => setTimeout(done, 200));
+    const addresses = t3SocketAddresses(serverPort, app.child.pid!);
+    if (addresses.length > 0 && !addresses.some((address) => initial.includes(address))) break;
+  }
+  const afterRenewal = await t3Sessions(root, executable);
+  const checkedAt = Date.now();
+  assert.ok(!afterRenewal.some((session) => session.sessionId === gatewaySession.sessionId),
+    'the replaced Gateway session is revoked');
+  assert.ok(checkedAt < Date.parse(gatewaySession.expiresAt), 'revocation, not expiry, removed the replaced session');
+  // Outlive the session the streams started on.
+  while (Date.now() < Date.parse(gatewaySession.expiresAt) + 500) await new Promise((done) => setTimeout(done, 200));
+  assert.equal(threadEnded || !!streamError, false, 'the thread stream continues across the renewal: ' + String(streamError) + '\n' + app.error.slice(-3000));
+  assert.equal(terminalEnded, false, 'the terminal stream continues across the renewal');
+
+  const marker = 'NEO_AFTER_RENEWAL';
+  await http.x['coding-workflow'].terminal.run({ threadId, command: 'echo ' + marker });
+  const approvalSent = http.x['engine-t3'].approval({ threadId, requestId, decision: 'decline' });
+  await within(completed.promise, 30_000, 'run completes on the renewed connection');
+  await approvalSent;
+  const outputDeadline = Date.now() + 15_000;
+  while (!terminal.includes(marker)) {
+    assert.ok(Date.now() < outputDeadline, 'terminal output after the renewal: ' + JSON.stringify(terminal.slice(-400)));
+    await new Promise((done) => setTimeout(done, 200));
+  }
+  const text = events.filter((event) => event.kind === 'text.delta').map((event) => event.textDelta).join('');
+  assert.match(text, /Approval declined\.$/, 'text streamed after the renewal reaches the same transcript');
+  assert.equal(events.filter((event) => event.kind === 'snapshot').length, 1, 'the transcript is never reset');
+  const sequences = events.filter((event) => event.sequence !== undefined).map((event) => event.sequence!);
+  assert.ok(sequences.every((sequence, index) => index === 0 || sequence > sequences[index - 1]), 'no replayed or reordered events');
+  for (const socket of sockets) socket.close();
+  await Promise.allSettled([threadStream, terminalStream]);
+  console.log(`T3_RENEWAL_STREAMS PASS thread=continued terminal=continued snapshots=1 ordered=${sequences.length} `
+    + `previous_session=revoked_before_expiry`);
+}
+
+/** Blue/green upgrade while connected: the candidate reuses the running T3 server. */
+async function upgradeWhileConnected(temp: string, http: Client, pid: number) {
+  const candidate = join(temp, 'engine-t3-candidate');
+  await mkdir(candidate, { recursive: true });
+  const kernel = join(temp, 'kernel-entry.mjs');
+  await writeFile(kernel, `export * from ${JSON.stringify(join(repo, 'packages/kernel/src/engine-source.ts'))};\n`
+    + 'export function defineExtension(extension) { return extension; }\n');
+  await build({
+    entryPoints: [join(here, 'src/index.ts')], outfile: join(candidate, 'index.mjs'), bundle: true,
+    platform: 'node', target: 'node22', format: 'esm', nodePaths: [join(here, 'node_modules')],
+    banner: { js: "import { createRequire as __neoRequire } from 'node:module'; const require = __neoRequire(import.meta.url);" },
+    plugins: [{ name: 'kernel-seams', setup(builder) {
+      builder.onResolve({ filter: /^@neometaharness\/kernel$/ }, () => ({ path: kernel }));
+    } }],
+  });
+  const manifest = JSON.parse(readFileSync(join(here, 'neo.extension.json'), 'utf8'));
+  await writeFile(join(candidate, 'neo.extension.json'), JSON.stringify({ ...manifest, version: '0.1.1',
+    runtime: { ...manifest.runtime, entry: './index.mjs' } }, null, 2));
+  const result = await http.extensions.upgrade({ id: 'engine-t3', directory: candidate, integrity: await extensionIntegrity(candidate) });
+  assert.equal(result.upgraded, true, result.reason);
+  assert.equal(result.reason, undefined, 'the old generation retires cleanly');
+  const status = (await http.extensions.list()).find((row) => row.id === 'engine-t3');
+  assert.equal(status?.version, '0.1.1');
+  assert.equal(status?.health?.ok, true, status?.health?.reason);
+  assert.equal(status?.health?.pid, pid, 'the upgraded generation serves from the same T3 server');
+  process.kill(pid, 0);
+  assert.ok(Array.isArray((await http.x['engine-t3'].threads.list()).threads));
+  console.log('T3_UPGRADE PASS staged_while_connected=true same_server=true candidate_healthy=true');
+}
+
 // Opt-in smoke for the real release, from a clean installed-app data layout.
 async function realInstall() {
-  const sessionTtl = 8000;
+  // Long enough to observe the replaced session revoked before it would expire.
+  const sessionTtl = 30_000;
   const temp = await mkdtemp(join(tmpdir(), 'nmh-t3-real-release-'));
   const poison = join(temp, 'ambient-codex');
   const forbiddenPath = join(poison, 'bin');
@@ -389,10 +537,13 @@ async function realInstall() {
     OPENAI_API_KEY: 'fixture-value-must-not-be-inherited',
     CODEX_HOME: poison, CLAUDE_CONFIG_DIR: join(temp, 'ambient-claude'), GEMINI_HOME: join(temp, 'ambient-gemini'),
     PATH: poisonedPath, Path: poisonedPath,
+    // A managed generation (the upgrade candidate) resolves the lock file from its own folder.
+    NMH_TEST_UPSTREAM_LOCK: join(repo, 'upstream.lock.json'),
   };
   let app: Awaited<ReturnType<typeof gateway>> | undefined;
   let pid: number | undefined;
   let stale: ChildProcess | undefined;
+  let other: Awaited<ReturnType<typeof gateway>> | undefined;
   const engines = join(temp, 'engines');
   const root = join(engines, 't3-home');
   const client = () => createORPCClient<Client>(new HttpLink({
@@ -427,27 +578,32 @@ async function realInstall() {
     const firstPid = pid!;
     const runtimePath = join(temp, 'engines/t3-home/state/userdata/server-runtime.json');
     const { port: serverPort } = JSON.parse(readFileSync(runtimePath, 'utf8')) as { port: number };
-    const initialSocket = t3SocketAddresses(serverPort, app.child.pid!)[0];
-    assert.ok(initialSocket, 'Gateway owns the initial WebSocket');
-    const firstExpiry = Date.now() + sessionTtl;
-    const deadline = firstExpiry + 5000;
-    let renewed = false;
-    while (!renewed || Date.now() < firstExpiry) {
-      assert.ok(Date.now() < deadline, 'Scoped session did not renew');
-      await new Promise((done) => setTimeout(done, 300));
-      const addresses = t3SocketAddresses(serverPort, app.child.pid!);
-      renewed ||= addresses.length > 0 && !addresses.includes(initialSocket);
-    }
+    await streamsAcrossRenewal(root, installedT3(engines)!, serverPort, app, sessionTtl);
     await confirmConnection(5000);
     assert.equal(pid, firstPid, 'Session renewal keeps the T3 server alive');
 
     const executable = installedT3(engines)!;
     await probeProviderHomes(root, executable, serverPort, client(), forbiddenPath);
+    await upgradeWhileConnected(temp, client(), firstPid);
+
+    // A server that exits keeps its own reason in health, rather than a generic connection failure.
+    await promisify(execFile)(system32('taskkill.exe'), ['/PID', String(firstPid), '/T', '/F'], { windowsHide: true });
+    const exitDeadline = Date.now() + 10_000;
+    const exitedReason = async () => (await client().extensions.list()).find((row) => row.id === 'engine-t3')?.health?.reason;
+    while (!(await exitedReason())?.includes('server exited')) {
+      assert.ok(Date.now() < exitDeadline, 'T3 exit reason: ' + await exitedReason());
+      await new Promise((done) => setTimeout(done, 200));
+    }
+    await new Promise((done) => setTimeout(done, 4000));
+    assert.match(await exitedReason() ?? '', /server exited/, 'the exit reason stays until Start');
+    await client().x['engine-t3'].runtime.start();
+    await confirmConnection(30_000);
+    const restartedPid = pid!;
+    assert.notEqual(restartedPid, firstPid);
     await client().extensions.disable({ id: 'engine-t3' });
-    confirmStopped(firstPid);
+    confirmStopped(restartedPid);
     const isolated = await isolatedT3Environment(root);
     const stalePort = await port();
-    const deadGateway = app.child.pid!;
     await stop(app.child, true);
     stale = spawn(executable, ['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(stalePort),
       '--base-dir', isolated.T3CODE_HOME!, '--no-browser', '--bootstrap-fd', '0'], {
@@ -458,9 +614,22 @@ async function realInstall() {
       desktopBootstrapToken: randomUUID(), tailscaleServeEnabled: false, tailscaleServePort: 443,
     }) + '\n');
     await waitForServer('http://127.0.0.1:' + stalePort, stale);
-    await writeFile(join(root, 'neo-runtime.json'), JSON.stringify({ pid: stale.pid, gatewayPid: deadGateway }));
+    // A marker whose Gateway PID is a live Neo Gateway blocks the start, with a specific reason.
+    other = await gateway(await mkdtemp(join(temp, 'other-gateway-')), '', '', env);
+    const markerPath = join(root, 'neo-runtime.json');
+    await writeFile(markerPath, JSON.stringify({ pid: stale.pid, gatewayPid: other.child.pid, gatewayExecutable: process.execPath }));
     app = await gateway(temp, '', '', env);
     await client().extensions.enable({ id: 'engine-t3' });
+    const ownedDeadline = Date.now() + 30_000;
+    while (!(await exitedReason())?.includes('Another Neo Gateway')) {
+      assert.ok(Date.now() < ownedDeadline, 'owned-elsewhere reason: ' + await exitedReason());
+      await new Promise((done) => setTimeout(done, 300));
+    }
+    process.kill(stale.pid!, 0);
+    // A reused PID that is not a Neo Gateway (this test process) leaves a stale marker, which is reclaimed.
+    await stop(other.child, true);
+    await writeFile(markerPath, JSON.stringify({ pid: stale.pid, gatewayPid: process.pid, gatewayExecutable: process.execPath }));
+    await client().x['engine-t3'].runtime.start();
     await confirmConnection(30_000);
     assert.notEqual(pid, stale.pid);
     confirmStopped(stale.pid!);
@@ -475,13 +644,22 @@ async function realInstall() {
     assert.deepEqual(reads, [['PATH'], ['PATH', 'FNM_DIR', 'FNM_MULTISHELL_PATH']]);
     assert.ok(binary.includes('if (options?.shellEnvironmentPrepared === true) return;'));
     console.log('T3_RELEASE_BUNDLE PASS bootstrap_skip=true restored_keys=PATH,FNM_DIR,FNM_MULTISHELL_PATH');
-    console.log('T3_REAL_INSTALL PASS download=github first_run=true renewal_past_expiry=true same_pid=true stale_reclaimed=true disable=stopped gateway_exit=stopped');
+    console.log('T3_REAL_INSTALL PASS download=github first_run=true renewal_past_expiry=true same_pid=true upgrade=same_server exit_reason=kept owned_elsewhere=reason reused_gateway_pid=reclaimed disable=stopped gateway_exit=stopped');
+  } catch (error) {
+    console.error('GATEWAY STDERR\n' + (app?.error ?? '').slice(-6000));
+    throw error;
   } finally {
     await stop(app?.child, true);
+    await stop(other?.child, true);
     await stop(stale);
     await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }
 
-if (process.env.NMH_TEST_T3_REAL_INSTALL === '1') await realInstall();
-else await main();
+try {
+  if (process.env.NMH_TEST_T3_REAL_INSTALL === '1') await realInstall();
+  else await main();
+} finally {
+  // esbuild's service child keeps the test process alive otherwise.
+  await stopEsbuild();
+}
