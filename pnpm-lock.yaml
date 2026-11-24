@@ -304,6 +304,9 @@ importers:
       '@a2ui/web_core':
         specifier: file:vendor/a2ui-web_core-0.16.0.tgz
         version: file:extensions/a2ui/vendor/a2ui-web_core-0.16.0.tgz
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
 
   extensions/apps-composio:
     dependencies:
