@@ -1,6 +1,6 @@
 [package]
 name = "neo-meta-harness"
-version = "1.0.0"
+version = "1.0.1"
 description = "Neo Meta Harness desktop shell"
 edition = "2024"
 rust-version = "1.90"

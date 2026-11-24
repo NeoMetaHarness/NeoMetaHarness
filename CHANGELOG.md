@@ -4,6 +4,20 @@ All notable changes to Neo Meta Harness. Versions follow [Semantic Versioning](h
 Every release is a full GitHub release (never a pre-release or draft); see [docs/release.md](docs/release.md).
 The release notes in each update manifest (`latest.json`) are the section for that version below.
 
+## [1.0.1] - 2026-11-24
+
+Engines install inside the app (P7-16). In 1.0.0 only DeepSeek Harness worked in an installed app: Hermes, the super agent and T3 needed a development checkout.
+
+### Engines
+- Hermes, the super agent and T3 each have an **Install** button in onboarding and on the Extensions page. Neo downloads the engine at the version pinned in `upstream.lock.json`, checks it against the pinned checksum and commit, and installs it into its own data folder. Engines are never modified.
+- Hermes gets its own Python environment from the bundled, checksum-pinned `uv`. Channels and bot creation work once it is installed.
+- The super agent is built from its pinned source and reused while that source is unchanged. It needs Hermes and says so until Hermes is installed.
+- T3 installs the official prebuilt T3 release and runs on this computer only (loopback), with its own isolated home folder. Its session is renewed and revoked in the background without interrupting open threads or the terminal. You can also connect to an existing T3 server in Settings (https, or loopback).
+- While an engine is still starting, its pages wait for it or say plainly that it is not connected, instead of showing an error.
+
+### Known limitations
+- T3's coding agents can still reach credential stores the operating system provides to every program (for example Git Credential Manager and the ssh-agent). Neo does not pass them any of its own secrets.
+
 ## [1.0.0] - 2026-11-23
 
 First public release. This section lists the tasks marked `done` in `machine/readiness.json` (P0–P7).
