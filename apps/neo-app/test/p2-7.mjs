@@ -199,9 +199,11 @@ async function main() {
     if (phase !== 'kanban') {
     await viewer.navigate(url('/routines'));
     await eventually(() => viewer.evaluate('!!document.querySelector("[data-testid=routines-page]")'), 'lazy Routines page');
-    await eventually(() => viewer.evaluate('Array.from(document.querySelectorAll("#routine-profile option")).some(item => item.value === "work_bot")'), 'Hermes bot profile');
-    await viewer.evaluate(`const input = document.querySelector('#routine-profile'); input.value = 'work_bot'; input.dispatchEvent(new Event('change', { bubbles: true }));`);
-    await eventually(() => viewer.evaluate('document.querySelector("#routine-profile")?.value === "work_bot"'), 'selected bot profile');
+    await eventually(() => viewer.evaluate('!!document.querySelector("#routine-profile")'), 'Hermes bot profile');
+    await viewer.evaluate('document.querySelector("#routine-profile").click()');
+    await eventually(() => viewer.evaluate('Array.from(document.querySelectorAll("[role=option]")).some(item => item.textContent.trim() === "work_bot")'), 'Hermes bot option');
+    await viewer.evaluate('Array.from(document.querySelectorAll("[role=option]")).find(item => item.textContent.trim() === "work_bot").click()');
+    await eventually(() => viewer.evaluate('document.querySelector("input[name=routine-profile]")?.value === "work_bot"'), 'selected bot profile');
     await viewer.type('[data-testid=routine-name]', 'E2E scheduled message');
     await viewer.evaluate('document.querySelector("[data-testid=routine-schedule]").value = ""; document.querySelector("[data-testid=routine-schedule]").dispatchEvent(new Event("input", { bubbles: true }));');
     // The ISO one-shot schedule is due shortly, so a real Hermes scheduler can claim it.
@@ -257,12 +259,14 @@ async function main() {
       const uiState = await viewer.evaluate(`({ error: document.querySelector('[data-testid=tasks-page] [role=alert]')?.textContent, slug: document.querySelector('[data-testid=tasks-slug]')?.value, status: document.querySelector('[data-testid=tasks-status]')?.textContent })`);
       throw new Error(`${String(error)}; Tasks UI: ${JSON.stringify(uiState)}`);
     }
-    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=tasks-workspace]")?.value === "p2-7-space"'), 'workspace selected');
+    await eventually(() => viewer.evaluate('document.querySelector("input[name=tasks-workspace]")?.value === "p2-7-space"'), 'workspace selected');
     await viewer.type('[data-testid=tasks-title]', 'Complete scripted task');
     await viewer.type('[data-testid=tasks-body]', 'Produce a concise reply using the scripted model');
-    await eventually(() => viewer.evaluate('Array.from(document.querySelector("#tasks-assignee")?.options ?? []).some(option => option.value === "work_bot")'), 'Hermes bot available in UI');
-    await viewer.evaluate(`const select = document.querySelector('#tasks-assignee'); select.value = 'work_bot'; select.dispatchEvent(new Event('change', { bubbles: true }));`);
-    await eventually(() => viewer.evaluate('document.querySelector("#tasks-assignee")?.value === "work_bot"'), 'bot selection applied');
+    await eventually(() => viewer.evaluate('!!document.querySelector("#tasks-assignee")'), 'Hermes bot available in UI');
+    await viewer.evaluate('document.querySelector("#tasks-assignee").click()');
+    await eventually(() => viewer.evaluate('Array.from(document.querySelectorAll("[role=option]")).some(item => item.textContent.trim() === "work_bot")'), 'Hermes bot option');
+    await viewer.evaluate('Array.from(document.querySelectorAll("[role=option]")).find(item => item.textContent.trim() === "work_bot").click()');
+    await eventually(() => viewer.evaluate('document.querySelector("input[name=tasks-assignee]")?.value === "work_bot"'), 'bot selection applied');
     await viewer.evaluate('document.querySelector("[data-testid=tasks-create]").click()');
     let board;
     await eventually(async () => {

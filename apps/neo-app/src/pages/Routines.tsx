@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '@neometaharness/ui';
+import { Button, Card, Heading, TextInput, TextArea, Selector, Timestamp } from '@neometaharness/ui';
 import { engineDisabled, hermesRpc, readableDate } from './hermes-work';
 import './hermes-work.css';
 
@@ -17,6 +17,11 @@ const editableSchedule = (job: Job): string => {
   if (details.kind === 'cron') return String(details.expr ?? '');
   return scheduleText(job);
 };
+
+function WorkDate({ value }: { value: unknown }) {
+  const date = readableDate(value);
+  return 'value' in date ? <Timestamp value={date.value} /> : <span>{date.label}</span>;
+}
 
 export default function Routines() {
   const [profiles, setProfiles] = useState<string[]>(['default']);
@@ -139,41 +144,35 @@ export default function Routines() {
     <p role="status" data-testid="routines-status">{status === 'disabled' ? 'Hermes engine disabled' : status}</p>
     {error && <p role="alert" className="page-error">{error}</p>}
     {status !== 'disabled' && <>
-      <div className="work-toolbar"><label htmlFor="routine-profile">Bot</label>
-        <select id="routine-profile" data-testid="routine-profile" value={profile} onChange={(event) => setProfile(event.target.value)} disabled={busy}>
-          {profiles.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
-        </select></div>
+      <div className="work-toolbar"><Selector label="Bot" id="routine-profile" htmlName="routine-profile" value={profile} onChange={setProfile} isDisabled={busy} options={profiles.map(entry => ({ value: entry, label: entry }))} /></div>
       <div className="work-grid"><div>
-        <h2>Scheduled routines</h2>
+        <Heading level={2}>Scheduled routines</Heading>
         {jobs.length === 0 && <p>No routines yet.</p>}
-        {jobs.map((job) => <article className="work-card" key={jobId(job)} data-testid="routine-card">
-          <button className="work-card-title" type="button" onClick={() => setSelected(jobId(job))}>{label(job)}</button>
+        {jobs.map((job) => <Card className="work-card" key={jobId(job)} data-testid="routine-card">
+          <Button label={label(job)} variant="ghost" onClick={() => setSelected(jobId(job))}>{label(job)}</Button>
           <p>{scheduleText(job)} · {isPaused(job) ? 'Paused' : String(job.state ?? 'Active')}</p>
-          <p>Last run {readableDate(job.last_run_at)}<br />Next run {readableDate(job.next_run_at)}</p>
+          <p>Last run <WorkDate value={job.last_run_at} /><br />Next run <WorkDate value={job.next_run_at} /></p>
           <div className="work-actions">
             <Button label="Edit" onClick={() => edit(job)} isDisabled={busy}>Edit</Button>
             <Button label={isPaused(job) ? 'Resume' : 'Pause'} onClick={() => void act('pause', job)} isDisabled={busy || job.state === 'completed'}>{isPaused(job) ? 'Resume' : 'Pause'}</Button>
             <Button label="Run now" onClick={() => void act('trigger', job)} isDisabled={busy}>Run now</Button>
             <Button label="Delete" variant="secondary" onClick={() => void act('delete', job)} isDisabled={busy}>Delete</Button>
           </div>
-        </article>)}
+        </Card>)}
       </div><div>
         <form className="work-form" onSubmit={(event) => void save(event)}>
-          <h2>{editing ? 'Edit routine' : 'New routine'}</h2>
-          <label htmlFor="routine-name">Name</label>
-          <input id="routine-name" data-testid="routine-name" value={name} onChange={(event) => setName(event.target.value)} />
-          <label htmlFor="routine-schedule">Schedule</label>
-          <input id="routine-schedule" data-testid="routine-schedule" value={schedule} onChange={(event) => setSchedule(event.target.value)} required />
-          <label htmlFor="routine-prompt">Prompt</label>
-          <textarea id="routine-prompt" data-testid="routine-prompt" rows={5} value={prompt} onChange={(event) => setPrompt(event.target.value)} required />
+          <Heading level={2}>{editing ? 'Edit routine' : 'New routine'}</Heading>
+          <TextInput label="Name" id="routine-name" ref={el => { if (el) el.dataset.testid = "routine-name"; }} value={name} onChange={setName} />
+          <TextInput label="Schedule" id="routine-schedule" ref={el => { if (el) el.dataset.testid = "routine-schedule"; }} value={schedule} onChange={setSchedule} isRequired />
+          <TextArea label="Prompt" id="routine-prompt" ref={el => { if (el) el.dataset.testid = "routine-prompt"; }} value={prompt} onChange={setPrompt} rows={5} isRequired />
           <div className="work-actions"><Button label={editing ? 'Save changes' : 'Create routine'} type="submit" isDisabled={busy || !prompt.trim() || !schedule.trim()}>{editing ? 'Save changes' : 'Create routine'}</Button>
             {editing && <Button label="Cancel editing" type="button" variant="secondary" onClick={clearForm}>Cancel</Button>}
           </div>
         </form>
-        <section className="work-history" data-testid="routine-history"><h2>Run history</h2>
+        <section className="work-history" data-testid="routine-history"><Heading level={2}>Run history</Heading>
           {!selected ? <p>Select a routine to view its runs.</p> : !history?.runs.length ? <p>No runs yet.</p>
             : <ul>{history.runs.map((run, index) => <li key={String(run.id ?? index)}>
-              <strong>{String(run.title ?? run.status ?? 'Run')}</strong><span>{readableDate(run.started_at)}</span>
+              <strong>{String(run.title ?? run.status ?? 'Run')}</strong><span><WorkDate value={run.started_at} /></span>
             </li>)}</ul>}
         </section>
       </div></div>

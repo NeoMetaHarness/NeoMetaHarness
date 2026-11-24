@@ -18,8 +18,9 @@ export function engineDisabled(error: unknown): boolean {
   return reason?.status === 404 || reason?.code === 'NOT_FOUND' || /\b(404|disabled|not.found)\b/i.test(String(error));
 }
 
-export function readableDate(value: unknown): string {
-  if (!value) return 'Never';
+export function readableDate(value: unknown): { value: string | number } | { label: string } {
+  if (value === null || value === undefined || value === '') return { label: 'Never' };
   const timestamp = typeof value === 'number' ? value * 1000 : Date.parse(String(value));
-  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : String(value);
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? { value: date.toISOString() } : { label: 'Unavailable' };
 }

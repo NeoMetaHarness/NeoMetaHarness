@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '@neometaharness/ui';
+import { Button, Card, Heading, TextInput, TextArea, Selector } from '@neometaharness/ui';
 import { engineDisabled, hermesRpc } from './hermes-work';
 import './hermes-work.css';
 
@@ -124,46 +124,35 @@ export default function Tasks() {
     <p role="status" data-testid="tasks-status">{status === 'disabled' ? 'Hermes engine disabled' : status}</p>
     {error && <p className="page-error" role="alert">{error}</p>}
     {status !== 'disabled' && <>
-      <div className="work-toolbar"><label htmlFor="tasks-workspace">Workspace</label>
-        <select data-testid="tasks-workspace" id="tasks-workspace" value={workspace} onChange={(event) => setWorkspace(event.target.value)} disabled={busy}>
-          {!workspace && <option value="">Choose a workspace</option>}
-          {boards.map((board) => <option key={String(board.slug)} value={String(board.slug)}>{String(board.name || board.slug)}</option>)}
-        </select>
+      <div className="work-toolbar"><Selector label="Workspace" id="tasks-workspace" htmlName="tasks-workspace" value={workspace} onChange={setWorkspace} isDisabled={busy} options={boards.map(board => ({ value: String(board.slug), label: String(board.name || board.slug) }))} />
         <Button label="Run assigned tasks" data-testid="tasks-dispatch" isDisabled={!workspace || busy} onClick={() => void dispatch()}>Run assigned tasks</Button>
       </div>
       <form className="work-toolbar" onSubmit={(event) => void createBoard(event)}>
-        <label htmlFor="tasks-slug">New workspace</label>
-        <input id="tasks-slug" data-testid="tasks-slug" placeholder="workspace-id" pattern="[a-z0-9][a-z0-9_-]*" maxLength={64} value={slug} onChange={(event) => setSlug(event.target.value)} />
-        <input aria-label="Workspace name" placeholder="Display name" value={boardName} onChange={(event) => setBoardName(event.target.value)} />
+        <TextInput label="New workspace" id="tasks-slug" placeholder="workspace-id" value={slug} onChange={setSlug} ref={el => { if (el) { el.dataset.testid = "tasks-slug"; el.pattern = "[a-z0-9][a-z0-9_-]*"; el.maxLength = 64; } }} />
+        <TextInput label="Workspace name" placeholder="Display name" value={boardName} onChange={setBoardName} />
         <Button label="Create workspace" data-testid="tasks-create-board" type="submit" isDisabled={busy || !slug.trim()}>Create workspace</Button>
       </form>
       {workspace && <>
         <form className="work-form work-task-form" onSubmit={(event) => void createTask(event)}>
-          <h2>New task</h2>
-          <label htmlFor="tasks-title">Title</label>
-          <input id="tasks-title" data-testid="tasks-title" value={title} onChange={(event) => setTitle(event.target.value)} required />
-          <label htmlFor="tasks-body">Instructions</label>
-          <textarea id="tasks-body" data-testid="tasks-body" value={body} onChange={(event) => setBody(event.target.value)} rows={3} />
-          <label htmlFor="tasks-assignee">Assign to bot</label>
-          <select id="tasks-assignee" data-testid="tasks-assignee" value={assignee} onChange={(event) => setAssignee(event.target.value)}>
-            {bots.map((bot) => <option key={bot} value={bot}>{bot}</option>)}
-          </select>
+          <Heading level={2}>New task</Heading>
+          <TextInput label="Title" id="tasks-title" ref={el => { if (el) el.dataset.testid = "tasks-title"; }} value={title} onChange={setTitle} isRequired />
+          <TextArea label="Instructions" id="tasks-body" ref={el => { if (el) el.dataset.testid = "tasks-body"; }} value={body} onChange={setBody} rows={3} />
+          <Selector label="Assign to bot" id="tasks-assignee" htmlName="tasks-assignee" value={assignee} onChange={setAssignee} options={bots.map(bot => ({ value: bot, label: bot }))} />
           <Button label="Create task" data-testid="tasks-create" type="submit" isDisabled={busy || !title.trim()}>Create task</Button>
         </form>
         <div className="work-columns" data-testid="tasks-board">
           {view?.columns.map((column) => <section className="work-column" key={column.name} data-testid={`tasks-column-${column.name}`}>
             <h2>{column.name} <span>{column.tasks.length}</span></h2>
-            {column.tasks.map((task) => <article className="work-card" data-testid="tasks-card" key={String(task.id)}>
-              <h3>{String(task.title ?? '')}</h3>
+            {column.tasks.map((task) => <Card className="work-card" data-testid="tasks-card" key={String(task.id)}>
+              <Heading level={3}>{String(task.title ?? '')}</Heading>
               <p>{String(task.status ?? column.name)}</p>
               {Boolean(task.latest_summary) && <p>{String(task.latest_summary)}</p>}
-              <label>Assigned bot
-                <select value={String(task.assignee ?? '')} disabled={busy} onChange={(event) => void assign(String(task.id), event.target.value)}>
-                  {(!task.assignee || !bots.includes(String(task.assignee))) && <option value="">Unassigned</option>}
-                  {bots.map((bot) => <option key={bot} value={bot}>{bot}</option>)}
-                </select>
-              </label>
-            </article>)}
+              <Selector label="Assigned bot" value={String(task.assignee ?? '')} isDisabled={busy}
+                onChange={value => void assign(String(task.id), value)} options={[
+                  ...(!task.assignee || !bots.includes(String(task.assignee)) ? [{ value: '', label: 'Unassigned' }] : []),
+                  ...bots.map(bot => ({ value: bot, label: bot })),
+                ]} />
+            </Card>)}
           </section>)}
         </div>
       </>}
