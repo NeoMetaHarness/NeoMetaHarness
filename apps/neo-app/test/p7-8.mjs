@@ -263,9 +263,17 @@ try {
       'T3 card offers Reconnect for an existing server');
     await view.wait('document.querySelector("[data-testid=extension-engine-t3] .extension-reason")?.textContent.includes("needs a scoped session")',
       'T3 card shows the existing-server connection reason');
-    await rpc.settings.set({ extension: 'engine-t3', values: { existingServerUrl: '' } });
+    // Emptying the URL in Settings switches back to the local T3 (an empty secret would keep its value).
+    await view.evaluate('document.querySelector("a[href^=\'/settings\']").click()');
+    const urlInput = '[data-testid=setting-input-engine-t3-existingServerUrl]';
+    await view.wait(`document.querySelector(${JSON.stringify(urlInput)})?.value === "http://127.0.0.1:${modelPort}"`, 'Settings shows the existing T3 URL');
+    await view.field(urlInput, '');
+    await view.evaluate('document.querySelector("[data-testid=settings-save-engine-t3]").click()');
+    await view.wait('/Saved/.test(document.querySelector("[data-testid=settings-status-engine-t3]")?.textContent ?? "")', 'Settings saved the cleared URL');
+    assert.equal((await rpc.settings.get({ extension: 'engine-t3' })).values.existingServerUrl, '', 'cleared URL is back to its default');
+    await view.evaluate('document.querySelector("a[href^=\'/extensions\']").click()');
     await view.wait('!!document.querySelector("[data-testid=extension-engine-t3-install-start]")', 'T3 card returns to Install T3');
-    console.log('P7-8 T3_CARD PASS shared_install=true reconnect=true connection_reason=true');
+    console.log('P7-8 T3_CARD PASS shared_install=true reconnect=true connection_reason=true settings_clear=local');
     // Hermes turned off is a different note than Hermes not installed.
     const needsNote = 'document.querySelector("[data-testid=extension-engine-superagent-install-needs]")?.textContent ?? ""';
     assert.equal((await rpc.extensions.disable({ id: 'engine-hermes' })).status, 'disabled');

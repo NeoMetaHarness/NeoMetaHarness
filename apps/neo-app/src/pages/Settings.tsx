@@ -226,6 +226,9 @@ function ExtensionSchemaForm({
           if (drafts[key] !== undefined && drafts[key] !== '') {
             payload[key] = Number(drafts[key]);
           }
+        } else if (prop.type === 'string' && drafts[key] === '') {
+          // Only a secret keeps its value when left empty. A cleared field returns to its default (null clears).
+          payload[key] = null;
         } else {
           if (drafts[key] !== undefined && drafts[key] !== '') {
             payload[key] = drafts[key];
@@ -244,6 +247,8 @@ function ExtensionSchemaForm({
         if (prop.secret) {
           updatedDrafts[key] = '';
           updatedSecrets[key] = resValues?.[key]?.set === true;
+        } else if (payload[key] === null) {
+          updatedDrafts[key] = (res.values as Record<string, unknown> | undefined)?.[key] ?? prop.default ?? '';
         }
       }
       setDrafts(updatedDrafts);
