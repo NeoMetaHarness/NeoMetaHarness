@@ -649,10 +649,12 @@ async function realInstall() {
     console.error('GATEWAY STDERR\n' + (app?.error ?? '').slice(-6000));
     throw error;
   } finally {
-    await stop(app?.child, true);
-    await stop(other?.child, true);
-    await stop(stale);
-    await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    const step = (name: string) => console.error('T3_CLEANUP ' + name);
+    step('gateway'); await stop(app?.child, true);
+    step('other-gateway'); await stop(other?.child, true);
+    step('stale-server'); await stop(stale);
+    step('temp'); await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    step('done');
   }
 }
 
@@ -662,4 +664,9 @@ try {
 } finally {
   // esbuild's service child keeps the test process alive otherwise.
   await stopEsbuild();
+  // The test must exit on its own. If anything still holds the event loop, name it and fail.
+  setTimeout(() => {
+    console.error('T3_TEST_OPEN_HANDLES ' + process.getActiveResourcesInfo().join(','));
+    process.exit(1);
+  }, 15_000).unref();
 }

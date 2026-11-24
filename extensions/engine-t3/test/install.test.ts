@@ -29,6 +29,8 @@ const oldEnv = { NODE_ENV: process.env.NODE_ENV, NMH_TEST_UPSTREAM_LOCK: process
   NMH_TEST_T3_ASSET_URL: process.env.NMH_TEST_T3_ASSET_URL };
 let server: Server | undefined;
 let runtime: T3LocalRuntime | undefined;
+const unhandled: unknown[] = [];
+process.on('unhandledRejection', (reason) => { unhandled.push(reason); });
 try {
   const artifact = join(temp, 'release');
   await mkdir(join(artifact, archiveBase), { recursive: true });
@@ -143,8 +145,15 @@ const base = option('--base-dir');
 fs.mkdirSync(base, { recursive: true });
 if (args[0] === 'auth') {
   if (!fs.existsSync(path.join(base, 'ready'))) process.exit(4);
-  fs.writeFileSync(path.join(base, 'auth.json'), JSON.stringify({ scopes: args.filter((a) => /^(orchestration|providers):/.test(a)), home: process.env.HOME }));
-  process.stdout.write(require('node:crypto').randomUUID() + '\\n');
+  // T3 v0.1.9 apps/server/src/cliAuthFormat.ts:107-131: --json prints sessionId and token. revoke takes the id.
+  if (args[2] === 'revoke') {
+    fs.appendFileSync(path.join(base, 'revoked.txt'), args[args.length - 1] + '\\n');
+    process.exit(0);
+  }
+  if (fs.existsSync(path.join(base, 'issue-broken'))) { process.stdout.write('not json\\n'); process.exit(0); }
+  fs.writeFileSync(path.join(base, 'auth.json'), JSON.stringify({ scopes: args.filter((a) => /^(orchestration|providers|terminal):/.test(a)), home: process.env.HOME }));
+  const crypto = require('node:crypto');
+  process.stdout.write(JSON.stringify({ sessionId: crypto.randomUUID(), token: crypto.randomUUID() }) + '\\n');
   process.exit(0);
 }
 if (args[0] !== 'serve') process.exit(3);
@@ -201,7 +210,7 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   const issued = JSON.parse(readFileSync(join(state, 'auth.json'), 'utf8')) as { scopes: string[]; home: string };
   assert.equal(origin, 'http://127.0.0.1:' + launched.port);
   assert.equal(issued.home, launched.home);
-  assert.deepEqual(issued.scopes, ['orchestration:read', 'orchestration:operate', 'providers:manage']);
+  assert.deepEqual(issued.scopes, ['orchestration:read', 'orchestration:operate', 'providers:manage', 'terminal:read', 'terminal:operate']);
   assert.ok(launched.home.includes('t3-home'));
   const actualChildHomes = JSON.parse(await readFile(join(state, 'child-env.json'), 'utf8'));
   for (const [key, folders] of Object.entries(providerHomes)) {
@@ -209,6 +218,16 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   }
   await eventually(() => tokens.size, (count) => count >= 2, 'proactive renewal');
   assert.equal(runtime.pid, launched.pid);
+  const revokedPath = join(state, 'revoked.txt');
+  await eventually(() => existsSync(revokedPath) ? readFileSync(revokedPath, 'utf8').trim().split('\n').length : 0,
+    (count) => count >= 1, 'previous session revoked after renewal');
+  // A failed renewal becomes a handled reason. The server and the serving connection stay up.
+  await writeFile(join(state, 'issue-broken'), '');
+  await eventually(() => runtime!.reason, (reason) => /choose Start to try again/i.test(reason), 'failed renewal reason');
+  assert.equal(connected, true);
+  assert.equal(runtime.pid, launched.pid);
+  await rm(join(state, 'issue-broken'));
+  await eventually(() => runtime!.reason, (reason) => reason === '', 'renewal recovers');
   const issuedBeforeClose = tokens.size;
   remoteClose!();
   await eventually(() => tokens.size, (count) => count > issuedBeforeClose, 'renewal after socket close');
@@ -222,7 +241,8 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   }, Boolean, 'server process stops');
 
   console.log('T3_INSTALL PASS checksum=true unsafe_entries=6 idempotent=true');
-  console.log('T3_RUNTIME PASS loopback=true isolated_home=true first_run=true child_homes=isolated scoped_session=true proactive_renewal=true socket_close_reconnect=true same_pid=true stop=true');
+  assert.deepEqual(unhandled, [], 'no connect failure escapes as an unhandled rejection');
+  console.log('T3_RUNTIME PASS loopback=true isolated_home=true first_run=true child_homes=isolated scoped_session=true proactive_renewal=true socket_close_reconnect=true same_pid=true revoke=true failed_renewal=handled unhandled=0 stop=true');
 } finally {
   await runtime?.stop();
   if (server) await new Promise<void>((done) => server!.close(() => done()));
