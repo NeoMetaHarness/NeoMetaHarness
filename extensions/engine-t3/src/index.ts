@@ -1,5 +1,5 @@
 import { defineExtension } from '@neometaharness/kernel';
-import { T3ControlPlane } from './client.js';
+import { t3Origin, T3ControlPlane } from './client.js';
 import { installedT3, T3Installer, type T3InstallStatus } from './install.js';
 import { T3LocalRuntime } from './runtime.js';
 
@@ -11,16 +11,28 @@ export default defineExtension({
     const enginesDir = ctx.inject<string>('enginesDir');
     const settings = ctx.inject<T3Settings>('settings') ?? {};
     const externalUrl = process.env.NMH_T3_URL?.trim() || settings.existingServerUrl?.trim();
-    // A settings token belongs to its configured origin.
-    const externalSession = process.env.NMH_T3_URL?.trim()
-      ? process.env.NMH_T3_SCOPED_SESSION?.trim() : settings.scopedSession?.trim();
+    // Treat legacy unbound secrets and a partially saved URL/secret pair as unconfigured.
+    let externalSession = process.env.NMH_T3_URL?.trim() ? process.env.NMH_T3_SCOPED_SESSION?.trim() : undefined;
+    if (!process.env.NMH_T3_URL?.trim() && settings.scopedSession) {
+      try {
+        const stored = JSON.parse(settings.scopedSession);
+        if (stored?.url === externalUrl && typeof stored?.token === 'string') externalSession = stored.token;
+      } catch { /* Ask for a scoped session bound to this origin. */ }
+    }
+    let validUrl = true;
+    if (externalUrl) {
+      try { t3Origin(externalUrl); } catch { validUrl = false; }
+    }
     const abort = new AbortController();
     const executable = externalUrl ? undefined : installedT3(enginesDir);
-    const local = executable && enginesDir ? new T3LocalRuntime(service, executable, enginesDir) : undefined;
-    let reason = externalUrl && !externalSession ? 'An existing T3 server needs a scoped session in Settings.' : '';
+    const testTtl = process.env.NODE_ENV === 'test' ? Number(process.env.NMH_TEST_T3_SESSION_TTL_MS) : 0;
+    const local = executable && enginesDir ? new T3LocalRuntime(service, executable, enginesDir,
+      Number.isSafeInteger(testTtl) && testTtl > 0 ? { sessionTtlMs: testTtl } : undefined) : undefined;
+    let reason = !validUrl ? 'Use an HTTPS URL for the existing T3 server. HTTP is allowed on loopback.'
+      : externalUrl && !externalSession ? 'An existing T3 server needs a scoped session in Settings.' : '';
     let connecting: Promise<void> | undefined;
     const connectExternal = () => {
-      if (abort.signal.aborted || !externalUrl || !externalSession || service.connected) return Promise.resolve();
+      if (abort.signal.aborted || !validUrl || !externalUrl || !externalSession || service.connected) return Promise.resolve();
       if (!connecting) {
         reason = 'Connecting to the existing T3 server…';
         connecting = service.connect(externalUrl, externalSession, abort.signal, () => {

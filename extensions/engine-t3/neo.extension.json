@@ -7,7 +7,7 @@
   "settings": {
     "type": "object",
     "properties": {
-      "existingServerUrl": { "type": "string", "title": "Existing T3 server URL", "description": "HTTP(S) URL of a running T3 server. Leave empty for the local server.", "default": "" },
+      "existingServerUrl": { "type": "string", "title": "Existing T3 server URL", "description": "HTTPS origin of a running T3 server. HTTP is allowed on loopback. Leave empty for the local server.", "default": "" },
       "scopedSession": { "type": "string", "title": "Existing T3 scoped session", "description": "Scoped orchestration session token from your T3 server.", "secret": true }
     }
   }

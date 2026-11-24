@@ -653,6 +653,7 @@ const baseNeoContract = {
       .output(z.object({
         extension: z.string(),
         values: z.record(z.string(), z.unknown()),
+        warning: z.string().optional(),
       })),
   },
   vault: {

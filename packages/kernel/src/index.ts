@@ -623,11 +623,13 @@ export class NeoKernel {
     return { values, sanitized: this.sanitize(values, schema), schema: structuredClone(schema) };
   }
 
-  saveSettings(id: string, incomingValues: Record<string, unknown>, workspaceId = this.currentWorkspace()): Promise<Record<string, unknown>> {
+  saveSettings(id: string, incomingValues: Record<string, unknown>, workspaceId = this.currentWorkspace(),
+    prepare?: (accepted: Record<string, unknown>, previous: Record<string, unknown>) => void,
+  ): Promise<Record<string, unknown>> {
     // Serialize configuration with activation/upgrade so a health-gated candidate
     // cannot capture stale settings while a save mutates the serving generation.
     const input = structuredClone(incomingValues);
-    const work = this.operation.then(() => this.writeSettings(id, input, workspaceId));
+    const work = this.operation.then(() => this.writeSettings(id, input, workspaceId, prepare));
     this.operation = work.catch(() => {});
     return work;
   }
@@ -637,13 +639,16 @@ export class NeoKernel {
    * SettingsValidationError), store them for one workspace, and refresh only the active generation's snapshot:
    * a draining generation keeps the settings it started with. null clears a value; '' leaves a secret as is.
    */
-  private async writeSettings(id: string, incomingValues: Record<string, unknown>, workspaceId: string | undefined): Promise<Record<string, unknown>> {
+  private async writeSettings(id: string, incomingValues: Record<string, unknown>, workspaceId: string | undefined,
+    prepare?: (accepted: Record<string, unknown>, previous: Record<string, unknown>) => void,
+  ): Promise<Record<string, unknown>> {
     if (this.options.deploymentSettings?.(id)) workspaceId = this.settingsHome(id);
     if (!workspaceId) throw new Error('Settings are saved for a workspace');
     await this.ensureLegacyMigrated();
     const active = this.active.get(id);
     const schema = active?.settingsSchema ?? this.discovered.get(id)?.manifest.settings;
     const accepted = coerceSettingValues(id, schema, incomingValues);
+    if (prepare) prepare(accepted, (await this.readSettings(id, schema, workspaceId)).values);
     const vault = this.vaultService();
     const stored: Record<string, unknown> = { ...((await this.db.getWorkspaceSettings?.(id, workspaceId)) ?? {}) };
     const secretWrites: [string, string | null][] = [];

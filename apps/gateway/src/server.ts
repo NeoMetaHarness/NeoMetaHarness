@@ -1595,16 +1595,43 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         const workspace = deploymentSettingsWrite ? DEPLOYMENT_CONFIG : settingsWorkspace(context);
         if (!workspace) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
         let sanitized: Record<string, unknown>;
+        let refreshT3 = false;
         try {
-          sanitized = await kernel.saveSettings(input.extension, input.values, workspace);
-          if (input.extension === 'engine-t3') await kernel.refresh('engine-t3');
+          sanitized = await kernel.saveSettings(input.extension, input.values, workspace,
+            input.extension === 'engine-t3' ? (accepted, previous) => {
+              const oldUrl = String(previous.existingServerUrl ?? '').trim();
+              const urlChanged = Object.hasOwn(accepted, 'existingServerUrl')
+                && String(accepted.existingServerUrl ?? '').trim() !== oldUrl;
+              const storedToken = previous.scopedSession ?? null;
+              if (typeof accepted.scopedSession === 'string') {
+                const token = accepted.scopedSession.trim();
+                const url = urlChanged ? String(accepted.existingServerUrl ?? '').trim() : oldUrl;
+                const previousBinding = JSON.stringify({ url: oldUrl, token });
+                accepted.scopedSession = url && !(urlChanged && storedToken === previousBinding)
+                  ? JSON.stringify({ url, token }) : null;
+              } else if (urlChanged) {
+                accepted.scopedSession = null;
+              }
+              refreshT3 = urlChanged || (Object.hasOwn(accepted, 'scopedSession') && accepted.scopedSession !== storedToken);
+            } : undefined);
         } catch (error) {
           if (error instanceof SettingsValidationError) throw new ORPCError('BAD_REQUEST', { message: error.message });
           throw error;
         }
+        let warning: string | undefined;
+        if (refreshT3) {
+          try {
+            await kernel.refresh('engine-t3');
+            if (kernel.status('engine-t3').status === 'degraded') throw new Error('T3 extension did not restart');
+          } catch (error) {
+            console.error('T3 settings saved, but reload failed', error);
+            warning = 'Settings were saved. T3 could not reload. Restart T3 from Extensions to apply them.';
+          }
+        }
         return {
           extension: input.extension,
           values: sanitized,
+          ...(warning ? { warning } : {}),
         };
       }),
     },

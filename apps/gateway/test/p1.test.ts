@@ -192,9 +192,14 @@ async function coldT3(): Promise<void> {
     NMH_T3_URL: '', NMH_T3_SCOPED_SESSION: '' };
   let onTicketRequest: (() => void) | undefined;
   // A hanging ticket request must outlive the ready signal. No response is sent.
-  const fixture = createServer(() => onTicketRequest?.());
+  let tickets = 0;
+  const fixture = createServer(() => { tickets++; onTicketRequest?.(); });
+  let unexpectedTickets = 0;
+  const otherFixture = createServer((_req, res) => { unexpectedTickets++; res.writeHead(401).end(); });
   await new Promise<void>((done) => fixture.listen(0, '127.0.0.1', done));
   const address = fixture.address() as { port: number };
+  await new Promise<void>((done) => otherFixture.listen(0, '127.0.0.1', done));
+  const newAddress = otherFixture.address() as { port: number };
   let gateway: RunningGateway | undefined;
   const rpc = () => createORPCClient<Client>(new HttpLink({
     url: 'http://127.0.0.1:' + gateway!.port,
@@ -230,11 +235,26 @@ async function coldT3(): Promise<void> {
       if (error.code !== 'ENOENT') throw error;
       return [];
     }), [], 'Gateway startup must leave the engine cache cold');
+    const beforeSave = tickets;
+    await rpc().settings.set({ extension: 'engine-t3', values: {
+      existingServerUrl: 'http://127.0.0.1:' + address.port, scopedSession: 'isolated-fixture-session',
+    } });
+    assert.equal(tickets, beforeSave, 'saving the same URL and token must leave the connection alone');
+    const changed = await rpc().settings.set({ extension: 'engine-t3', values: {
+      existingServerUrl: 'http://127.0.0.1:' + newAddress.port,
+    } });
+    assert.deepEqual(changed.values.scopedSession, { set: false });
+    assert.match((await rpc().x['engine-t3'].install.status()).message, /needs a scoped session/);
+    await rpc().x['engine-t3'].runtime.start();
+    assert.equal(unexpectedTickets, 0);
+    console.log('P1_T3_SETTINGS PASS unchanged_save=kept origin_change=token_cleared');
     console.log(`P1_T3_COLD PASS ready_ms=${startupMs} pending_ticket=true downloaded=false`);
   } finally {
     await gateway?.close();
-    fixture.closeAllConnections();
-    await new Promise<void>((done) => fixture.close(() => done()));
+    await Promise.all([fixture, otherFixture].map((server) => {
+      server.closeAllConnections();
+      return new Promise<void>((done) => server.close(() => done()));
+    }));
     await rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }

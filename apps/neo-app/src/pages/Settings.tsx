@@ -234,7 +234,7 @@ function ExtensionSchemaForm({
       }
 
       const res = await http.settings.set({ extension, values: payload });
-      setStatus('Saved successfully');
+      setStatus(res.warning ?? 'Saved successfully');
 
       // Clear write-only inputs and update configured flags
       const updatedSecrets = { ...secretFlags };
@@ -243,9 +243,7 @@ function ExtensionSchemaForm({
       for (const [key, prop] of Object.entries(schema.properties ?? {})) {
         if (prop.secret) {
           updatedDrafts[key] = '';
-          if (resValues?.[key]?.set) {
-            updatedSecrets[key] = true;
-          }
+          updatedSecrets[key] = resValues?.[key]?.set === true;
         }
       }
       setDrafts(updatedDrafts);
