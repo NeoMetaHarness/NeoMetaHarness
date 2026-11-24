@@ -5,7 +5,7 @@ import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type HermesEvent } from '@neometaharness/contracts';
 import {
-  Button, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList,
+  AlertDialog, Avatar, Badge, Banner, Button, Card, Collapsible, Drawer, EmptyState, Heading, MoreMenu, ResizeHandle, ScrollableArea, SelectableCard, TextInput, useResizable, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList,
   StreamView, type StreamViewHandle,
 } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
@@ -53,6 +53,16 @@ export default function Agents() {
   const [status, setStatus] = useState('Ready');
   const [approval, setApproval] = useState<{ busy: boolean; detail: string } | null>(null);
   const [error, setError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 800px)').matches);
+  const sidebar = useResizable({ defaultSize: 270, minSize: 215, maxSize: 420 });
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 800px)');
+    const update = () => { setCompact(media.matches); setPickerOpen(false); };
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
   const active = useRef<ActiveRun | null>(null);
   const mounted = useRef(true);
   const nextTurn = useRef(0);
@@ -82,6 +92,7 @@ export default function Agents() {
   async function createBot(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name.trim() || busy) return;
+    if (!/^[a-z][a-z0-9_-]{0,47}$/.test(name)) { setError('Use a lowercase name starting with a letter, up to 48 letters, numbers, underscores or hyphens.'); return; }
     setBusy(true);
     setError('');
     try {
@@ -99,6 +110,7 @@ export default function Agents() {
   function openBot(profile: string) {
     if (pendingRef.current) return;
     setSelected(profile);
+    setPickerOpen(false);
     setTurns([]);
     setApproval(null);
     setStatus('Ready');
@@ -254,69 +266,82 @@ export default function Agents() {
     }
   }
 
+  const botPicker = <div className="agents-picker">
+    <form onSubmit={(event) => void createBot(event)} className="agents-create">
+      <TextInput label="New bot" id="bot-name" data-testid="bot-name" value={name} onChange={setName}
+        placeholder="bot_name" isRequired isDisabled={busy} {...{ pattern: '[a-z][a-z0-9_-]{0,47}' }} />
+      <Button label="Create" type="submit" isDisabled={busy || !name.trim()}>Create</Button>
+    </form>
+    <Heading level={2}>My bots</Heading>
+    <div className="agents-bot-list">
+      {bots.map(bot => <div className="agents-bot-row" key={bot.name} data-testid={`bot-${bot.name}`}>
+        <SelectableCard label={bot.name} className="agents-bot-open" isSelected={selected === bot.name}
+          isDisabled={pending} onChange={() => openBot(bot.name)} data-testid={`open-${bot.name}`} padding={2}>
+          <Avatar name={bot.name} size="sm" /><span>{bot.name}</span>
+        </SelectableCard>
+        {bot.name !== 'default' && <MoreMenu label={`Actions for ${bot.name}`} size="sm" isDisabled={busy || pending}
+          data-testid={`delete-${bot.name}`} items={[{ label: 'Delete bot', variant: 'destructive', onClick: () => setDeleteTarget(bot.name) }]} />}
+      </div>)}
+      {!bots.length && <EmptyState title="No bots" description="Create a bot to begin." />}
+    </div>
+  </div>;
+
   return <section className="agents-page" data-testid="agents-page">
     <header className="page-header">
       <div><h1>Agents</h1><p>Create a bot and work with it in chat.</p></div>
       <span className="connection" data-testid="agents-status">{status}</span>
+      {compact && <Button label="Choose a bot" variant="secondary" onClick={() => setPickerOpen(true)}>Bots</Button>}
     </header>
-    {error && <p className="page-error" role="alert">{error}</p>}
+    {error && <Banner status="error" title={error} />}
     <div className="agents-workspace">
-      <aside className="agents-sidebar" aria-label="Bots">
-        <form onSubmit={(event) => void createBot(event)} className="agents-create">
-          <label htmlFor="bot-name">New bot</label>
-          <div className="agents-create-controls">
-            <input id="bot-name" data-testid="bot-name" value={name}
-              onChange={(event) => setName(event.target.value)} placeholder="bot_name"
-              pattern="[a-z][a-z0-9_-]{0,47}" required disabled={busy} />
-            <Button label="Create" type="submit" isDisabled={busy || !name.trim()}>Create</Button>
-          </div>
-        </form>
-        <h2>My bots</h2>
-        <div className="agents-bot-list">
-          {bots.map((bot) => <div className="agents-bot-row" key={bot.name} data-testid={`bot-${bot.name}`}>
-            <button type="button" aria-current={selected === bot.name ? 'page' : undefined}
-              className="agents-bot-open" onClick={() => openBot(bot.name)}
-              disabled={pending} data-testid={`open-${bot.name}`}>{bot.name}</button>
-            {bot.name !== 'default' && <Button label="Delete" size="sm" variant="secondary"
-              onClick={() => void deleteBot(bot.name)} isDisabled={busy || pending}
-              data-testid={`delete-${bot.name}`}>Delete</Button>}
-          </div>)}
-        </div>
-      </aside>
+      {compact ? <Drawer label="Choose a bot" side="start" isOpen={pickerOpen} onOpenChange={setPickerOpen}>
+        <ScrollableArea label="Bots" height="100%" padding={3}>
+          <Button label="Close bot picker" variant="secondary" onClick={() => setPickerOpen(false)}>Close</Button>
+          {botPicker}
+        </ScrollableArea>
+      </Drawer> : <>
+        <aside className="agents-sidebar" aria-label="Bots" style={{ width: sidebar.size }}>
+          <ScrollableArea label="Bots" height="100%" padding={3}>{botPicker}</ScrollableArea>
+        </aside>
+        <ResizeHandle resizable={sidebar.props} direction="horizontal" hasDivider label="Resize bot list" />
+      </>}
       <div className="agents-conversation">
         {selected ? <>
-          <div className="agents-conversation-title"><h2>{selected}</h2><span>Hermes</span>{pending && <Button label="Stop" data-testid="stop-run" onClick={() => void stop()} />}</div>
+          <div className="agents-conversation-title"><Heading level={2}>{selected}</Heading><Badge label="Hermes" />{pending && <Button label="Stop" data-testid="stop-run" onClick={() => void stop()} />}</div>
           <ChatLayout composer={<ChatComposer
             value={draft} onChange={setDraft} onSubmit={(value) => void send(value)}
             onStop={() => void stop()} isStopShown={pending}
             placeholder={`Message ${selected}`} isDisabled={busy}
           />} scrollButton={null}>
-            <ChatMessageList isStreaming={pending} align="top" emptyState={<p>Send a message to begin.</p>}>
+            <ChatMessageList isStreaming={pending} align="top" emptyState={<EmptyState title="Start a conversation" description="Send a message to begin." />}>
               {turns.map((turn) => <ChatMessage key={turn.id} sender={turn.role}
                 name={turn.role === 'assistant' ? selected : 'You'}>
                 <ChatMessageBubble variant={turn.role === 'assistant' ? 'ghost' : 'filled'} width="100%">
                   {turn.role === 'user' ? <p>{turn.text}</p>
                     : <StreamView className="agents-stream" ref={(view) => attachStream(turn.id, view)} />}
-                  {turn.steps.length > 0 && <div className="agents-steps" aria-label="Tool steps">
-                    {turn.steps.map((step) => <span className="agents-chip" key={step}>{step}</span>)}
-                  </div>}
+                  {turn.steps.length > 0 && <Collapsible trigger={`${turn.steps.length} tool steps`}><div className="agents-steps" aria-label="Tool steps">
+                    {turn.steps.map((step) => <Badge key={step} label={step} />)}
+                  </div></Collapsible>}
                   {turn.role === 'assistant' && approval && active.current?.turnId === turn.id &&
-                    <div className="agents-approval" data-testid="approval-card">
+                    <Card className="agents-approval" padding={3} data-testid="approval-card">
                       <strong>Approval required</strong>
                       <p>{approval.detail}</p>
                       <div className="agents-approval-actions">
                         <Button label="Allow once" isDisabled={approval.busy} onClick={() => void approve('once')}>Allow once</Button>
-                        <Button label="Allow session" isDisabled={approval.busy} onClick={() => void approve('session')}>Allow session</Button>
-                        <Button label="Deny" isDisabled={approval.busy} variant="secondary"
+                        <Button label="Allow session" variant="secondary" isDisabled={approval.busy} onClick={() => void approve('session')}>Allow session</Button>
+                        <Button label="Deny" isDisabled={approval.busy} variant="destructive"
                           onClick={() => void approve('deny')} data-testid="approval-deny">Deny</Button>
                       </div>
-                    </div>}
+                    </Card>}
                 </ChatMessageBubble>
               </ChatMessage>)}
             </ChatMessageList>
           </ChatLayout>
-        </> : <div className="agents-empty"><h2>Select a bot</h2><p>Choose a bot or create one to start chatting.</p></div>}
+        </> : <div className="agents-empty"><EmptyState title="Select a bot" description="Choose a bot or create one to start chatting." /></div>}
       </div>
     </div>
+    <AlertDialog isOpen={deleteTarget !== null} onOpenChange={open => { if (!open) setDeleteTarget(null); }}
+      title="Delete bot?" description={`Delete ${deleteTarget ?? ''} and its bot profile?`} actionLabel="Delete bot" actionVariant="destructive"
+      onAction={() => { const target = deleteTarget; setDeleteTarget(null); if (target) void deleteBot(target); }} />
   </section>;
 }

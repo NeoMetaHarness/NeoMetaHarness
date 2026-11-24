@@ -321,6 +321,11 @@ async function trial(previewPort) {
       console.log('P2-3_STAGE second run stopped');
       await page.eventually('!document.querySelector("[data-testid=stop-run]")', 'stream teardown after stopping');
       await page.evaluate('document.querySelector("[data-testid=delete-neo_ui]").click()');
+      await page.eventually('!!Array.from(document.querySelectorAll("[role=menuitem]")).find(item => item.textContent.includes("Delete bot"))', 'delete menu item');
+      await page.evaluate('Array.from(document.querySelectorAll("[role=menuitem]")).find(item => item.textContent.includes("Delete bot")).click()');
+      await page.eventually('!!document.querySelector("[role=alertdialog][open]")', 'delete confirmation');
+      assert.ok((await rpc.x['engine-hermes'].profiles.list()).profiles.some(p => p.name === 'neo_ui'));
+      await page.evaluate('Array.from(document.querySelectorAll("[role=alertdialog] button")).find(button => button.textContent === "Delete bot").click()');
       await page.eventually('!document.querySelector("[data-testid=bot-neo_ui]")', 'bot deleted');
       assert.ok(!(await rpc.x['engine-hermes'].profiles.list()).profiles.some((p) => p.name === 'neo_ui'));
       await rpc.extensions.disable({ id: 'engine-hermes' });

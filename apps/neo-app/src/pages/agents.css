@@ -1,15 +1,4 @@
 .agents-page { min-height: calc(100dvh - 112px); }
-.agents-workspace { display: grid; grid-template-columns: minmax(215px, 270px) minmax(0, 1fr); gap: 24px; min-height: 620px; height: calc(100dvh - 235px); }
-.agents-sidebar { border: 1px solid var(--neo-color-border); padding: 18px; min-width: 0; overflow-y: auto; }
-.agents-sidebar h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; margin: 26px 0 10px; color: var(--neo-color-text-muted); }
-.agents-create { display: grid; gap: 10px; }
-.agents-create label { font-weight: 650; }
-.agents-create-controls { display: flex; flex-wrap: wrap; gap: 8px; }
-.agents-create input { border: 1px solid var(--neo-color-control-border); min-width: 0; flex: 1; font: inherit; padding: 10px; background: transparent; color: inherit; }
-.agents-bot-row { display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--neo-color-border); padding: 6px 0; }
-.agents-bot-open { background: transparent; border: 0; flex: 1; text-align: left; font: inherit; padding: 10px; cursor: pointer; color: inherit; min-width: 0; overflow-wrap: anywhere; }
-.agents-bot-open[aria-current="page"] { background: var(--neo-color-surface-selected); font-weight: 700; }
-.agents-bot-open:focus-visible { outline: 2px solid var(--neo-color-focus); }
 .agents-conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--neo-color-border); }
 .agents-conversation-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--neo-color-border); }
 .agents-conversation-title h2 { font-size: 19px; margin: 0; }
@@ -18,16 +7,21 @@
 .agents-conversation > div:nth-child(2) { flex: 1; min-height: 0; }
 .agents-stream { min-width: 0; overflow-wrap: anywhere; }
 .agents-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-.agents-chip { font-size: 12px; border: 1px solid var(--neo-color-border); padding: 3px 8px; }
-.agents-approval { border: 1px solid currentColor; padding: 16px; margin-top: 14px; }
 .agents-approval strong { font-size: 16px; }
 .agents-approval p { margin: 6px 0 14px; font-size: 13px; color: var(--neo-color-text-muted); overflow-wrap: anywhere; }
 .agents-approval-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .agents-empty { margin: auto; text-align: center; color: var(--neo-color-text-muted); padding: 26px; }
 .agents-empty h2 { margin: 0 0 8px; }
 .agents-empty p { margin: 0; }
+.agents-workspace { display: flex; gap: var(--neo-space-2); min-height: 0; height: calc(100dvh - 235px); }
+.agents-sidebar { flex-shrink: 0; min-height: 0; min-width: 0; border: 1px solid var(--neo-color-border); }
+.agents-picker { display: grid; gap: var(--neo-space-3); }
+.agents-create { display: grid; gap: var(--neo-space-2); }
+.agents-bot-list { display: grid; gap: var(--neo-space-2); }
+.agents-bot-row { display: flex; gap: var(--neo-space-1); align-items: center; }
+.agents-bot-open { display: flex; align-items: center; gap: var(--neo-space-2); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.agents-conversation { flex: 1; }
+.agents-approval { border-color: var(--neo-color-warning); background: var(--neo-color-warning-surface); margin-top: var(--neo-space-3); }
 @media (max-width: 800px) {
-  .agents-workspace { grid-template-columns: 1fr; height: auto; }
-  .agents-sidebar { max-height: 240px; }
-  .agents-conversation { min-height: 600px; height: 70dvh; }
+  .agents-workspace { height: max(280px, calc(100dvh - 235px)); }
 }
