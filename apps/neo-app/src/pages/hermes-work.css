@@ -1,22 +1,22 @@
 .hermes-work { padding-bottom: 48px; }
 .work-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; margin: 16px 0 24px; }
 .work-toolbar label { font-weight: 650; }
-.hermes-work input, .hermes-work select, .hermes-work textarea { padding: 10px 12px; border: 1px solid currentColor; border-radius: 0; background: transparent; color: inherit; font: inherit; min-width: 0; }
+.hermes-work input, .hermes-work select, .hermes-work textarea { padding: 10px 12px; border: 1px solid var(--neo-color-control-border); border-radius: 0; background: transparent; color: inherit; font: inherit; min-width: 0; }
 .hermes-work textarea { resize: vertical; }
 .work-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 32px; }
 .work-grid h2, .work-column h2 { font-size: 18px; margin: 0 0 16px; }
-.work-card { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); padding: 16px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.work-card { border: 1px solid var(--neo-color-border); padding: 16px; margin-bottom: 12px; overflow-wrap: anywhere; }
 .work-card-title { border: 0; padding: 0; background: none; color: inherit; font: inherit; font-weight: 700; text-align: left; cursor: pointer; }
-.work-card p { opacity: .78; font-size: 13px; }
+.work-card p { color: var(--neo-color-text-muted); font-size: 13px; }
 .work-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.work-form { display: grid; gap: 10px; padding: 20px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); }
+.work-form { display: grid; gap: 10px; padding: 20px; border: 1px solid var(--neo-color-border); }
 .work-form label { font-weight: 650; }
 .work-history { margin-top: 22px; }
 .work-history li { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.work-history li span { font-size: 12px; opacity: .7; }
+.work-history li span { font-size: 12px; color: var(--neo-color-text-muted); }
 .work-task-form { max-width: 600px; margin-bottom: 24px; }
 .work-columns { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 18px; }
-.work-column { flex: 1 0 190px; min-width: 190px; background: color-mix(in srgb, currentColor 4%, transparent); padding: 12px; }
+.work-column { flex: 1 0 190px; min-width: 190px; background: var(--neo-color-surface-muted); padding: 12px; }
 .work-column h2 { text-transform: capitalize; display: flex; justify-content: space-between; }
 .work-column .work-card h3 { margin: 0; font-size: 15px; }
 .work-column .work-card label { display: grid; gap: 6px; font-size: 12px; }

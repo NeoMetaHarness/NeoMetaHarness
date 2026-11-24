@@ -883,6 +883,19 @@ impl GatewayState {
     }
 }
 
+#[tauri::command]
+fn set_window_appearance(
+    window: tauri::WebviewWindow,
+    mode: tauri::Theme,
+    background: [u8; 3],
+) -> Result<(), String> {
+    let [red, green, blue] = background;
+    window.set_theme(Some(mode)).map_err(|error| error.to_string())?;
+    window
+        .set_background_color(Some(tauri::window::Color(red, green, blue, 255)))
+        .map_err(|error| error.to_string())
+}
+
 /// Set when setup failed behind the setup screen; closing that window then exits with a failure code.
 static SETUP_FAILED: AtomicBool = AtomicBool::new(false);
 
@@ -1015,7 +1028,9 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![check_for_updates, update_state, install_update])
+        .invoke_handler(tauri::generate_handler![
+            check_for_updates, update_state, install_update, set_window_appearance
+        ])
         .setup(|app| {
             let data_dir = std::env::var_os("NMH_DESKTOP_DATA_DIR")
                 .map(PathBuf::from)

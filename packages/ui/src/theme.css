@@ -1,0 +1,143 @@
+/* Neo's palette feeds both Astryx components and app-owned styles. */
+:root {
+  --neo-color-canvas: #f5f6fa;
+  --neo-color-surface: #ffffff;
+  --neo-color-surface-raised: #ffffff;
+  --neo-color-surface-muted: #e9edf6;
+  --neo-color-surface-selected: #dde7ff;
+  --neo-color-text: #182335;
+  --neo-color-text-muted: #465674;
+  --neo-color-border: #c9d1e0;
+  --neo-color-control-border: #697a96;
+  --neo-color-accent: #254dba;
+  --neo-color-on-accent: #ffffff;
+  --neo-color-success: #176548;
+  --neo-color-success-surface: #daf1e6;
+  --neo-color-warning: #744900;
+  --neo-color-warning-surface: #ffebc6;
+  --neo-color-danger: #9c2d44;
+  --neo-color-danger-surface: #fce3e8;
+  --neo-color-focus: #254dba;
+  --neo-color-shadow: #16274a24;
+
+  --neo-radius-sm: 0.25rem;
+  --neo-radius-md: 0.5rem;
+  --neo-radius-lg: 0.75rem;
+  --neo-shadow-low: 0 1px 3px var(--neo-color-shadow);
+  --neo-shadow-medium: 0 4px 12px var(--neo-color-shadow);
+  --neo-shadow-high: 0 12px 28px var(--neo-color-shadow);
+  --neo-space-1: 0.25rem;
+  --neo-space-2: 0.5rem;
+  --neo-space-3: 0.75rem;
+  --neo-space-4: 1rem;
+  --neo-space-5: 1.25rem;
+  --neo-space-6: 1.5rem;
+  --neo-font-family: system-ui, sans-serif;
+  --neo-text-sm: 0.75rem;
+  --neo-text-base: 0.875rem;
+  --neo-text-lg: 1.125rem;
+  --neo-text-xl: 1.5rem;
+  --neo-motion-fast: 125ms;
+  --neo-motion-medium: 240ms;
+  --neo-motion-slow: 520ms;
+  --neo-motion-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  background-color: var(--neo-color-canvas);
+  color: var(--neo-color-text);
+  font-family: var(--neo-font-family);
+}
+
+:root[data-theme="dark"] {
+  --neo-color-canvas: #111722;
+  --neo-color-surface: #192231;
+  --neo-color-surface-raised: #212d40;
+  --neo-color-surface-muted: #252f43;
+  --neo-color-surface-selected: #304571;
+  --neo-color-text: #edf2ff;
+  --neo-color-text-muted: #afbed9;
+  --neo-color-border: #394861;
+  --neo-color-control-border: #8295b6;
+  --neo-color-accent: #a8bfff;
+  --neo-color-on-accent: #152346;
+  --neo-color-success: #87dbb2;
+  --neo-color-success-surface: #213d36;
+  --neo-color-warning: #ffd182;
+  --neo-color-warning-surface: #48351a;
+  --neo-color-danger: #ffabb9;
+  --neo-color-danger-surface: #482c39;
+  --neo-color-focus: #a8bfff;
+  --neo-color-shadow: #03081180;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --neo-motion-fast: 0ms;
+    --neo-motion-medium: 0ms;
+    --neo-motion-slow: 0ms;
+  }
+}
+
+/* Target Astryx's root and provider, including anything portaled outside React's wrapper. */
+[data-astryx-theme="neutral"] {
+  --color-background-body: var(--neo-color-canvas);
+  --color-background-surface: var(--neo-color-surface);
+  --color-background-card: var(--neo-color-surface);
+  --color-background-popover: var(--neo-color-surface-raised);
+  --color-background-muted: var(--neo-color-surface-muted);
+  --color-text-primary: var(--neo-color-text);
+  --color-text-secondary: var(--neo-color-text-muted);
+  --color-icon-primary: var(--neo-color-text);
+  --color-icon-secondary: var(--neo-color-text-muted);
+  --color-border: var(--neo-color-border);
+  --color-border-emphasized: var(--neo-color-control-border);
+  --color-accent: var(--neo-color-accent);
+  --color-accent-muted: var(--neo-color-surface-selected);
+  --color-text-accent: var(--neo-color-accent);
+  --color-icon-accent: var(--neo-color-accent);
+  --color-on-accent: var(--neo-color-on-accent);
+  --color-success: var(--neo-color-success);
+  --color-success-muted: var(--neo-color-success-surface);
+  --color-text-success: var(--neo-color-success);
+  --color-on-success: var(--neo-color-on-accent);
+  --color-on-success-muted: var(--neo-color-success);
+  --color-warning: var(--neo-color-warning);
+  --color-warning-muted: var(--neo-color-warning-surface);
+  --color-text-warning: var(--neo-color-warning);
+  --color-on-warning: var(--neo-color-on-accent);
+  --color-on-warning-muted: var(--neo-color-warning);
+  --color-error: var(--neo-color-danger);
+  --color-error-muted: var(--neo-color-danger-surface);
+  --color-text-error: var(--neo-color-danger);
+  --color-on-error: var(--neo-color-on-accent);
+  --color-on-error-muted: var(--neo-color-danger);
+  --focus-outline-color: var(--neo-color-focus);
+  --radius-inner: var(--neo-radius-sm);
+  --radius-element: var(--neo-radius-md);
+  --radius-container: var(--neo-radius-lg);
+  --color-shadow: var(--neo-color-shadow);
+  --shadow-low: var(--neo-shadow-low);
+  --shadow-med: var(--neo-shadow-medium);
+  --shadow-high: var(--neo-shadow-high);
+  --spacing-1: var(--neo-space-1);
+  --spacing-2: var(--neo-space-2);
+  --spacing-3: var(--neo-space-3);
+  --spacing-4: var(--neo-space-4);
+  --spacing-5: var(--neo-space-5);
+  --spacing-6: var(--neo-space-6);
+  --font-family-body: var(--neo-font-family);
+  --font-family-heading: var(--neo-font-family);
+  --duration-fast: var(--neo-motion-fast);
+  --duration-medium: var(--neo-motion-medium);
+  --duration-slow: var(--neo-motion-slow);
+  --ease-standard: var(--neo-motion-ease);
+}
+
+:where(input, select, textarea, button, a):focus-visible {
+  outline: var(--focus-outline-width, 2px) solid var(--neo-color-focus);
+  outline-offset: var(--focus-outline-offset, 3px);
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--neo-color-text-muted);
+  opacity: 1;
+}

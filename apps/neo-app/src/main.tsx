@@ -1,13 +1,14 @@
 import '@neometaharness/ui/styles.css';
 import { StrictMode, Suspense, lazy, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AppShell, NeoTheme, SideNav, SideNavItem, SideNavSection } from '@neometaharness/ui/shell';
+import { AppShell, SideNav, SideNavItem, SideNavSection } from '@neometaharness/ui/shell';
 import { Button } from '@neometaharness/ui';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
 import { gatewayToken, gatewayUrl } from './config';
+import { AppAppearance, useAppearance, type Appearance } from './appearance';
 import './shell.css';
 
 const Extensions = lazy(() => import('./pages/Extensions'));
@@ -66,7 +67,7 @@ function activePath() {
   return candidate === '/onboarding' || candidate.startsWith('/settings/') || pages.some(({ path }) => path === candidate) ? candidate : '/extensions';
 }
 
-function NeoApp() {
+function NeoApp({ appearance, saveAppearance }: { appearance: Appearance; saveAppearance: (value: string) => void }) {
   const [path, setPath] = useState(activePath);
   const [shellError, setShellError] = useState('');
   const [setupIncomplete, setSetupIncomplete] = useState(false);
@@ -130,8 +131,7 @@ function NeoApp() {
   const current = pages.find((page) => page.path === (path.startsWith('/settings') ? '/settings' : path))
     ?? pages.find((page) => page.path === '/extensions')!;
 
-  return <NeoTheme>
-    <AppShell variant="section" contentPadding={0} sideNav={
+  return <AppShell variant="section" contentPadding={0} sideNav={
       <SideNav header={<div className="neo-nav-heading"><strong>Neo</strong><span>Meta Harness</span></div>}>
         <SideNavSection title="Workspace">
           {pages.map((page) => <SideNavItem
@@ -155,11 +155,10 @@ function NeoApp() {
           <SetupReminder onResume={() => navigate('/onboarding')} />
         </Suspense>}
         <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
-          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/onboarding' ? <Onboarding onOpen={navigate} onSkip={skipSetup} onCompleted={completeSetup} /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings/metrics' ? <Metrics /> : path === '/settings' ? <Settings onOpen={navigate} /> : <Placeholder name={current.label} />}
+          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/onboarding' ? <Onboarding onOpen={navigate} onSkip={skipSetup} onCompleted={completeSetup} /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings/metrics' ? <Metrics /> : path === '/settings' ? <Settings onOpen={navigate} appearance={appearance} onAppearanceChange={saveAppearance} /> : <Placeholder name={current.label} />}
         </Suspense>
       </div>
-    </AppShell>
-  </NeoTheme>;
+    </AppShell>;
 }
 
 const inTauri = '__TAURI_INTERNALS__' in window;
@@ -174,6 +173,13 @@ if ('serviceWorker' in navigator) {
 
 // The desktop shell shows the setup screen while it unpacks the runtime (P7-15); it never talks to the Gateway.
 const startQuery = new URLSearchParams(window.location.search);
-createRoot(document.getElementById('root')!).render(<StrictMode>
-  {startQuery.has('setup') ? <NeoTheme><Suspense fallback={null}><Setup error={startQuery.get('error')} /></Suspense></NeoTheme> : <NeoApp />}
-</StrictMode>);
+function Root() {
+  const { appearance, mode, saveAppearance } = useAppearance();
+  return <AppAppearance mode={mode}>
+    {startQuery.has('setup')
+      ? <Suspense fallback={null}><Setup error={startQuery.get('error')} /></Suspense>
+      : <NeoApp appearance={appearance} saveAppearance={saveAppearance} />}
+  </AppAppearance>;
+}
+
+createRoot(document.getElementById('root')!).render(<StrictMode><Root /></StrictMode>);

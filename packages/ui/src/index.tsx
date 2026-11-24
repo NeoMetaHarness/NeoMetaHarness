@@ -1,6 +1,7 @@
 export { AppShell, SideNav, SideNavItem, SideNavSection, NeoTheme } from './shell';
 export { SideNavHeading } from '@astryxdesign/core/SideNav';
 export { Markdown } from '@astryxdesign/core/Markdown';
+export { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
 export { Switch } from '@astryxdesign/core/Switch';
 export { Button } from '@astryxdesign/core/Button';
 export { Badge, type BadgeProps } from '@astryxdesign/core/Badge';

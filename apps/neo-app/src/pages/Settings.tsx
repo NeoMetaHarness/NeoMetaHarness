@@ -4,9 +4,10 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type ExtensionStatus, type GatewayEvent } from '@neometaharness/contracts';
-import { Badge, Button, Switch } from '@neometaharness/ui';
+import { Badge, Button, Heading, SegmentedControl, SegmentedControlItem, Switch } from '@neometaharness/ui';
 import { checkForUpdates, getUpdateState, installUpdate, subscribeUpdateState, type UpdateInfo } from '../updater';
 import { gatewayUrl, gatewayToken } from '../config';
+import { appearanceModes, type Appearance } from '../appearance';
 import './settings.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -307,7 +308,11 @@ function ExtensionSchemaForm({
   );
 }
 
-export default function Settings({ onOpen }: { onOpen: (path: '/settings/channels' | '/settings/models' | '/settings/metrics' | '/onboarding') => void }) {
+export default function Settings({ onOpen, appearance, onAppearanceChange }: {
+  onOpen: (path: '/settings/channels' | '/settings/models' | '/settings/metrics' | '/onboarding') => void;
+  appearance: Appearance;
+  onAppearanceChange: (mode: string) => void;
+}) {
   const [extensions, setExtensions] = useState<ExtensionStatus[]>([]);
   const latest = useRef(0);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>(getUpdateState);
@@ -392,6 +397,13 @@ export default function Settings({ onOpen }: { onOpen: (path: '/settings/channel
   return (
     <section aria-label="Settings" className="settings-page">
       <h1>Settings</h1>
+
+      <section aria-labelledby="appearance-heading">
+        <Heading id="appearance-heading" level={2}>Appearance</Heading>
+        <SegmentedControl className="settings-appearance" value={appearance} onChange={onAppearanceChange} label="Color mode">
+          {appearanceModes.map(({ value, label }) => <SegmentedControlItem key={value} value={value} label={label} />)}
+        </SegmentedControl>
+      </section>
 
       <h2>Workspace setup</h2>
       <p>Review your owner account, model, first bot, and channels.</p>

@@ -1,16 +1,16 @@
 .models-page { padding: 4px 0 40px; }
 .models-heading h1 { margin: 0; }
-.models-heading p { margin: 0 0 8px; opacity: .7; }
-.models-panel { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); padding: 20px; margin-top: 24px; }
+.models-heading p { margin: 0 0 8px; color: var(--neo-color-text-muted); }
+.models-panel { border: 1px solid var(--neo-color-border); padding: 20px; margin-top: 24px; }
 .models-panel h2 { margin: 0 0 18px; }
 .models-form { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
 .models-form label, .models-role label { display: grid; gap: 7px; min-width: 190px; flex: 1 1 210px; }
-.models-page input, .models-page select { min-width: 0; width: 100%; box-sizing: border-box; background: transparent; color: inherit; border: 1px solid color-mix(in srgb, currentColor 50%, transparent); padding: 10px; font: inherit; }
-.models-page select option { color: #1a1a1a; background: #fff; }
+.models-page input, .models-page select { min-width: 0; width: 100%; box-sizing: border-box; background: transparent; color: inherit; border: 1px solid var(--neo-color-control-border); padding: 10px; font: inherit; }
+.models-page select option { color: var(--neo-color-text); background: var(--neo-color-surface); }
 .models-list { list-style: none; padding: 0; margin: 20px 0 0; }
-.models-list li { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 14px 0; border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
-.models-list small, .models-role small { display: block; opacity: .7; overflow-wrap: anywhere; margin-top: 5px; }
+.models-list li { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 14px 0; border-top: 1px solid var(--neo-color-border); }
+.models-list small, .models-role small { display: block; color: var(--neo-color-text-muted); overflow-wrap: anywhere; margin-top: 5px; }
 .models-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.models-role { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent); padding: 12px 0; }
+.models-role { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; border-top: 1px solid var(--neo-color-border); padding: 12px 0; }
 .models-role strong { min-width: 90px; align-self: center; text-transform: capitalize; }
 @media (max-width: 700px) { .models-list li { align-items: start; flex-direction: column; } }

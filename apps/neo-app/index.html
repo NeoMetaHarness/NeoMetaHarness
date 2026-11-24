@@ -1,9 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-astryx-theme="neutral">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#181818" />
+    <meta name="theme-color" content="#f5f6fa" />
+    <script>
+      // Resolve the preference before CSS or the app can paint. Tauri hashes this script for its CSP.
+      (() => {
+        let preference;
+        try { preference = localStorage.getItem('neo.appearance'); } catch {}
+        if (preference !== 'light' && preference !== 'dark') preference = 'system';
+        const mode = preference === 'system'
+          ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+          : preference;
+        document.documentElement.dataset.neoAppearance = preference;
+        document.documentElement.dataset.theme = mode;
+        // Keep these startup colors in sync with --neo-color-canvas.
+        document.querySelector('meta[name="theme-color"]').content = mode === 'dark' ? '#111722' : '#f5f6fa';
+      })();
+    </script>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <title>Neo Meta Harness</title>
