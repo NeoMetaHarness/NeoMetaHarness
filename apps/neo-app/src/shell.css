@@ -1,7 +1,4 @@
-.neo-nav-heading { display: flex; flex-direction: column; gap: 2px; padding: 20px 18px 16px; }
-.neo-nav-heading strong { font-size: var(--neo-text-lg); font-weight: 700; }
-.neo-nav-heading span { font-size: var(--neo-text-sm); color: var(--neo-color-text-muted); }
-.neo-page { width: 100%; min-height: 100%; padding: clamp(24px, 4vw, 56px); }
+.neo-page { width: 100%; min-height: 100%; padding: clamp(var(--neo-space-3), 4vw, calc(var(--neo-space-6) * 2)); }
 .extensions-page { max-width: 920px; margin: 0 auto; }
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 30px; }
 .page-header h1 { font-size: clamp(28px, 3vw, 38px); margin: 0 0 8px; }
@@ -15,16 +12,8 @@
 .extension-reason { margin-top: 8px !important; }
 .page-error { padding: 12px; border: 1px solid currentColor; margin-bottom: 16px; }
 @media (max-width: 580px) { .extension-row { align-items: flex-start; } .page-header { flex-direction: column; } }
-.neo-setup-reminder {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  margin-bottom: 20px;
-  border: 1px solid currentColor;
-}
+.neo-setup-reminder { margin-bottom: var(--neo-space-4); }
+.neo-route-loading { display: flex; align-items: center; padding: var(--neo-space-4); }
 .neo-setup {
   display: flex;
   flex-direction: column;
@@ -35,3 +24,7 @@
   margin: 0 auto;
   padding: 24px 16px;
 }
+
+.neo-setup-error { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--neo-color-text); }
+.neo-page:focus { outline: none; }
+@media (max-width: 580px) { .neo-page { padding: var(--neo-space-3); } }

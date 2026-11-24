@@ -1,8 +1,8 @@
 import '@neometaharness/ui/styles.css';
-import { StrictMode, Suspense, lazy, useEffect, useState } from 'react';
+import { StrictMode, Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AppShell, SideNav, SideNavItem, SideNavSection } from '@neometaharness/ui/shell';
-import { Button } from '@neometaharness/ui';
+import { AppShell, SideNav, SideNavHeading, SideNavItem, SideNavSection } from '@neometaharness/ui/shell';
+
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -26,8 +26,10 @@ const Tasks = lazy(() => import('./pages/Tasks'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Onboarding = lazy(() => import('./pages/Onboarding'));
 const SetupReminder = lazy(() => import('./pages/SetupReminder'));
-const Placeholder = lazy(() => import('./pages/Placeholder'));
 const Setup = lazy(() => import('./pages/Setup'));
+const ShellError = lazy(() => import('./pages/ShellFeedback').then((module) => ({ default: module.ShellError })));
+const MissingPage = lazy(() => import('./pages/ShellFeedback').then((module) => ({ default: module.MissingPage })));
+const DiscardSettings = lazy(() => import('./pages/ShellFeedback').then((module) => ({ default: module.DiscardSettings })));
 const pages = [
   { label: 'Inbox', path: '/inbox', icon: 'inbox' },
   { label: 'Agents', path: '/agents', icon: 'person' },
@@ -69,6 +71,10 @@ function activePath() {
 
 function NeoApp({ appearance, saveAppearance }: { appearance: Appearance; saveAppearance: (value: string) => void }) {
   const [path, setPath] = useState(activePath);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
   const [shellError, setShellError] = useState('');
   const [setupIncomplete, setSetupIncomplete] = useState(false);
   useEffect(() => {
@@ -77,10 +83,28 @@ function NeoApp({ appearance, saveAppearance }: { appearance: Appearance; saveAp
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  const navigate = (destination: string) => {
+  const commitNavigation = (destination: string) => {
     if (destination !== path) window.history.pushState({}, '', destination + window.location.search);
     setPath(destination);
+    setMobileOpen(false);
   };
+  const navigate = (destination: string) => {
+    if (destination !== path && settingsDirty) {
+      setMobileOpen(false);
+      setPendingPath(destination);
+      return;
+    }
+    commitNavigation(destination);
+  };
+  useEffect(() => {
+    if (!settingsDirty) return;
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, [settingsDirty]);
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     if (!inTauri && !query.has('onboarding') && window.location.pathname !== '/onboarding') return;
@@ -128,35 +152,54 @@ function NeoApp({ appearance, saveAppearance }: { appearance: Appearance; saveAp
       window.removeEventListener('neo:stop-all-agents', onStop);
     };
   }, []);
-  const current = pages.find((page) => page.path === (path.startsWith('/settings') ? '/settings' : path))
-    ?? pages.find((page) => page.path === '/extensions')!;
+  const onboarding = path === '/onboarding';
+  const nestedLabels: Record<string, string> = {
+    '/settings/channels': 'Channels', '/settings/models': 'Models', '/settings/metrics': 'Success metrics',
+  };
+  const currentLabel = onboarding ? 'Workspace setup' : nestedLabels[path]
+    ?? pages.find((page) => page.path === path)?.label ?? 'Page not found';
+  const groups = [
+    { title: 'Work', items: pages.slice(0, 5) },
+    { title: 'Resources', items: pages.slice(5, 8) },
+    { title: 'Administration', items: pages.slice(8) },
+  ];
 
-  return <AppShell variant="section" contentPadding={0} sideNav={
-      <SideNav header={<div className="neo-nav-heading"><strong>Neo</strong><span>Meta Harness</span></div>}>
-        <SideNavSection title="Workspace">
-          {pages.map((page) => <SideNavItem
+  useEffect(() => {
+    pageRef.current?.focus();
+  }, [path]);
+
+  return <AppShell variant="section" contentPadding={0}
+    mobileNav={onboarding ? false : { breakpoint: 'md', isOpen: mobileOpen, onOpenChange: setMobileOpen }}
+    sideNav={onboarding ? undefined :
+      <SideNav header={<SideNavHeading heading="Neo" subheading="Meta Harness" />}>
+        {groups.map(({ title, items }) => <SideNavSection key={title} title={title}>
+          {items.map((page) => <SideNavItem
             key={page.path}
             label={page.label}
             href={page.path + window.location.search}
             icon={page.icon}
             isSelected={path === page.path || (page.path === '/settings' && path.startsWith('/settings/'))}
             onClick={(event) => {
-              if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+              if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
               event.preventDefault();
               navigate(page.path);
             }}
           />)}
-        </SideNavSection>
+        </SideNavSection>)}
       </SideNav>
     }>
-      <div className="neo-page">
-        {shellError && <p role="alert">{shellError}</p>}
-        {setupIncomplete && path !== '/onboarding' && <Suspense fallback={null}>
-          <SetupReminder onResume={() => navigate('/onboarding')} />
-        </Suspense>}
-        <Suspense fallback={<p role="status">Loading {current.label}…</p>}>
-          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/onboarding' ? <Onboarding onOpen={navigate} onSkip={skipSetup} onCompleted={completeSetup} /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings/metrics' ? <Metrics /> : path === '/settings' ? <Settings onOpen={navigate} appearance={appearance} onAppearanceChange={saveAppearance} /> : <Placeholder name={current.label} />}
+      <div className="neo-page" ref={pageRef} tabIndex={-1} aria-label={currentLabel}>
+        {shellError && <Suspense fallback={<span role="status">Loading error details…</span>}><ShellError message={shellError} /></Suspense>}
+        {setupIncomplete && !onboarding && <Suspense fallback={<span role="status">Loading setup reminder…</span>}><SetupReminder onResume={() => navigate('/onboarding')} /></Suspense>}
+        <Suspense fallback={<div className="neo-route-loading" role="status">{ `Loading ${currentLabel}…` }</div>}>
+          {path === '/inbox' ? <Inbox /> : path === '/extensions' ? <Extensions /> : path === '/agents' ? <Agents /> : path === '/skills' ? <Skills /> : path === '/memory' ? <Memory /> : path === '/computers' ? <Computers /> : path === '/coding' ? <Coding /> : path === '/routines' ? <Routines /> : path === '/tasks' ? <Tasks /> : path === '/onboarding' ? <Onboarding onOpen={navigate} onSkip={skipSetup} onCompleted={completeSetup} /> : path === '/settings/channels' ? <Channels /> : path === '/settings/models' ? <Models /> : path === '/settings/metrics' ? <Metrics /> : path === '/settings' ? <Settings onOpen={navigate} appearance={appearance} onAppearanceChange={saveAppearance} onDirtyChange={setSettingsDirty} /> : <MissingPage onBack={() => navigate('/settings')} />}
         </Suspense>
+        {pendingPath !== null && <Suspense fallback={<span role="status">Loading confirmation…</span>}>
+          <DiscardSettings onCancel={() => setPendingPath(null)} onDiscard={() => {
+            commitNavigation(pendingPath);
+            setPendingPath(null);
+          }} />
+        </Suspense>}
       </div>
     </AppShell>;
 }
@@ -177,7 +220,7 @@ function Root() {
   const { appearance, mode, saveAppearance } = useAppearance();
   return <AppAppearance mode={mode}>
     {startQuery.has('setup')
-      ? <Suspense fallback={null}><Setup error={startQuery.get('error')} /></Suspense>
+      ? <Suspense fallback={<main className="neo-setup"><span role="status">Starting Neo…</span></main>}><Setup error={startQuery.get('error')} /></Suspense>
       : <NeoApp appearance={appearance} saveAppearance={saveAppearance} />}
   </AppAppearance>;
 }
