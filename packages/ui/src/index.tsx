@@ -34,5 +34,7 @@ export { CodeBlock } from '@astryxdesign/core/CodeBlock';
 export { Section } from '@astryxdesign/core/Section';
 export { StatusDot } from '@astryxdesign/core/StatusDot';
 export { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
+export { ButtonGroup } from '@astryxdesign/core/ButtonGroup';
 export { TextArea } from '@astryxdesign/core/TextArea';
 export { Timer } from '@astryxdesign/core/Timer';
+export { Timestamp } from '@astryxdesign/core/Timestamp';

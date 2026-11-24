@@ -1,0 +1,16 @@
+.neo-stream-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.neo-stream-tail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--neo-color-text);
+  font-family: var(--neo-font-family);
+  line-height: 1.5;
+}
+.neo-stream-tail:empty { display: none; }
