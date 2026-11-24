@@ -80,9 +80,15 @@ function assetUrl(pin: ReleasePin, archive: string): URL {
   return url;
 }
 
-async function installCli(enginesDir: string, runtimeRoot: string | undefined, signal: AbortSignal, phase: (step: Exclude<T3InstallPhase, 'starting'>, progress?: number) => void): Promise<void> {
+export async function installT3Cli(
+  enginesDir: string,
+  runtimeRoot: string | undefined,
+  signal: AbortSignal,
+  phase: (step: Exclude<T3InstallPhase, 'starting'>, progress?: number) => void = () => {},
+): Promise<void> {
   const r = release(enginesDir, runtimeRoot);
   if (installedT3(enginesDir, runtimeRoot)) return;
+  await mkdir(enginesDir, { recursive: true });
   for (const entry of await readdir(enginesDir, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith('.tmp-t3-cli-')) continue;
     const owner = /^\.tmp-t3-cli-(\d+)-/.exec(entry.name)?.[1];
@@ -197,8 +203,7 @@ export class T3Installer {
   private async install() {
     try {
       if (!this.enginesDir) throw new EngineInstallError('config', 'Neo has no engine storage folder');
-      await mkdir(this.enginesDir, { recursive: true });
-      await installCli(this.enginesDir, this.runtimeRoot, this.abort.signal, (phase, progress) => this.phase(phase, progress));
+      await installT3Cli(this.enginesDir, this.runtimeRoot, this.abort.signal, (phase, progress) => this.phase(phase, progress));
       if (this.abort.signal.aborted) return;
       this.status = { state: 'ready', message: 'T3 is installed and ready to start.' };
       this.onInstalled();

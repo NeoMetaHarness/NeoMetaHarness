@@ -173,7 +173,7 @@
       "owner": "sol-b",
       "evidence": "pnpm --dir extensions/engine-t3 test",
       "verified_by_pm": "2026-11-18 on main x2: wire schemas vs pinned contracts, isolated T3 (temp base-dir, random port, 15m scoped session, fake ACP), 45 ordered events, 33ms coalescing by message id, approval declined, settled, socket closed, disable=404, sample healthy; p1 + p1-2 regressions PASS",
-      "follow_up": "assert installed T3 desktop server version == pinned v0.1.9 (T3 app auto-updates)"
+      "cli_test_evidence": "Engine T3 e2e PASS from a checksum-verified CLI download and again from the shared test cache; P5-5 exit PASS using the same pinned v0.1.9 cache. Both tests ran with NMH_TEST_T3_CLI unset and isolated T3 state."
     },
     "P1-6": {
       "title": "Auth in the gateway",

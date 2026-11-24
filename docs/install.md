@@ -54,6 +54,8 @@ export NMH_UPSTREAM_CACHE="$PWD"
 
 Never edit or push from the cache. If `upstream.lock.json` changes, re-clone at the new ref; `pnpm upstream:check` reports drift. The Hermes tests also need `uv` and Python 3.14.
 
+The engine-t3 end-to-end test and `pnpm --dir apps/neo-app test:p5-5` use a separate CLI cache at `<OS temp>/nmh-test-t3-cli`. They download the pinned standalone T3 release using the engine installer and verify the archive SHA-256 from `upstream.lock.json`. If the download is unavailable, the live test prints a skip message. For offline runs, point `NMH_TEST_T3_CLI` at the pinned standalone executable. The tests check its version and launch it with isolated state. The upstream source cache is still needed for T3's wire schemas.
+
 ## Desktop installers
 
 The desktop app uses Tauri 2 and the Astryx frontend. Its packaged gateway runs as a local Node sidecar with separately deployed gateway and extension dependencies. The Tauri shell manages the window, tray, and sidecar process. Gateway owns authentication, bots, extensions, and business logic.

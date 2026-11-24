@@ -18,6 +18,7 @@ import { neoContract, type T3Event } from '@neometaharness/contracts';
 import { build, stop as stopEsbuild } from 'esbuild';
 import { system32 } from '../src/system-tools.js';
 import { installedT3 } from '../src/install.js';
+import { pinnedTestT3Cli } from './pinned-cli.js';
 import { T3ControlPlane } from '../src/client.js';
 import { isolatedT3Environment, T3_SESSION_SCOPES } from '../src/runtime.js';
 import { extensionIntegrity } from '@neometaharness/kernel';
@@ -28,15 +29,10 @@ import { coalesceText } from '../../../apps/gateway/src/coalesce.js';
 const here = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(here, '../..');
 const spike = join(repo, 'spikes/P0-3a-t3-headless-client');
-const t3Ref = (JSON.parse(readFileSync(join(repo, 'upstream.lock.json'), 'utf8')) as { pins: Record<string, { ref: string }> }).pins.t3code!.ref;
+const t3Pin = (JSON.parse(readFileSync(join(repo, 'upstream.lock.json'), 'utf8')) as { pins: Record<string, { ref: string; commit: string }> }).pins.t3code!;
 const cacheRoot = requireUpstreamCache('extensions/engine-t3/test/e2e.test.ts', ['t3code']);
-const upstream = join(cacheRoot, `t3code@${t3Ref}`);
+const upstream = join(cacheRoot, `t3code@${t3Pin.ref}`);
 const gatewayDir = join(repo, 'apps/gateway');
-const pinnedSha = '24e77473ecf41bc1f7142529c7911c1c1aae1d76';
-const localAppData = process.env.LOCALAPPDATA;
-assert.ok(localAppData, 'T3 test requires installed desktop T3 CLI on Windows');
-const electron = join(localAppData, 'Programs/t3code/T3 Code (Beta).exe');
-const t3Entry = join(localAppData, 'Programs/t3code/resources/server.asar/apps/server/dist/bin.mjs');
 type Client = ContractRouterClient<typeof neoContract>;
 
 async function port(): Promise<number> {
@@ -48,12 +44,8 @@ async function port(): Promise<number> {
   return address.port;
 }
 
-function t3(args: string[], env: NodeJS.ProcessEnv, cwd: string): ChildProcess {
-  const cli = process.env.NMH_TEST_T3_CLI;
-  return spawn(cli || electron, cli ? args : [t3Entry, ...args], { cwd,
-    windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    env: cli ? env : { ...env, ELECTRON_RUN_AS_NODE: '1', T3CODE_DESKTOP_CLI_LAUNCHER: '1' },
-  });
+function t3(cli: string, args: string[], env: NodeJS.ProcessEnv, cwd: string): ChildProcess {
+  return spawn(cli, args, { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function capture(child: ChildProcess): Promise<string> {
@@ -188,23 +180,25 @@ async function main() {
   assert.deepEqual(distinct.map((event) => event.textDelta), ['a', 'b'],
     'coalescing must respect message identity');
   console.log('T3_COALESCE PASS interval=33ms merge=2 ordered_control=true message_ids=isolated');
-  assert.equal(execFileSync('git', ['-C', upstream, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), pinnedSha);
+  assert.equal(execFileSync('git', ['-C', upstream, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), t3Pin.commit);
   const temp = await mkdtemp(join(tmpdir(), 'nmh-t3-isolated-'));
   const cache = join(here, 'test/.cache');
   let server: ChildProcess | undefined;
   let app: Awaited<ReturnType<typeof gateway>> | undefined;
   let socket: WebSocket | undefined;
   try {
+    const environment = await isolatedT3Environment(temp);
+    const cli = await pinnedTestT3Cli('ENGINE_T3', repo, temp, environment);
+    if (!cli) return;
     const bundle = await buildWireBundle(cache);
     const isolatedPort = await port();
     const url = `http://127.0.0.1:${isolatedPort}`;
-    const environment = await isolatedT3Environment(temp);
     const state = environment.T3CODE_HOME!;
-    server = t3(['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(isolatedPort),
+    server = t3(cli, ['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(isolatedPort),
       '--base-dir', state, '--no-browser'], environment, temp);
     await waitForServer(url, server);
     // The same scopes the local runtime requests, so this run proves they cover coding-workflow's worktree.
-    const session = await capture(t3(['auth', 'session', 'issue', '--base-dir', state,
+    const session = await capture(t3(cli, ['auth', 'session', 'issue', '--base-dir', state,
       ...T3_SESSION_SCOPES.flatMap((scope) => ['--scope', scope]),
       '--ttl', '15m', '--label', 'nmh-isolated-test', '--token-only'], environment, temp));
     // A committed scratch repository, so T3 can create a worktree from HEAD.
