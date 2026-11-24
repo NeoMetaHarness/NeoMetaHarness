@@ -86,7 +86,7 @@ export default function T3Install({ onReady }: { onReady?: () => void }) {
       endContent={<Button label="Retry T3 installation" isDisabled={busy} onClick={() => { void action('install'); }}>Try again</Button>} />}
     {status?.phase === 'starting' && <ProgressBar label={status.message} isIndeterminate />}
     {status?.state === 'ready' && status.phase !== 'starting' && <>
-      <Button label={status.external ? 'Reconnect to T3' : 'Start T3'} isDisabled={busy || status.phase === 'starting'} onClick={() => { void action('start'); }}>
+      <Button label={status.external ? 'Reconnect to T3' : 'Start T3'} isDisabled={busy} onClick={() => { void action('start'); }}>
         {status.external ? 'Reconnect to T3' : 'Start T3'}
       </Button>
       {status.external && <Text as="p">Configure the server URL and scoped session in Settings to connect to an existing T3.</Text>}
