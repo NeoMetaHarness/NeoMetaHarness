@@ -628,9 +628,10 @@
     },
     "P7-17": {
       "title": "Subscription sign-in in onboarding and Model Hub",
-      "status": "not_started",
-      "owner": "unassigned",
-      "evidence": "Owner report 2026-11-23: the onboarding model step offers only an OpenAI-compatible API, but PRD APP-4 and CM-2 (P0) call for subscription sign-ins. Depends on P7-16."
+      "status": "in_progress",
+      "owner": "helper (opus)",
+      "evidence": "Owner report 2026-11-23: the onboarding model step offers only an OpenAI-compatible API, but PRD APP-4 and CM-2 (P0) call for subscription sign-ins. Depends on P7-16.",
+      "remaining": "Step 1: design note (Hermes and T3 sign-in seams, vault storage, projection to every engine, onboarding and Model Hub UI, scripted-fake tests) for PM approval; then build."
     }
   },
   "p6_tasks": {
