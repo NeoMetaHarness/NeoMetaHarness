@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
@@ -18,14 +19,14 @@ const cache = join(directory, '.cache');
 type Client = ContractRouterClient<typeof neoContract>;
 interface RunningGateway { port: number; token: string; child: ChildProcess; close(): Promise<void> }
 
-async function start(dbFile: string, ownedByPipe = false): Promise<RunningGateway> {
+async function start(dbFile: string, ownedByPipe = false, overrides: NodeJS.ProcessEnv = {}): Promise<RunningGateway> {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: directory,
     // stdin 'ignore' reads as an immediately closed stream, so the default runs also prove
     // that a gateway without NMH_EXIT_ON_STDIN_CLOSE ignores stdin closing (server mode).
     stdio: [ownedByPipe ? 'pipe' : 'ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
-    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1', ...(ownedByPipe ? { NMH_EXIT_ON_STDIN_CLOSE: '1' } : {}) },
+    env: { ...process.env, NMH_DB_PATH: dbFile, NMH_EXTENSIONS_DIR: join(repo, 'extensions'), NMH_PORT: '0', NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1', ...(ownedByPipe ? { NMH_EXIT_ON_STDIN_CLOSE: '1' } : {}), ...overrides },
   });
   let stderr = '';
   child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
@@ -183,7 +184,63 @@ async function ownerExit(): Promise<void> {
   }
 }
 
+async function coldT3(): Promise<void> {
+  const temp = await mkdtemp(join(cache, 'cold-t3-'));
+  const db = join(temp, 'state.sqlite');
+  const engines = join(temp, 'engines');
+  const cold = { NMH_UPSTREAM_CACHE: join(temp, 'empty-cache'), NMH_ENGINES_DIR: engines,
+    NMH_T3_URL: '', NMH_T3_SCOPED_SESSION: '' };
+  let ticketRequests = Promise.withResolvers<void>();
+  // A hanging ticket request must outlive the ready signal. No response is sent.
+  const fixture = createServer(() => ticketRequests.resolve());
+  await new Promise<void>((done) => fixture.listen(0, '127.0.0.1', done));
+  const address = fixture.address() as { port: number };
+  let gateway: RunningGateway | undefined;
+  const rpc = () => createORPCClient<Client>(new HttpLink({
+    url: 'http://127.0.0.1:' + gateway!.port,
+    headers: () => ({ authorization: 'Bearer ' + gateway!.token }),
+  }));
+  try {
+    gateway = await start(db, false, cold);
+    await rpc().extensions.enable({ id: 'engine-t3' });
+    assert.equal((await rpc().x['engine-t3'].install.status()).state, 'not_installed');
+    const entry = (await rpc().extensions.list()).find((row) => row.id === 'engine-t3');
+    assert.equal(entry?.health?.ok, false);
+    assert.match(entry?.health?.reason ?? '', /isn't installed/);
+    await rpc().settings.set({ extension: 'engine-t3', values: {
+      existingServerUrl: 'http://127.0.0.1:' + address.port, scopedSession: 'isolated-fixture-session',
+    } });
+    assert.equal((await rpc().x['engine-t3'].install.status()).external, true);
+    await gateway.close();
+
+    ticketRequests = Promise.withResolvers<void>();
+    const began = Date.now();
+    gateway = await start(db, false, cold);
+    const startupMs = Date.now() - began;
+    const status = await rpc().x['engine-t3'].install.status();
+    assert.equal(status.connected, false);
+    assert.equal(status.phase, 'starting');
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([ticketRequests.promise, new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('T3 did not request a ticket')), 3000);
+      })]);
+    } finally { clearTimeout(timeout); }
+    assert.deepEqual(await readdir(engines).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+      return [];
+    }), [], 'Gateway startup must leave the engine cache cold');
+    console.log(`P1_T3_COLD PASS ready_ms=${startupMs} pending_ticket=true downloaded=false`);
+  } finally {
+    await gateway?.close();
+    fixture.closeAllConnections();
+    await new Promise<void>((done) => fixture.close(() => done()));
+    await rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
 await mkdir(cache, { recursive: true });
 for (let trialNumber = 1; trialNumber <= 2; trialNumber++) await trial(trialNumber);
 console.log('P1_LIFECYCLE PASS trials=2');
 await ownerExit();
+await coldT3();

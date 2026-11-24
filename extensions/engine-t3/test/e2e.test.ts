@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
+import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
 import { WebSocket } from 'ws';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
@@ -15,22 +16,16 @@ import { createORPCClient } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type T3Event } from '@neometaharness/contracts';
 import { build } from 'esbuild';
+import { isolatedT3Environment } from '../src/runtime.js';
 import { coalesceText } from '../../../apps/gateway/src/coalesce.js';
 
 const here = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(here, '../..');
 const spike = join(repo, 'spikes/P0-3a-t3-headless-client');
-// Upstream cache: NMH_UPSTREAM_CACHE, else the nearest parent folder that contains `nmh-upstream-cache`
-// (works from the PM checkout and from any helper worktree depth). The ref comes from upstream.lock.json.
 const t3Ref = (JSON.parse(readFileSync(join(repo, 'upstream.lock.json'), 'utf8')) as { pins: Record<string, { ref: string }> }).pins.t3code!.ref;
-function upstreamCache(): string {
-  if (process.env.NMH_UPSTREAM_CACHE) return process.env.NMH_UPSTREAM_CACHE;
-  for (let dir = repo; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, 'nmh-upstream-cache'))) return join(dir, 'nmh-upstream-cache');
-    if (dirname(dir) === dir) throw new Error('nmh-upstream-cache not found; set NMH_UPSTREAM_CACHE');
-  }
-}
-const upstream = join(upstreamCache(), `t3code@${t3Ref}`);
+const cacheRoot = process.env.NMH_UPSTREAM_CACHE;
+assert.ok(cacheRoot, 'Set NMH_UPSTREAM_CACHE to the pinned upstream source cache for the T3 wire tests');
+const upstream = join(cacheRoot, `t3code@${t3Ref}`);
 const gatewayDir = join(repo, 'apps/gateway');
 const pinnedSha = '24e77473ecf41bc1f7142529c7911c1c1aae1d76';
 const localAppData = process.env.LOCALAPPDATA;
@@ -48,10 +43,11 @@ async function port(): Promise<number> {
   return address.port;
 }
 
-function t3(args: string[], state: string): ChildProcess {
-  return spawn(electron, [t3Entry, ...args], {
+function t3(args: string[], env: NodeJS.ProcessEnv, cwd: string): ChildProcess {
+  const cli = process.env.NMH_TEST_T3_CLI;
+  return spawn(cli || electron, cli ? args : [t3Entry, ...args], { cwd,
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', T3CODE_DESKTOP_CLI_LAUNCHER: '1', T3CODE_HOME: state },
+    env: cli ? env : { ...env, ELECTRON_RUN_AS_NODE: '1', T3CODE_DESKTOP_CLI_LAUNCHER: '1' },
   });
 }
 
@@ -78,11 +74,11 @@ async function waitForServer(url: string, child: ChildProcess): Promise<void> {
   throw new Error('Isolated T3 did not start within 15 seconds');
 }
 
-async function gateway(state: string, url: string, session: string) {
+async function gateway(state: string, url = '', session = '') {
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     cwd: gatewayDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...process.env, NMH_DB_PATH: join(state, 'neo.sqlite'), NMH_EXTENSIONS_DIR: join(repo, 'extensions'),
-      NMH_PORT: '0', NMH_T3_URL: url, NMH_T3_SCOPED_SESSION: session, NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
+      NMH_PORT: '0', NMH_ENGINES_DIR: join(state, 'engines'), NMH_T3_URL: url, NMH_T3_SCOPED_SESSION: session, NEO_MODE: 'desktop', NEO_PRINT_DESKTOP_TOKEN: '1' },
   });
   let stderr = '';
   child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString().slice(0, 3000); });
@@ -114,11 +110,18 @@ async function within<T>(promise: Promise<T>, ms: number, label: string): Promis
 }
 
 async function stop(child?: ChildProcess, graceful = false): Promise<void> {
-  if (!child || child.exitCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise<void>((done) => child.once('exit', () => done()));
   if (graceful && child.connected) child.send('shutdown');
-  else child.kill();
-  try { await within(new Promise<void>((done) => child.once('exit', () => done())), 8000, 'process shutdown'); }
-  catch { child.kill('SIGKILL'); }
+  else if (process.platform === 'win32' && child.pid) {
+    await promisify(execFile)('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'],
+      { windowsHide: true, timeout: 5000 }).catch(() => child.kill());
+  } else child.kill();
+  try { await within(exited, 8000, 'process shutdown'); }
+  catch {
+    child.kill('SIGKILL');
+    await within(exited, 5000, 'forced process shutdown');
+  }
 }
 
 function connectedT3Sockets(serverPort: number, gatewayPid: number): number {
@@ -178,13 +181,14 @@ async function main() {
     });
     const isolatedPort = await port();
     const url = `http://127.0.0.1:${isolatedPort}`;
-    const state = join(temp, 't3-state');
+    const environment = await isolatedT3Environment(temp);
+    const state = environment.T3CODE_HOME!;
     server = t3(['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(isolatedPort),
-      '--base-dir', state, '--no-browser'], state);
+      '--base-dir', state, '--no-browser'], environment, temp);
     await waitForServer(url, server);
     const session = await capture(t3(['auth', 'session', 'issue', '--base-dir', state,
       '--scope', 'orchestration:read', '--scope', 'orchestration:operate',
-      '--scope', 'providers:manage', '--ttl', '15m', '--label', 'nmh-isolated-test', '--token-only'], state));
+      '--scope', 'providers:manage', '--ttl', '15m', '--label', 'nmh-isolated-test', '--token-only'], environment, temp));
     assert.ok(session.length > 16, 'isolated session token was not issued');
     const projectId = randomUUID();
     const providerId = 'nmhFakeAcp';
@@ -207,6 +211,12 @@ async function main() {
     const ws = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
     assert.equal((await http.extensions.enable({ id: 'sample-ts' })).status, 'running');
     assert.equal((await http.extensions.enable({ id: 'engine-t3' })).status, 'running', app.error);
+    assert.equal((await http.x['engine-t3'].runtime.start()).state, 'ready');
+    const deadline = Date.now() + 15_000;
+    while (!(await http.x['engine-t3'].install.status()).connected) {
+      assert.ok(Date.now() < deadline, 'external T3 connection timed out');
+      await new Promise((done) => setTimeout(done, 100));
+    }
     assert.ok(connectedT3Sockets(isolatedPort, app.child.pid!) >= 1,
       'T3 gateway must own a live TCP/WebSocket connection');
     const threadId = randomUUID();
@@ -282,4 +292,52 @@ async function main() {
   }
 }
 
-await main();
+// Opt-in smoke for the real release, from a clean installed-app data layout.
+async function realInstall() {
+  const temp = await mkdtemp(join(tmpdir(), 'nmh-t3-real-release-'));
+  let app: Awaited<ReturnType<typeof gateway>> | undefined;
+  let pid: number | undefined;
+  const client = () => createORPCClient<Client>(new HttpLink({
+    url: 'http://127.0.0.1:' + app!.ready,
+    headers: () => ({ authorization: 'Bearer ' + app!.token }),
+  }));
+  async function confirmConnection(timeout: number) {
+    const deadline = Date.now() + timeout;
+    while (true) {
+      const status = await client().x['engine-t3'].install.status().catch(() => undefined);
+      assert.notEqual(status?.state, 'failed', status?.error + '\n' + app?.error);
+      if (status?.connected) break;
+      assert.ok(Date.now() < deadline, status?.message + '\n' + app?.error);
+      await new Promise((done) => setTimeout(done, 500));
+    }
+    const status = (await client().extensions.list()).find((row) => row.id === 'engine-t3');
+    assert.equal(status?.health?.ok, true);
+    pid = status?.health?.pid;
+    assert.ok(pid);
+    assert.deepEqual(await client().x['engine-t3'].threads.list(), { projects: [], threads: [] });
+  }
+  function confirmStopped(previousPid: number) {
+    assert.throws(() => process.kill(previousPid, 0), { code: 'ESRCH' });
+  }
+  try {
+    app = await gateway(temp);
+    await client().extensions.enable({ id: 'engine-t3' });
+    assert.equal((await client().x['engine-t3'].install.status()).state, 'not_installed');
+    assert.equal((await client().x['engine-t3'].install.start()).state, 'installing');
+    await confirmConnection(180_000);
+    await client().extensions.disable({ id: 'engine-t3' });
+    confirmStopped(pid!);
+
+    await client().extensions.enable({ id: 'engine-t3' });
+    await confirmConnection(30_000);
+    await stop(app.child, true);
+    confirmStopped(pid!);
+    console.log('T3_REAL_INSTALL PASS download=github lock=verified coding=connected disable=stopped gateway_exit=stopped');
+  } finally {
+    await stop(app?.child, true);
+    await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
+}
+
+if (process.env.NMH_TEST_T3_REAL_INSTALL === '1') await realInstall();
+else await main();

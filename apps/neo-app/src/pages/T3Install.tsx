@@ -21,7 +21,7 @@ export default function T3Install({ onReady }: { onReady?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [round, setRound] = useState(0);
-  const running = useRef(false);
+  const reported = useRef('');
   const notify = useRef(onReady);
   notify.current = onReady;
 
@@ -30,19 +30,25 @@ export default function T3Install({ onReady }: { onReady?: () => void }) {
     let timer: number | undefined;
     let failures = 0;
     const poll = async () => {
+      let next: T3InstallStatus | undefined;
       try {
-        const next = await api.x['engine-t3'].install.status();
+        next = await api.x['engine-t3'].install.status();
         if (disposed) return;
+        if (failures >= 10) setError('');
         failures = 0;
         setStatus(next);
-        running.current = next.state === 'installing';
-        if (next.connected) notify.current?.();
-      } catch (reason) {
+        const signature = `${next.state}|${next.message}|${next.error ?? ''}|${next.connected ?? false}`;
+        if (signature !== reported.current) {
+          reported.current = signature;
+          notify.current?.(); // refresh the Extensions card's live health reason
+        }
+      } catch {
         failures++;
-        if (failures === 10 && !disposed) setError('Could not read the T3 installation status: ' + String(reason));
+        if (failures === 10 && !disposed) setError('Could not read the T3 installation status. Try again from Extensions.');
       }
-      if (!disposed && (running.current || failures > 0) && failures < 30) {
-        timer = window.setTimeout(() => { void poll(); }, 1000);
+      if (!disposed) {
+        const busy = next?.state === 'installing' || next?.phase === 'starting';
+        timer = window.setTimeout(() => { void poll(); }, busy ? 1000 : 3000);
       }
     };
     void poll();
@@ -57,11 +63,10 @@ export default function T3Install({ onReady }: { onReady?: () => void }) {
         ? await api.x['engine-t3'].install.start()
         : await api.x['engine-t3'].runtime.start();
       setStatus(next);
-      running.current = next.state === 'installing';
       if (next.connected) notify.current?.();
       setRound((old) => old + 1);
-    } catch (reason) {
-      setError('Could not ' + kind + ' T3: ' + String(reason));
+    } catch {
+      setError('Could not ' + kind + ' T3. Check the Gateway status and try again.');
     } finally {
       setBusy(false);
     }
@@ -71,7 +76,7 @@ export default function T3Install({ onReady }: { onReady?: () => void }) {
   if (status?.connected && !error) return null;
   return <div className="hermes-install" data-testid="extension-engine-t3-install" data-state={status?.state ?? 'unknown'}>
     {status?.state === 'not_installed' && <>
-      <Text as="p">Install the T3 coding server (approximately 135 MB on Windows). Neo verifies the pinned release.</Text>
+      <Text as="p">Download the pinned T3 coding server.</Text>
       <Button label="Install T3" isDisabled={busy} onClick={() => { void action('install'); }}>Install T3</Button>
     </>}
     {status?.state === 'installing' && <ProgressBar label={status.message}
@@ -79,10 +84,10 @@ export default function T3Install({ onReady }: { onReady?: () => void }) {
     {status?.state === 'failed' && <Banner status="error" title="T3 installation failed"
       description={<Text as="p">{status.error ?? status.message}</Text>}
       endContent={<Button label="Retry T3 installation" isDisabled={busy} onClick={() => { void action('install'); }}>Try again</Button>} />}
-    {status?.state === 'ready' && <>
-      <Text as="p">{status.message}</Text>
-      <Button label="Start T3 coding server" isDisabled={busy} onClick={() => { void action('start'); }}>
-        {busy ? 'Starting T3…' : 'Start T3'}
+    {status?.phase === 'starting' && <ProgressBar label={status.message} isIndeterminate />}
+    {status?.state === 'ready' && status.phase !== 'starting' && <>
+      <Button label={status.external ? 'Reconnect to T3' : 'Start T3'} isDisabled={busy || status.phase === 'starting'} onClick={() => { void action('start'); }}>
+        {status.external ? 'Reconnect to T3' : 'Start T3'}
       </Button>
       {status.external && <Text as="p">Configure the server URL and scoped session in Settings to connect to an existing T3.</Text>}
     </>}

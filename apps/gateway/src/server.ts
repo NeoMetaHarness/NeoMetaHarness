@@ -14,6 +14,7 @@ import {
   computerActionSchema,
   neoContract,
   type T3Event,
+  type T3InstallStatus,
   type HermesEvent,
   type DshEvent,
   type VaultOperation,
@@ -1315,17 +1316,17 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         install: {
           status: os.x['engine-t3'].install.status.handler(async ({ context }) => {
             authorize('x.engine-t3.install.status', context);
-            return invokeT3('install/status', {}) as Promise<any>;
+            return invokeT3('install/status', {}) as Promise<T3InstallStatus>;
           }),
           start: os.x['engine-t3'].install.start.handler(async ({ context }) => {
             authorize('x.engine-t3.install.start', context);
-            return invokeT3('install/start', {}) as Promise<any>;
+            return invokeT3('install/start', {}) as Promise<T3InstallStatus>;
           }),
         },
         runtime: {
           start: os.x['engine-t3'].runtime.start.handler(async ({ context }) => {
             authorize('x.engine-t3.runtime.start', context);
-            return invokeT3('runtime/start', {}) as Promise<any>;
+            return invokeT3('runtime/start', {}) as Promise<T3InstallStatus>;
           }),
         },
         create: os.x['engine-t3'].create.handler(async ({ input, context }) => {

@@ -76,7 +76,7 @@ import { codingWorkflowContract } from './coding-workflow.js';
 
 export const t3InstallStatusSchema = z.object({
   state: z.enum(['not_installed', 'installing', 'ready', 'failed']),
-  phase: z.enum(['download', 'verify', 'extract', 'dependencies', 'starting']).optional(),
+  phase: z.enum(['download', 'verify', 'extract', 'starting']).optional(),
   progress: z.number().min(0).max(1).optional(),
   message: z.string(),
   error: z.string().optional(),

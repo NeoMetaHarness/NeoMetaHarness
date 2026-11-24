@@ -63,6 +63,8 @@ export default function Coding() {
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
   const [status, setStatus] = useState('Loading');
+  const [availability, setAvailability] = useState<'ready' | 'disabled' | 'not_installed' | 'connecting' | 'error'>('connecting');
+  const [availabilityReason, setAvailabilityReason] = useState('Connecting to the coding server…');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
@@ -91,19 +93,35 @@ export default function Coding() {
 
   useEffect(() => {
     const target = new URLSearchParams(window.location.search).get('openThread');
-    if (!target || selected.current === target || !catalog.threads.some((thread) => thread.id === target)) return;
+    if (availability !== 'ready' || !target || selected.current === target || !catalog.threads.some((thread) => thread.id === target)) return;
     openThread(target);
     const url = new URL(window.location.href);
     url.searchParams.delete('openThread');
     window.history.replaceState({}, '', url.pathname + url.search);
-  }, [catalog]);
+  }, [catalog, availability]);
 
   async function refresh(silent = false) {
     try {
+      const extension = (await http.extensions.list()).find((item) => item.id === 'engine-t3');
+      if (!live.current) return;
+      if (!extension || extension.status === 'disabled') {
+        unavailable('disabled', 'disabled');
+        return;
+      }
+      if (!extension.health?.ok) {
+        const installation = await http.x['engine-t3'].install.status();
+        if (!live.current) return;
+        const state = installation.state === 'not_installed' ? 'not_installed'
+          : installation.state === 'installing' || installation.phase === 'starting' ? 'connecting' : 'error';
+        unavailable(state, state === 'not_installed' ? 'Not installed' : state === 'connecting' ? 'Connecting' : 'Unavailable',
+          installation.error ?? extension.health?.reason ?? installation.message);
+        return;
+      }
       const [result, providerResult] = await Promise.all([
         http.x['engine-t3'].threads.list(), http.x['engine-t3'].providers.list(),
       ]);
       if (!live.current) return;
+      setAvailability('ready');
       setCatalog(result);
       setProviders(providerResult.providers);
       setProjectId((previous) => result.projects.some((project) => project.id === previous)
@@ -123,23 +141,25 @@ export default function Coding() {
           ? chosen?.models.find((item) => item.isDefault)?.id
             ?? chosen?.models[0]?.id ?? previous : previous);
       }
-      setStatus((previous) => previous === 'disabled' ? 'Ready' : previous === 'Loading' ? 'Ready' : previous);
+      setStatus((previous) => ['disabled', 'Loading', 'Not installed', 'Connecting', 'Unavailable'].includes(previous) ? 'Ready' : previous);
       if (!silent) setError('');
     } catch (reason) {
       if (!live.current) return;
-      if (isDisabled(reason)) {
-        setStatus('disabled');
-        setError('');
-        setCatalog({ projects: [], threads: [] });
-        setProviders([]);
-        connection.current?.socket.close();
-        connection.current = null;
-        setRunning(false);
-      } else if (!silent) {
-        setError(`Cannot load coding projects: ${String(reason)}`);
-        setStatus('Unavailable');
-      }
+      if (isDisabled(reason)) unavailable('disabled', 'disabled');
+      else unavailable('error', 'Unavailable', 'Cannot load coding projects. Check the T3 connection in Extensions.');
     }
+  }
+
+  function unavailable(state: 'disabled' | 'not_installed' | 'connecting' | 'error', status: string, reason = '') {
+    setAvailability(state);
+    setAvailabilityReason(reason);
+    setStatus(status);
+    setError('');
+    setCatalog((current) => current.projects.length || current.threads.length ? { projects: [], threads: [] } : current);
+    setProviders((current) => current.length ? [] : current);
+    connection.current?.socket.close();
+    connection.current = null;
+    setRunning(false);
   }
 
   function append(id: number, delta: string) {
@@ -399,7 +419,9 @@ export default function Coding() {
       <span className="connection" data-testid="coding-status">{status}</span>
     </header>
     {error && <p className="page-error" role="alert">{error}</p>}
-    {status === 'disabled' ? <p role="status" data-testid="coding-disabled">engine-t3 disabled</p>
+    {availability === 'disabled' ? <p role="status" data-testid="coding-disabled">engine-t3 disabled</p>
+      : availability === 'not_installed' ? <p role="status" data-testid="coding-install-required">Install T3 from Extensions to use Coding.</p>
+      : availability !== 'ready' ? <p role="status" data-testid="coding-connection-required">{availabilityReason} Open Extensions to install, start or connect T3.</p>
       : <div className="coding-workspace">
         <aside className="coding-sidebar" aria-label="Coding projects">
           <h2>Projects</h2>

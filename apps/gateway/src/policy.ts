@@ -17,6 +17,8 @@ export function destructiveToolApproval(tool: string, detail: string): boolean {
 
 /** Shared resources require deployment ownership on a server. Keep the original desktop roles. */
 const DEPLOYMENT_PROCEDURE_DESKTOP_POLICY: Readonly<Record<string, PolicyLevel>> = {
+  'x.engine-t3.install.start': 'admin',
+  'x.engine-t3.runtime.start': 'admin',
   // Hermes runtime, profiles, and dashboard
   'x.engine-hermes.install.status': 'viewer',
   'x.engine-hermes.install.start': 'admin',
@@ -110,8 +112,6 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'apps.grant': 'member',
   // x.engine-t3
   'x.engine-t3.install.status': 'viewer',
-  'x.engine-t3.install.start': 'admin',
-  'x.engine-t3.runtime.start': 'admin',
   'x.engine-t3.create': 'member',
   'x.engine-t3.send': 'member',
   'x.engine-t3.events': 'viewer',
@@ -278,6 +278,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
 };
 
 export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
+  '/x/engine-t3/install/start': 'internal',
+  '/x/engine-t3/runtime/start': 'internal',
   '/internal/memory/context': 'internal',
   '/internal/memory/write': 'internal',
   '/internal/computers-mcp/action': 'internal',
@@ -362,7 +364,7 @@ export function authorize(path: string, context?: GatewayAuthContext, { workspac
 // secrets use the same extension ID as the engine vault subject.
 // Superagent shares one GitHub source, upstream routine, and deployment accept mode.
 // Keep its settings scope aligned with those services if it adds a schema.
-const DEPLOYMENT_SCOPED_EXTENSIONS = new Set(['engine-hermes', 'channels', 'engine-superagent', 'skills-registry']);
+const DEPLOYMENT_SCOPED_EXTENSIONS = new Set(['engine-hermes', 'channels', 'engine-t3', 'engine-superagent', 'skills-registry']);
 
 export function hasDeploymentSettings(extension: string): boolean {
   return DEPLOYMENT_SCOPED_EXTENSIONS.has(extension);
