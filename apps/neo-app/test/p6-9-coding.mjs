@@ -7,6 +7,8 @@ import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedT3Environment } from '../../../extensions/engine-t3/src/runtime.ts';
+import { pinnedTestT3Cli } from '../../../extensions/engine-t3/test/pinned-cli.ts';
 
 const app = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(app, '../..');
@@ -23,12 +25,6 @@ function upstreamCache() {
 }
 const ref = JSON.parse(readFileSync(join(repo, 'upstream.lock.json'), 'utf8')).pins.t3code.ref;
 const upstream = join(upstreamCache(), 't3code@' + ref);
-const t3Exe = join(process.env.LOCALAPPDATA ?? '', 'Programs/t3code/T3 Code (Beta).exe');
-const t3Archive = join(process.env.LOCALAPPDATA ?? '', 'Programs/t3code/resources/server.asar');
-const t3Entry = join(t3Archive, 'apps/server/dist/bin.mjs');
-// Electron resolves paths inside server.asar even though they are not physical files.
-assert.ok(existsSync(t3Exe) && existsSync(t3Archive),
-  'isolated T3 test needs the installed desktop CLI');
 // The isolated fake provider inherits only the OS environment needed for child processes.
 const allowedEnv = new Set([
   'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP',
@@ -64,11 +60,11 @@ async function capture(child) {
     child.once('exit', (code) => code === 0 ? done(output.trim()) : reject(new Error('T3 command failed ' + code + ': ' + errors)));
   });
 }
-function spawnT3(args, state) {
-  return spawn(t3Exe, [t3Entry, ...args], {
+function spawnT3(cli, args, cwd, env) {
+  return spawn(cli, args, {
+    cwd, env,
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
-    env: { ...cleanEnv, ELECTRON_RUN_AS_NODE: '1', T3CODE_DESKTOP_CLI_LAUNCHER: '1', T3CODE_HOME: state },
   });
 }
 async function waitT3(url, child) {
@@ -118,9 +114,12 @@ async function pinnedSetup(temp, url, session, providerId, projectId, track) {
   console.log('P5-5_PINNED_WIRE PASS config=true switch=true worktree=true terminal=true');
 }
 export async function startCodingFixture(temp, track = child => child) {
-  const state = join(temp, 't3-state');
+  const environment = await isolatedT3Environment(join(temp, 't3-state'));
+  const executable = await pinnedTestT3Cli('P6-9-CODING', repo, temp, environment);
+  if (!executable) return;
+  const state = environment.T3CODE_HOME;
   const port = await freePort(); const url = 'http://127.0.0.1:' + port;
-  const server = track(spawnT3(['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(port), '--base-dir', state, '--no-browser'], state));
+  const server = track(spawnT3(executable, ['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(port), '--base-dir', state, '--no-browser'], temp, environment));
   const close = async () => {
     if (server.exitCode !== null || server.signalCode !== null) return;
     const exited = new Promise(done => server.once('exit', done));
@@ -130,10 +129,10 @@ export async function startCodingFixture(temp, track = child => child) {
   };
   try {
     await waitT3(url, server);
-    const session = await capture(track(spawnT3(['auth', 'session', 'issue', '--base-dir', state,
+    const session = await capture(track(spawnT3(executable, ['auth', 'session', 'issue', '--base-dir', state,
       '--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'providers:manage',
       '--scope', 'terminal:read', '--scope', 'terminal:operate', '--scope', 'filesystem:read', '--scope', 'source-control:write',
-      '--ttl', '15m', '--label', 'nmh-p69-isolated', '--token-only'], state)));
+      '--ttl', '15m', '--label', 'nmh-p69-isolated', '--token-only'], temp, environment)));
     const projectId = randomUUID();
     await pinnedSetup(temp, url, session, 'p69-scripted-second', projectId, track);
     const root = join(temp, 'workspace');

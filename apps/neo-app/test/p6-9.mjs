@@ -329,7 +329,9 @@ async function trial(previewPort) {
   const models = await scriptedModels();
   let coding, github, gateway, chrome, page;
   try {
-    coding = await startCodingFixture(temporary, track); github = await fakeGitHub(coding.root);
+    coding = await startCodingFixture(temporary, track);
+    if (!coding) return;
+    github = await fakeGitHub(coding.root);
     const bridgeScript = await prepareWhatsApp(temporary);
     const home = join(temporary, 'hermes-home');
     const extra = { ...coding.env, NMH_SUPERAGENT_GITHUB_API_URL: github.url, NMH_SUPERAGENT_GITHUB_POLL_INTERVAL_MS: '120000',

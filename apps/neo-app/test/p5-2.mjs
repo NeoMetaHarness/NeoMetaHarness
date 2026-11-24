@@ -8,6 +8,8 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedT3Environment } from '../../../extensions/engine-t3/src/runtime.ts';
+import { pinnedTestT3Cli } from '../../../extensions/engine-t3/test/pinned-cli.ts';
 import { gzipSync } from 'node:zlib';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
@@ -29,12 +31,6 @@ function upstreamCache() {
 }
 const ref = JSON.parse(readFileSync(join(repo, 'upstream.lock.json'), 'utf8')).pins.t3code.ref;
 const upstream = join(upstreamCache(), 't3code@' + ref);
-const t3Exe = join(process.env.LOCALAPPDATA ?? '', 'Programs/t3code/T3 Code (Beta).exe');
-const t3Archive = join(process.env.LOCALAPPDATA ?? '', 'Programs/t3code/resources/server.asar');
-const t3Entry = join(t3Archive, 'apps/server/dist/bin.mjs');
-// Electron resolves paths inside server.asar even though they are not physical files.
-assert.ok(existsSync(t3Exe) && existsSync(t3Archive),
-  'isolated T3 test needs the installed desktop CLI');
 // The isolated fake provider inherits only the OS environment needed for child processes.
 const allowedEnv = new Set([
   'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP',
@@ -70,10 +66,10 @@ async function capture(child) {
     child.once('exit', (code) => code === 0 ? done(output.trim()) : reject(new Error('T3 command failed ' + code + ': ' + errors)));
   });
 }
-function spawnT3(args, state) {
-  return spawn(t3Exe, [t3Entry, ...args], {
+function spawnT3(cli, args, cwd, env) {
+  return spawn(cli, args, {
+    cwd, env,
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...cleanEnv, ELECTRON_RUN_AS_NODE: '1', T3CODE_DESKTOP_CLI_LAUNCHER: '1', T3CODE_HOME: state },
   });
 }
 async function waitT3(url, child) {
@@ -174,20 +170,23 @@ async function stopProcess(child) {
 }
 async function main() {
   const temp = await mkdtemp(join(tmpdir(), 'nmh-p5-2-'));
-  const state = join(temp, 't3-state');
   const savedUrl = process.env.NMH_T3_URL;
   const savedSession = process.env.NMH_T3_SCOPED_SESSION;
   let server, preview, viewer, gateway;
   const chrome = new HeadlessChromeProvider();
   try {
+    const environment = await isolatedT3Environment(join(temp, 't3-state'));
+    const executable = await pinnedTestT3Cli('P5-2', repo, temp, environment);
+    if (!executable) return;
+    const state = environment.T3CODE_HOME;
     const port = await freePort();
     const t3Url = 'http://127.0.0.1:' + port;
-    server = spawnT3(['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(port),
-      '--base-dir', state, '--no-browser'], state);
+    server = spawnT3(executable, ['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(port),
+      '--base-dir', state, '--no-browser'], temp, environment);
     await waitT3(t3Url, server);
-    const scopedSession = await capture(spawnT3(['auth', 'session', 'issue', '--base-dir', state,
+    const scopedSession = await capture(spawnT3(executable, ['auth', 'session', 'issue', '--base-dir', state,
       '--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'providers:manage',
-      '--ttl', '15m', '--label', 'nmh-p5-2-isolated', '--token-only'], state));
+      '--ttl', '15m', '--label', 'nmh-p5-2-isolated', '--token-only'], temp, environment));
     assert.ok(scopedSession.length > 16, 'scoped session issuance');
     const providerId = 'nmhFakeAcp';
     const projectId = randomUUID();
@@ -295,6 +294,7 @@ async function main() {
     assert.equal((await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).status, 200);
     assert.equal((await rpc.extensions.list()).find((entry) => entry.id === 'sample-ts')?.status, 'running');
     console.log('P5-2_GATEWAY_UI PASS project=list thread=create prompts=2 stream=visible approvals=deny+approve settled=true disabled=true sample=healthy');
+    return true;
   } finally {
     viewer?.close();
     await chrome.release('viewer');
@@ -309,5 +309,4 @@ async function main() {
   }
 }
 await buildFrontend();
-await main();
-console.log('P5-2_EXIT PASS');
+if (await main()) console.log('P5-2_EXIT PASS');
