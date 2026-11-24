@@ -203,7 +203,27 @@ export const superagentContract = {
   },
 };
 
+const hermesSubscriptionProfile = z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/);
+const hermesSubscriptionSession = z.object({
+  profile: hermesSubscriptionProfile,
+  sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+});
+const hermesSubscriptionStatus = z.object({
+  sessionId: z.string(),
+  status: z.enum(['pending', 'approved', 'expired', 'cancelled', 'denied', 'error']),
+  signedIn: z.boolean(),
+  accountLabel: z.string().optional(),
+});
+
 export const hermesContract = {
+  subscription: {
+    start: oc.input(z.object({ profile: hermesSubscriptionProfile })).output(z.object({
+      sessionId: z.string(), userCode: z.string(), verificationUrl: z.string(),
+      expiresIn: z.number().positive(), pollInterval: z.number().positive(),
+    })),
+    poll: oc.input(hermesSubscriptionSession).output(hermesSubscriptionStatus),
+    cancel: oc.input(hermesSubscriptionSession).output(hermesSubscriptionStatus),
+  },
   install: {
     status: oc.output(hermesInstallStatusSchema),
     start: oc.output(hermesInstallStatusSchema),

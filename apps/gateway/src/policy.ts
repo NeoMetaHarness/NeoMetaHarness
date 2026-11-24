@@ -22,6 +22,9 @@ const DEPLOYMENT_PROCEDURE_DESKTOP_POLICY: Readonly<Record<string, PolicyLevel>>
   // Hermes runtime, profiles, and dashboard
   'x.engine-hermes.install.status': 'viewer',
   'x.engine-hermes.install.start': 'admin',
+  'x.engine-hermes.subscription.start': 'admin',
+  'x.engine-hermes.subscription.poll': 'admin',
+  'x.engine-hermes.subscription.cancel': 'admin',
   'x.engine-superagent.install.status': 'viewer',
   'x.engine-superagent.install.start': 'admin',
   'x.engine-hermes.skills.list': 'viewer',

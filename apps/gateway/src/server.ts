@@ -1424,6 +1424,20 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         },
       },
       'engine-hermes': {
+        subscription: {
+          start: os.x['engine-hermes'].subscription.start.handler(async ({ input, context }) => {
+            authorize('x.engine-hermes.subscription.start', context);
+            return invokeHermes('subscription/start', input) as Promise<any>;
+          }),
+          poll: os.x['engine-hermes'].subscription.poll.handler(async ({ input, context }) => {
+            authorize('x.engine-hermes.subscription.poll', context);
+            return invokeHermes('subscription/poll', input) as Promise<any>;
+          }),
+          cancel: os.x['engine-hermes'].subscription.cancel.handler(async ({ input, context }) => {
+            authorize('x.engine-hermes.subscription.cancel', context);
+            return invokeHermes('subscription/cancel', input) as Promise<any>;
+          }),
+        },
         install: {
           status: os.x['engine-hermes'].install.status.handler(async ({ context }) => {
             authorize('x.engine-hermes.install.status', context);

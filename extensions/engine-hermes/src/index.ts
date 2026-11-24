@@ -83,6 +83,16 @@ export default defineExtension({
     });
     ctx.health(() => ({ ok: service.connected, pid: service.pid }));
 
+    ctx.route('subscription/start', ({ body }) => service.subscription.start((body as { profile: string }).profile));
+    ctx.route('subscription/poll', ({ body }) => {
+      const { profile, sessionId } = body as { profile: string; sessionId: string };
+      return service.subscription.poll(profile, sessionId);
+    });
+    ctx.route('subscription/cancel', ({ body }) => {
+      const { profile, sessionId } = body as { profile: string; sessionId: string };
+      return service.subscription.cancel(profile, sessionId);
+    });
+
     ctx.route('profiles/list', () => service.listProfiles());
     ctx.route('profiles/create', ({ body }) => service.createProfile((body as { name: string }).name));
     ctx.route('profiles/delete', async ({ body }) => {

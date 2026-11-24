@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import type { HermesEvent } from '@neometaharness/contracts';
 import { engineFolder, resolveEngineSource, upstreamLockFile, type EngineSource, type EngineSourceOrigin } from '@neometaharness/kernel';
 import { DshProjector, type VaultService, type VaultScope } from '@neometaharness/vault';
+import { HermesSubscription } from './subscription.js';
 
 const exec = promisify(execFile);
 const extensionDir = fileURLToPath(new URL('../', import.meta.url));
@@ -240,6 +241,7 @@ async function killTree(child: ChildProcess): Promise<void> {
 }
 
 export class HermesRuntime {
+  readonly subscription = new HermesSubscription((path, method) => this.request('dashboard', path, { method }));
   private readonly home: string;
   private readonly credentials: CredentialSource;
   private readonly dashboardToken = secret();
