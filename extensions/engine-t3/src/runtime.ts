@@ -3,7 +3,7 @@ import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_pro
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { delimiter, isAbsolute, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { system32 } from './system-tools.js';
@@ -84,18 +84,39 @@ async function removeStaleServer(marker: string, statePath: string, executable: 
 
 /** Each service has a Neo-owned home, including all standard user-data and cache locations. */
 export async function isolatedT3Environment(root: string, original = process.env): Promise<NodeJS.ProcessEnv> {
-  const folders = ['home', 'appdata', 'localappdata', 'tmp', 'state', 'config', 'cache', 'data', 'codex', 'claude'];
-  await Promise.all(folders.map((folder) => mkdir(join(root, folder), { recursive: true })));
-  const environment: NodeJS.ProcessEnv = {
-    PATH: original.PATH ?? original.Path, PATHEXT: original.PATHEXT,
-    SystemRoot: original.SystemRoot, WINDIR: original.WINDIR, ComSpec: original.ComSpec,
-    SYSTEMDRIVE: original.SYSTEMDRIVE,
+  const homes = {
     HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
-    CODEX_HOME: join(root, 'codex'), CLAUDE_CONFIG_DIR: join(root, 'claude'),
     APPDATA: join(root, 'appdata'), LOCALAPPDATA: join(root, 'localappdata'),
     TEMP: join(root, 'tmp'), TMP: join(root, 'tmp'), TMPDIR: join(root, 'tmp'),
-    XDG_STATE_HOME: join(root, 'state'), XDG_CONFIG_HOME: join(root, 'config'), XDG_CACHE_HOME: join(root, 'cache'), XDG_DATA_HOME: join(root, 'data'),
+    XDG_STATE_HOME: join(root, 'state'), XDG_CONFIG_HOME: join(root, 'config'),
+    XDG_CACHE_HOME: join(root, 'cache'), XDG_DATA_HOME: join(root, 'data'),
     T3CODE_HOME: join(root, 'state'),
+    CODEX_HOME: join(root, 'codex'),
+    CLAUDE_CONFIG_DIR: join(root, 'claude'),
+    CLAUDE_CODE_PLUGIN_CACHE_DIR: join(root, 'claude', 'plugins'),
+    GEMINI_HOME: join(root, 'gemini'),
+    ANTIGRAVITY_DATA_DIR: join(root, 'antigravity'),
+    GROK_HOME: join(root, 'grok'),
+    OPENCODE_DATA_DIR: join(root, 'data', 'opencode'),
+  };
+  await Promise.all([...new Set(Object.values(homes))].map((home) => mkdir(home, { recursive: true })));
+  // Codex maintenance can derive its home from the executable's standalone install.
+  // Do not discover private installations through the Gateway's inherited PATH.
+  const hostHomes = [original.HOME, original.USERPROFILE].filter((home): home is string => !!home);
+  const privateHomes = [
+    ...hostHomes.flatMap((home) => ['.t3', '.codex', '.claude'].map((name) => join(home, name))),
+    original.T3CODE_HOME, original.CODEX_HOME, original.CLAUDE_CONFIG_DIR, original.GEMINI_HOME, original.GROK_HOME,
+  ].filter((home): home is string => !!home && isAbsolute(home));
+  const path = (original.PATH ?? original.Path)?.split(delimiter).map((entry) => entry.trim().replace(/^"(.*)"$/, '$1'))
+    .filter((entry) => isAbsolute(entry) && !privateHomes.some((home) => {
+      const inside = relative(home, entry);
+      return inside !== '..' && !inside.startsWith('..' + sep) && !isAbsolute(inside);
+    })).join(delimiter);
+  const environment: NodeJS.ProcessEnv = {
+    PATH: path, PATHEXT: original.PATHEXT,
+    SystemRoot: original.SystemRoot, WINDIR: original.WINDIR, ComSpec: original.ComSpec,
+    SYSTEMDRIVE: original.SYSTEMDRIVE,
+    ...homes,
   };
   // Allow TLS configuration for upstream provider requests, without inheriting the owner's T3 session or tokens.
   for (const key of ['HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy',

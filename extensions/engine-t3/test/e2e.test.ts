@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { lstat, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { delimiter, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
@@ -140,6 +140,25 @@ function connectedT3Sockets(serverPort: number, gatewayPid: number): number {
   return t3SocketAddresses(serverPort, gatewayPid).length;
 }
 
+async function buildWireBundle(cache: string) {
+  await mkdir(cache, { recursive: true });
+  const bundle = join(cache, 'pinned-wire.bundle.mjs');
+  await build({
+    entryPoints: [join(here, 'test/wire.entry.ts')], outfile: bundle, bundle: true,
+    platform: 'node', target: 'node22', format: 'esm', nodePaths: [join(here, 'node_modules')],
+    plugins: [{ name: 'pinned-t3-schema-only', setup(builder) {
+      const source = {
+        '@t3tools/contracts': 'packages/contracts/src/index.ts',
+        '@t3tools/contracts/relay': 'packages/contracts/src/relay.ts',
+        '@t3tools/client-runtime/rpc-protocol': 'packages/client-runtime/src/rpc/protocol.ts',
+      } as Record<string, string>;
+      builder.onResolve({ filter: /^@t3tools\// }, (args) => source[args.path]
+        ? { path: join(upstream, source[args.path]) } : undefined);
+    } }],
+  });
+  return bundle;
+}
+
 async function main() {
   await assert.rejects(new T3ControlPlane().connect('http://192.0.2.1', 'isolated-fixture-token'), /HTTPS origin/);
   await assert.rejects(new T3ControlPlane().connect('http://127.example.invalid', 'isolated-fixture-token'), /HTTPS origin/);
@@ -174,21 +193,7 @@ async function main() {
   let app: Awaited<ReturnType<typeof gateway>> | undefined;
   let socket: WebSocket | undefined;
   try {
-    await mkdir(cache, { recursive: true });
-    const bundle = join(cache, 'pinned-wire.bundle.mjs');
-    await build({
-      entryPoints: [join(here, 'test/wire.entry.ts')], outfile: bundle, bundle: true,
-      platform: 'node', target: 'node22', format: 'esm', nodePaths: [join(here, 'node_modules')],
-      plugins: [{ name: 'pinned-t3-schema-only', setup(builder) {
-        const source = {
-          '@t3tools/contracts': 'packages/contracts/src/index.ts',
-          '@t3tools/contracts/relay': 'packages/contracts/src/relay.ts',
-          '@t3tools/client-runtime/rpc-protocol': 'packages/client-runtime/src/rpc/protocol.ts',
-        } as Record<string, string>;
-        builder.onResolve({ filter: /^@t3tools\// }, (args) => source[args.path]
-          ? { path: join(upstream, source[args.path]) } : undefined);
-      } }],
-    });
+    const bundle = await buildWireBundle(cache);
     const isolatedPort = await port();
     const url = `http://127.0.0.1:${isolatedPort}`;
     const environment = await isolatedT3Environment(temp);
@@ -302,28 +307,117 @@ async function main() {
   }
 }
 
-async function ownerHomeTimestamps() {
+async function ownerT3Timestamps() {
   assert.ok(process.env.USERPROFILE, 'Windows USERPROFILE is required for the owner-home smoke check');
-  return Object.fromEntries(await Promise.all(['.t3', '.codex', '.claude'].map(async (name) => {
-    try {
-      const info = await lstat(join(process.env.USERPROFILE!, name));
-      return [name, { lastWrite: info.mtime.toISOString(), changed: info.ctime.toISOString() }];
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      return [name, 'absent'];
+  const root = join(process.env.USERPROFILE, '.t3');
+  const hash = createHash('sha256');
+  let entries = 0;
+  async function walk(path: string, name: string) {
+    const info = await lstat(path, { bigint: true });
+    entries++;
+    // lstat records junctions and symlinks without following them outside the tree.
+    hash.update(JSON.stringify([name, info.mode.toString(), info.size.toString(),
+      info.mtimeNs.toString(), info.ctimeNs.toString(), info.birthtimeNs.toString()]));
+    if (info.isDirectory()) {
+      for (const child of (await readdir(path)).sort()) await walk(join(path, child), join(name, child));
     }
-  })));
+  }
+  if (await lstat(root).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+    return undefined;
+  })) await walk(root, '.');
+  return { entries, digest: hash.digest('hex') };
+}
+
+const expectedHomes = {
+  HOME: 'home', USERPROFILE: 'home', APPDATA: 'appdata', LOCALAPPDATA: 'localappdata',
+  XDG_CONFIG_HOME: 'config', XDG_CACHE_HOME: 'cache', XDG_DATA_HOME: 'data', XDG_STATE_HOME: 'state',
+  TEMP: 'tmp', TMP: 'tmp', TMPDIR: 'tmp', T3CODE_HOME: 'state',
+  CODEX_HOME: 'codex', CLAUDE_CONFIG_DIR: 'claude', CLAUDE_CODE_PLUGIN_CACHE_DIR: 'claude/plugins',
+  GEMINI_HOME: 'gemini', ANTIGRAVITY_DATA_DIR: 'antigravity', GROK_HOME: 'grok', OPENCODE_DATA_DIR: 'data/opencode',
+};
+
+async function probeProviderHomes(
+  root: string, executable: string, serverPort: number, gatewayClient: Client, forbiddenPath: string,
+) {
+  const origin = 'http://127.0.0.1:' + serverPort;
+  const base = join(root, 'state');
+  const { stdout: session } = await promisify(execFile)(executable, ['auth', 'session', 'issue', '--base-dir', base,
+    '--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'providers:manage',
+    '--ttl', '2m', '--label', 'nmh-home-probe', '--token-only'],
+  { cwd: root, env: await isolatedT3Environment(root), windowsHide: true, timeout: 30_000 });
+  const report = join(root, 'provider-env.json');
+  const agent = join(root, 'home-probe.cjs');
+  const keys = Object.keys(expectedHomes);
+  await writeFile(agent, `
+const { renameSync, writeFileSync } = require('node:fs');
+const { createInterface } = require('node:readline');
+const { homedir } = require('node:os');
+const input = createInterface({ input: process.stdin });
+input.on('line', (line) => {
+  const { id, method } = JSON.parse(line);
+  if (id === undefined) return;
+  let result = {};
+  if (method === 'initialize') {
+    const env = Object.fromEntries(${JSON.stringify(keys)}.map((key) => [key, process.env[key]]));
+    const reportPath = ${JSON.stringify(report)};
+    writeFileSync(reportPath + '.tmp', JSON.stringify({
+      env, home: homedir(), inheritedCredential: 'OPENAI_API_KEY' in process.env,
+      privatePath: (process.env.PATH || '').split(require('node:path').delimiter).includes(${JSON.stringify(forbiddenPath)}),
+    }));
+    renameSync(reportPath + '.tmp', reportPath);
+    result = { protocolVersion: 2, info: { name: 'isolated-home-probe', version: '1.0.0' }, capabilities: { session: {} } };
+  } else if (method === 'session/new') result = { sessionId: 'neo-home-probe', configOptions: [] };
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n');
+});
+`);
+  const projectId = randomUUID();
+  const providerId = 'nmhHomeProbe';
+  const bundle = await buildWireBundle(join(root, 'probe-bundle'));
+  const setup = spawn(process.execPath, [bundle], {
+    cwd: root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    env: { ...await isolatedT3Environment(root), T3_TEST_URL: origin, T3_TEST_SESSION: session.trim(),
+      T3_TEST_PROVIDER: providerId, T3_TEST_PROJECT: projectId, T3_TEST_WORKSPACE: join(root, 'probe-workspace'),
+      T3_TEST_FAKE_ACP: agent },
+  });
+  assert.match(await within(capture(setup), 20_000, 'T3 real provider setup'), /T3_ISOLATED_SETUP PASS/);
+  const threadId = randomUUID();
+  await gatewayClient.x['engine-t3'].create({ threadId, projectId, providerId, title: 'Home probe', model: 'default' });
+  await gatewayClient.x['engine-t3'].send({ threadId, text: 'Read the isolated environment' });
+  const deadline = Date.now() + 20_000;
+  while (!existsSync(report)) {
+    assert.ok(Date.now() < deadline, 'T3 did not launch the isolated provider probe');
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  const observed = JSON.parse(readFileSync(report, 'utf8'));
+  assert.equal(relative(root, observed.home), 'home');
+  for (const [key, path] of Object.entries(expectedHomes)) {
+    assert.equal(relative(root, observed.env[key]), join(path), key);
+  }
+  assert.equal(observed.inheritedCredential, false);
+  assert.equal(observed.privatePath, false);
+  console.log(`T3_PROVIDER_ENV PASS paths_inside_t3_home=${keys.length} os_home=isolated credential=absent private_path=absent`);
 }
 
 // Opt-in smoke for the real release, from a clean installed-app data layout.
 async function realInstall() {
-  const ownerBefore = await ownerHomeTimestamps();
+  const ownerBefore = await ownerT3Timestamps();
   const sessionTtl = 8000;
-  const env = { NODE_ENV: 'test', NMH_TEST_T3_SESSION_TTL_MS: String(sessionTtl) };
   const temp = await mkdtemp(join(tmpdir(), 'nmh-t3-real-release-'));
+  const poison = join(temp, 'ambient-codex');
+  const forbiddenPath = join(poison, 'bin');
+  await mkdir(forbiddenPath, { recursive: true });
+  const poisonedPath = forbiddenPath + delimiter + (process.env.Path ?? process.env.PATH ?? '');
+  const env = { NODE_ENV: 'test', NMH_TEST_T3_SESSION_TTL_MS: String(sessionTtl),
+    OPENAI_API_KEY: 'fixture-value-must-not-be-inherited',
+    CODEX_HOME: poison, CLAUDE_CONFIG_DIR: join(temp, 'ambient-claude'), GEMINI_HOME: join(temp, 'ambient-gemini'),
+    PATH: poisonedPath, Path: poisonedPath,
+  };
   let app: Awaited<ReturnType<typeof gateway>> | undefined;
   let pid: number | undefined;
   let stale: ChildProcess | undefined;
+  const engines = join(temp, 'engines');
+  const root = join(engines, 't3-home');
   const client = () => createORPCClient<Client>(new HttpLink({
     url: 'http://127.0.0.1:' + app!.ready,
     headers: () => ({ authorization: 'Bearer ' + app!.token }),
@@ -342,7 +436,7 @@ async function realInstall() {
     assert.equal(status?.health?.ok, true);
     pid = status?.health?.pid;
     assert.ok(pid);
-    assert.deepEqual(await client().x['engine-t3'].threads.list(), { projects: [], threads: [] });
+    assert.ok(Array.isArray((await client().x['engine-t3'].threads.list()).threads));
   }
   function confirmStopped(previousPid: number) {
     assert.throws(() => process.kill(previousPid, 0), { code: 'ESRCH' });
@@ -370,13 +464,12 @@ async function realInstall() {
     await confirmConnection(5000);
     assert.equal(pid, firstPid, 'Session renewal keeps the T3 server alive');
 
+    const executable = installedT3(engines)!;
+    await probeProviderHomes(root, executable, serverPort, client(), forbiddenPath);
     await client().extensions.disable({ id: 'engine-t3' });
     confirmStopped(firstPid);
-    const engines = join(temp, 'engines');
-    const root = join(engines, 't3-home');
     const isolated = await isolatedT3Environment(root);
     const stalePort = await port();
-    const executable = installedT3(engines)!;
     const deadGateway = app.child.pid!;
     await stop(app.child, true);
     stale = spawn(executable, ['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(stalePort),
@@ -405,9 +498,9 @@ async function realInstall() {
     assert.deepEqual(reads, [['PATH'], ['PATH', 'FNM_DIR', 'FNM_MULTISHELL_PATH']]);
     assert.ok(binary.includes('if (options?.shellEnvironmentPrepared === true) return;'));
     console.log('T3_RELEASE_BUNDLE PASS bootstrap_skip=true restored_keys=PATH,FNM_DIR,FNM_MULTISHELL_PATH');
-    const ownerAfter = await ownerHomeTimestamps();
-    assert.deepEqual(ownerAfter, ownerBefore, 'Owner home directory timestamps changed');
-    console.log('T3_OWNER_HOMES PASS', JSON.stringify(ownerAfter));
+    const ownerAfter = await ownerT3Timestamps();
+    assert.deepEqual(ownerAfter, ownerBefore, 'Owner .t3 tree timestamps changed');
+    console.log('T3_OWNER_T3 PASS unchanged_entries=' + ownerAfter.entries);
     console.log('T3_REAL_INSTALL PASS download=github first_run=true renewal_past_expiry=true same_pid=true stale_reclaimed=true disable=stopped gateway_exit=stopped');
   } finally {
     await stop(app?.child, true);

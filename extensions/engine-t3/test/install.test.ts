@@ -127,6 +127,11 @@ try {
   assert.equal(environment.CODEX_HOME, join(engines, 'isolated-env/codex'));
   assert.equal(environment.CLAUDE_CONFIG_DIR, join(engines, 'isolated-env/claude'));
 
+  const providerHomes = {
+    CODEX_HOME: ['codex'], CLAUDE_CONFIG_DIR: ['claude'], CLAUDE_CODE_PLUGIN_CACHE_DIR: ['claude', 'plugins'],
+    GEMINI_HOME: ['gemini'], ANTIGRAVITY_DATA_DIR: ['antigravity'], GROK_HOME: ['grok'],
+    OPENCODE_DATA_DIR: ['data', 'opencode'],
+  };
   const fixtureCli = join(temp, 'fake-t3.cjs');
   const fixtureScript = `
 const http = require('node:http');
@@ -147,6 +152,10 @@ const host = option('--host');
 const port = Number(option('--port'));
 const bootstrap = JSON.parse(fs.readFileSync(0, 'utf8'));
 if (!bootstrap.shellEnvironmentPrepared) process.exit(5);
+const providerHomeKeys = ${JSON.stringify(Object.keys(providerHomes))};
+fs.writeFileSync(path.join(base, 'child-env.json'), JSON.stringify(
+  Object.fromEntries(providerHomeKeys.map((key) => [key, process.env[key]]))
+));
 const server = http.createServer((request, response) => {
   if (request.url !== '/api/auth/websocket-ticket') return response.writeHead(404).end();
   if (request.headers.authorization) return response.writeHead(400).end();
@@ -194,6 +203,10 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   assert.equal(issued.home, launched.home);
   assert.deepEqual(issued.scopes, ['orchestration:read', 'orchestration:operate', 'providers:manage']);
   assert.ok(launched.home.includes('t3-home'));
+  const actualChildHomes = JSON.parse(await readFile(join(state, 'child-env.json'), 'utf8'));
+  for (const [key, folders] of Object.entries(providerHomes)) {
+    assert.equal(actualChildHomes[key], join(engines, 't3-home', ...folders), key);
+  }
   await eventually(() => tokens.size, (count) => count >= 2, 'proactive renewal');
   assert.equal(runtime.pid, launched.pid);
   const issuedBeforeClose = tokens.size;
@@ -209,7 +222,7 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   }, Boolean, 'server process stops');
 
   console.log('T3_INSTALL PASS checksum=true unsafe_entries=6 idempotent=true');
-  console.log('T3_RUNTIME PASS loopback=true isolated_home=true first_run=true scoped_session=true proactive_renewal=true socket_close_reconnect=true same_pid=true stop=true');
+  console.log('T3_RUNTIME PASS loopback=true isolated_home=true first_run=true child_homes=isolated scoped_session=true proactive_renewal=true socket_close_reconnect=true same_pid=true stop=true');
 } finally {
   await runtime?.stop();
   if (server) await new Promise<void>((done) => server!.close(() => done()));
