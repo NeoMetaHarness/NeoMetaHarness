@@ -58,6 +58,8 @@ export class SuperagentInstaller {
   constructor(private readonly options: {
     /** App-data engines folder; undefined when this Gateway has no data folder to install into. */
     enginesDir?: string;
+    /** The Gateway's runtime root, which holds upstream.lock.json. */
+    runtimeRoot?: string;
     /** Activation found the source but could not build its bundle: start as failed, so the UI can retry. */
     failure?: unknown;
     /** Test fixture server; production downloads from GitHub. */
@@ -98,7 +100,7 @@ export class SuperagentInstaller {
     try {
       if (!enginesDir) throw new EngineInstallError('config', 'No engines folder: the Gateway has no data directory');
       const source = await installEngineSource({
-        ...superagentSourceOptions(enginesDir), enginesDir, signal,
+        ...superagentSourceOptions(enginesDir, this.options.runtimeRoot), enginesDir, signal,
         ...(this.options.downloadBase ? { downloadBase: this.options.downloadBase } : {}),
         onProgress: (progress: EngineProgress) => {
           // Download 0-70 %, check 70 %, unpack 70-90 %, build 90-97 %.

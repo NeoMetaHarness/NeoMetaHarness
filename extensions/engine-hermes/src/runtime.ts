@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { HermesEvent } from '@neometaharness/contracts';
-import { engineFolder, resolveEngineSource, type EngineSource, type EngineSourceOrigin } from '@neometaharness/kernel';
+import { engineFolder, resolveEngineSource, upstreamLockFile, type EngineSource, type EngineSourceOrigin } from '@neometaharness/kernel';
 import { DshProjector, type VaultService, type VaultScope } from '@neometaharness/vault';
 
 const exec = promisify(execFile);
@@ -25,13 +25,9 @@ export async function hermesBaseEnvironment(): Promise<Record<string, string>> {
 export const HERMES_PIN = 'hermes-agent';
 const HERMES_PROBE = 'gateway/platforms/api_server.py';
 
-/**
- * upstream.lock.json of this repository or unpacked runtime. Isolated tests (NODE_ENV=test) may point at a
- * fixture lock whose pin matches a local fixture tarball; production always verifies against the shipped lock.
- */
-export function hermesLockFile(): string {
-  const fixture = process.env.NODE_ENV === 'test' ? process.env.NMH_TEST_UPSTREAM_LOCK : undefined;
-  return fixture ?? join(repoDir, 'upstream.lock.json');
+/** upstream.lock.json of the Gateway's runtime root, else of this source tree (see upstreamLockFile). */
+export function hermesLockFile(runtimeRoot?: string): string {
+  return upstreamLockFile(runtimeRoot, repoDir);
 }
 
 /** Where a Hermes venv, uv's cache and uv-managed Python live for one source. */
@@ -54,12 +50,12 @@ export function hermesLayout(source: Pick<EngineSource, 'origin' | 'pin'>, engin
   };
 }
 
-export function hermesSourceOptions(enginesDir?: string) {
-  return { name: HERMES_PIN, lockFile: hermesLockFile(), searchFrom: repoDir, probe: HERMES_PROBE, ...(enginesDir ? { enginesDir } : {}) };
+export function hermesSourceOptions(enginesDir?: string, runtimeRoot?: string) {
+  return { name: HERMES_PIN, lockFile: hermesLockFile(runtimeRoot), searchFrom: repoDir, probe: HERMES_PROBE, ...(enginesDir ? { enginesDir } : {}) };
 }
 
-export function resolveHermesSource(enginesDir?: string): HermesSource | undefined {
-  const source = resolveEngineSource(hermesSourceOptions(enginesDir));
+export function resolveHermesSource(enginesDir?: string, runtimeRoot?: string): HermesSource | undefined {
+  const source = resolveEngineSource(hermesSourceOptions(enginesDir, runtimeRoot));
   return source && { path: source.path, origin: source.origin, layout: hermesLayout(source, enginesDir) };
 }
 

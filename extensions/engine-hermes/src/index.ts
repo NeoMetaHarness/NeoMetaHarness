@@ -19,12 +19,14 @@ export default defineExtension({
     // P7-16: installed apps keep engine sources, venvs and uv's cache in the Gateway's engines folder (local app
     // data), outside the versioned runtime. Without one (an in-memory Gateway) nothing is installed.
     const enginesDir = ctx.inject<string>('enginesDir');
-    const source = resolveHermesSource(enginesDir);
+    // The repository or unpacked runtime the Gateway serves; it holds upstream.lock.json.
+    const runtimeRoot = ctx.inject<string>('runtimeRoot');
+    const source = resolveHermesSource(enginesDir, runtimeRoot);
     if (!source || (source.origin === 'app-data' && !await hermesVenvReady(source.path, source.layout))) {
       // Not installed: stay up so Extensions and onboarding can install Hermes. No agentRuntime is provided, so
       // channels reports that it needs Hermes until the install reactivates this extension.
       const installer = new HermesInstaller({
-        enginesDir,
+        enginesDir, runtimeRoot,
         ...(process.env.NODE_ENV === 'test' && process.env.NMH_TEST_ENGINE_DOWNLOAD_BASE ? { downloadBase: process.env.NMH_TEST_ENGINE_DOWNLOAD_BASE } : {}),
         onInstalled: () => { void ctx.reactivate().catch((error) => console.error('Hermes restart after install failed', error)); },
         log: (message, error) => console.error(message, error),

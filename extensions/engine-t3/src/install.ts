@@ -7,7 +7,7 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { downloadEngineArchive, EngineInstallError, readEnginePin, retrying, safeEntryPath } from '@neometaharness/kernel';
+import { downloadEngineArchive, EngineInstallError, readEnginePin, retrying, safeEntryPath, upstreamLockFile } from '@neometaharness/kernel';
 
 import { system32 } from './system-tools.js';
 
@@ -18,9 +18,7 @@ const exec = promisify(execFile);
  * Isolated tests (NODE_ENV=test) may point at a fixture lock.
  */
 export function t3LockFile(runtimeRoot?: string): string {
-  const fixture = process.env.NODE_ENV === 'test' ? process.env.NMH_TEST_UPSTREAM_LOCK : undefined;
-  return fixture || (runtimeRoot ? join(runtimeRoot, 'upstream.lock.json')
-    : fileURLToPath(new URL('../../../upstream.lock.json', import.meta.url)));
+  return upstreamLockFile(runtimeRoot, fileURLToPath(new URL('../../../', import.meta.url)));
 }
 
 type ReleasePin = { ref: string; commit?: string; cli_assets?: Record<string, string> };

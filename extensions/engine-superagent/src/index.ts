@@ -987,7 +987,9 @@ export default defineExtension({
     // (no bridge key, no Inbox), and the install reactivates this extension. A source whose bundle cannot be built
     // (esbuild quarantined, disk full) is the same: install mode with the failure, so Try again can recover it.
     const enginesDir = ctx.inject<string>('enginesDir');
-    const source = resolveSuperagentSource(enginesDir);
+    // The repository or unpacked runtime the Gateway serves; it holds upstream.lock.json.
+    const runtimeRoot = ctx.inject<string>('runtimeRoot');
+    const source = resolveSuperagentSource(enginesDir, runtimeRoot);
     let bundle: SuperagentBundle | undefined;
     let buildFailure: unknown;
     if (source) {
@@ -996,7 +998,7 @@ export default defineExtension({
     }
     if (!source || !bundle) {
       const installer = new SuperagentInstaller({
-        enginesDir, ...(buildFailure === undefined ? {} : { failure: buildFailure }),
+        enginesDir, runtimeRoot, ...(buildFailure === undefined ? {} : { failure: buildFailure }),
         ...(process.env.NODE_ENV === 'test' && process.env.NMH_TEST_ENGINE_DOWNLOAD_BASE ? { downloadBase: process.env.NMH_TEST_ENGINE_DOWNLOAD_BASE } : {}),
         onInstalled: () => { void ctx.reactivate().catch((error) => console.error('Super agent restart after install failed', error)); },
         log: (message, error) => console.error(message, error),

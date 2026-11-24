@@ -7,7 +7,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { EngineInstallError, engineDownloadUrl, installEngineSource, resolveEngineSource, retrying, safeEntryPath } from '../src/engine-source.js';
+import { EngineInstallError, engineDownloadUrl, installEngineSource, resolveEngineSource, retrying, safeEntryPath, upstreamLockFile } from '../src/engine-source.js';
 
 delete process.env.NMH_UPSTREAM_CACHE; // the cases below choose the development cache explicitly
 
@@ -239,6 +239,23 @@ try {
   await failsWith(installEngineSource({ ...aborted, signal: controller.signal }), 'cancelled', /cancelled/);
   assert.deepEqual(leftovers(aborted.enginesDir), []);
 
+  // The Gateway's runtime root wins over an extension's own tree (an upgraded copy lives in extension storage);
+  // only NODE_ENV=test honours a fixture lock.
+  {
+    const saved = { env: process.env.NODE_ENV, lock: process.env.NMH_TEST_UPSTREAM_LOCK };
+    try {
+      process.env.NMH_TEST_UPSTREAM_LOCK = join(tmpdir(), 'fixture.lock.json');
+      process.env.NODE_ENV = 'production';
+      assert.equal(upstreamLockFile(join(tmpdir(), 'runtime'), join(tmpdir(), 'own')), join(tmpdir(), 'runtime', 'upstream.lock.json'));
+      assert.equal(upstreamLockFile(undefined, join(tmpdir(), 'own')), join(tmpdir(), 'own', 'upstream.lock.json'));
+      process.env.NODE_ENV = 'test';
+      assert.equal(upstreamLockFile(join(tmpdir(), 'runtime'), join(tmpdir(), 'own')), join(tmpdir(), 'fixture.lock.json'));
+    } finally {
+      if (saved.env === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = saved.env;
+      if (saved.lock === undefined) delete process.env.NMH_TEST_UPSTREAM_LOCK; else process.env.NMH_TEST_UPSTREAM_LOCK = saved.lock;
+    }
+  }
+  console.log('PASS engine source lock: runtime root first, own tree fallback, test-only fixture override');
   console.log('PASS engine source: dev cache first, app-data install verified by sha256 and commit, marker reuse, single download');
   console.log('PASS engine source hardening: dev cache only inside a checkout, commit URL, leftovers removed, proxy, busy-file retry, cancelled shared job');
   console.log('PASS engine source refusals: sha, commit, traversal, symlink, hard link, two roots, missing probe, not gzip, HTTP/network, unpinned, cancelled');

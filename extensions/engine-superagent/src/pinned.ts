@@ -12,29 +12,25 @@ import { createHash, randomBytes } from 'node:crypto';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { build, version as esbuildVersion } from 'esbuild';
-import { resolveEngineSource, retrying, type EngineSource } from '@neometaharness/kernel';
+import { resolveEngineSource, retrying, upstreamLockFile, type EngineSource } from '@neometaharness/kernel';
 
 const extensionDir = resolve(import.meta.dirname, '..');
 const repoDir = resolve(extensionDir, '../..');
 export const SUPERAGENT_PIN = 'dsh-superagent';
 const SUPERAGENT_PROBE = 'src/core/engine.ts';
 
-/**
- * upstream.lock.json of this repository or unpacked runtime. Isolated tests (NODE_ENV=test) may point at a
- * fixture lock whose pin matches a local fixture tarball; production always verifies against the shipped lock.
- */
-export function superagentLockFile(): string {
-  const fixture = process.env.NODE_ENV === 'test' ? process.env.NMH_TEST_UPSTREAM_LOCK : undefined;
-  return fixture ?? join(repoDir, 'upstream.lock.json');
+/** upstream.lock.json of the Gateway's runtime root, else of this source tree (see upstreamLockFile). */
+export function superagentLockFile(runtimeRoot?: string): string {
+  return upstreamLockFile(runtimeRoot, repoDir);
 }
 
-export function superagentSourceOptions(enginesDir?: string) {
-  return { name: SUPERAGENT_PIN, lockFile: superagentLockFile(), searchFrom: repoDir, probe: SUPERAGENT_PROBE, ...(enginesDir ? { enginesDir } : {}) };
+export function superagentSourceOptions(enginesDir?: string, runtimeRoot?: string) {
+  return { name: SUPERAGENT_PIN, lockFile: superagentLockFile(runtimeRoot), searchFrom: repoDir, probe: SUPERAGENT_PROBE, ...(enginesDir ? { enginesDir } : {}) };
 }
 
 /** The pinned source to run, or undefined when it is neither in the development cache nor installed. */
-export function resolveSuperagentSource(enginesDir?: string): EngineSource | undefined {
-  return resolveEngineSource(superagentSourceOptions(enginesDir));
+export function resolveSuperagentSource(enginesDir?: string, runtimeRoot?: string): EngineSource | undefined {
+  return resolveEngineSource(superagentSourceOptions(enginesDir, runtimeRoot));
 }
 
 export interface SuperagentBundle { path: string; key: string; built: boolean }

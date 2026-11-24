@@ -73,6 +73,17 @@ export class EngineInstallError extends Error {
 
 const MARKER = '.neo-engine.json';
 
+/**
+ * upstream.lock.json of the repository or unpacked runtime the Gateway serves (the injected runtimeRoot),
+ * else of `fallbackRoot` (an extension's own source tree). An upgraded generation is copied into extension
+ * storage, so only runtimeRoot finds the lock there. Isolated tests (NODE_ENV=test) may point at a fixture lock
+ * whose pin matches a local fixture tarball; production always verifies against the shipped lock.
+ */
+export function upstreamLockFile(runtimeRoot: string | undefined, fallbackRoot: string): string {
+  const fixture = process.env.NODE_ENV === 'test' ? process.env.NMH_TEST_UPSTREAM_LOCK : undefined;
+  return fixture || join(runtimeRoot ?? fallbackRoot, 'upstream.lock.json');
+}
+
 export function readEnginePin(lockFile: string, name: string): EnginePin {
   const lock = JSON.parse(readFileSync(lockFile, 'utf8').replace(/^﻿/, '')) as { pins?: Record<string, Omit<EnginePin, 'name'>> };
   const pin = lock.pins?.[name];

@@ -59,13 +59,15 @@ export class HermesInstaller {
   constructor(private readonly options: {
     /** App-data engines folder; undefined when this Gateway has no data folder to install into. */
     enginesDir?: string;
+    /** The Gateway's runtime root, which holds upstream.lock.json. */
+    runtimeRoot?: string;
     /** Test fixture server; production downloads from GitHub. */
     downloadBase?: string;
     /** Called once Hermes is ready to run; the extension restarts itself (ctx.reactivate). */
     onInstalled: () => void;
     log?: (message: string, error: unknown) => void;
   }) {
-    const source = resolveHermesSource(options.enginesDir);
+    const source = resolveHermesSource(options.enginesDir, options.runtimeRoot);
     this.status = source
       ? { state: 'not_installed', message: 'Hermes needs to finish installing.' }
       : NOT_INSTALLED;
@@ -98,7 +100,7 @@ export class HermesInstaller {
     try {
       if (!enginesDir) throw new EngineInstallError('config', 'No engines folder: the Gateway has no data directory');
       const source = await installEngineSource({
-        ...hermesSourceOptions(enginesDir), enginesDir, signal,
+        ...hermesSourceOptions(enginesDir, this.options.runtimeRoot), enginesDir, signal,
         ...(this.options.downloadBase ? { downloadBase: this.options.downloadBase } : {}),
         onProgress: (progress: EngineProgress) => {
           // Download 0-60 %, check 60 %, unpack 60-80 %, Python 80-95 %.
