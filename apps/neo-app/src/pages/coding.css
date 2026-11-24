@@ -1,5 +1,5 @@
 .coding-page { min-height: calc(100dvh - 112px); }
-.coding-workspace { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 20px; min-height: 620px; height: calc(100dvh - 225px); }
+.coding-workspace { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 20px; min-height: 0; height: max(440px, calc(100dvh - 225px)); }
 .coding-sidebar { border: 1px solid var(--neo-color-border); padding: 18px; overflow-y: auto; }
 .coding-sidebar h2 { margin: 16px 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--neo-color-text-muted); }
 .coding-project, .coding-thread { width: 100%; display: block; border: 1px solid transparent; border-bottom-color: var(--neo-color-border); background: transparent; color: inherit; padding: 12px; text-align: left; font: inherit; cursor: pointer; }
@@ -15,10 +15,24 @@
 .coding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .coding-actions label { align-self: center; font-size: 12px; }
 .coding-actions select { max-width: 155px; padding: 7px; font: inherit; color: inherit; background: var(--neo-color-surface); border: 1px solid var(--neo-color-control-border); }
-.coding-conversation > div:last-child { flex: 1; min-height: 0; }
+ .coding-thread-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 32%); flex: 1; min-height: 0; }
+.coding-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.coding-chat > * { flex: 1; min-height: 0; }
+.coding-inspector { min-width: 0; overflow: auto; padding: var(--neo-space-4); border-left: 1px solid var(--neo-color-border); background: var(--neo-color-surface); }
+.coding-inspector-controls { display: grid; gap: var(--neo-space-2); margin-block: var(--neo-space-3); }
+.coding-inspector-controls select { width: 100%; min-width: 0; background: var(--neo-color-surface); color: var(--neo-color-text); border: 1px solid var(--neo-color-control-border); padding: var(--neo-space-2); font: inherit; }
+.coding-muted { color: var(--neo-color-text-muted); }
+.coding-workflow-section { display: grid; gap: var(--neo-space-3); padding-block: var(--neo-space-3); border-bottom: 1px solid var(--neo-color-border); }
+.coding-workflow-section > * { min-width: 0; }
+.coding-terminal { min-height: 100px; height: 240px; max-height: 65dvh; overflow: auto; resize: vertical; margin: 0; padding: var(--neo-space-3); background: var(--neo-color-surface-muted); color: var(--neo-color-text); border: 1px solid var(--neo-color-control-border); white-space: pre; }
+.coding-inspector summary { cursor: pointer; font-weight: 650; padding-block: var(--neo-space-2); }
+.coding-page :is(button, select, summary):focus-visible { outline: 2px solid var(--neo-color-focus); outline-offset: 2px; }
 .coding-empty { margin: auto; color: var(--neo-color-text-muted); }
 .coding-stream { min-width: 0; overflow-wrap: anywhere; }
-.coding-approval { border: 1px solid currentColor; padding: 14px; margin-top: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.coding-approval { margin: var(--neo-space-3); border-color: var(--neo-color-warning); background: var(--neo-color-warning-surface); }
+.coding-approval-content { display: grid; gap: var(--neo-space-2); }
+.coding-approval-content p { margin: 0; }
 .coding-approval p { flex: 1; }
-.coding-diff { max-height: 180px; overflow: auto; padding: 12px; border-bottom: 1px solid currentColor; font-size: 12px; white-space: pre-wrap; }
-@media (max-width: 800px) { .coding-workspace { grid-template-columns: 1fr; height: auto; } .coding-sidebar { max-height: 330px; } .coding-conversation { height: 70dvh; } }
+.coding-diff { min-width: 0; overflow: auto; border-bottom: 1px solid var(--neo-color-border); padding-bottom: var(--neo-space-2); }
+@media (max-width: 1100px) { .coding-thread-body { grid-template-columns: 1fr; grid-template-rows: minmax(280px, 1fr) minmax(0, auto); } .coding-inspector { max-height: 35dvh; border-left: 0; border-top: 1px solid var(--neo-color-border); } }
+@media (max-width: 800px) { .coding-workspace { grid-template-columns: 1fr; height: auto; } .coding-sidebar { max-height: 330px; } .coding-conversation { min-height: 75dvh; } .coding-chat { height: 55dvh; } .coding-conversation-title { flex-wrap: wrap; } }

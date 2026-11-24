@@ -299,7 +299,9 @@ async function main() {
     assert.notEqual(firstDiff, secondDiff, 'two turns produce distinct checkpoint diffs');
     const checkpointAvailable = await viewer.evaluate('!!document.querySelector("[data-testid=coding-checkpoint]")');
     if (checkpointAvailable) {
-      await viewer.evaluate('window.confirm = () => true; document.querySelector("[data-testid=coding-restore]").click()');
+      await viewer.evaluate('document.querySelector("[data-testid=coding-restore]").click()');
+      await eventually(() => viewer.evaluate('!!document.querySelector("[role=alertdialog]")'), 'restore confirmation');
+      await viewer.evaluate(`Array.from(document.querySelectorAll('[role=alertdialog] button')).find(button => button.textContent.trim() === 'Restore checkpoint').click()`);
       await eventually(() => viewer.evaluate('document.querySelector("[data-testid=coding-status]")?.textContent === "Ready"'),
         'checkpoint conversation restore');
       assert.ok(!(await viewer.evaluate('document.querySelector("[role=alert]")?.textContent ?? ""')),

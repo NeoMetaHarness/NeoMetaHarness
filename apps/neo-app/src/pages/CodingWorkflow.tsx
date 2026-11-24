@@ -4,7 +4,7 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
-import { Button } from '@neometaharness/ui';
+import { Button, Heading, TextInput, TextArea } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -65,28 +65,35 @@ export default function CodingWorkflow({ threadId }: { threadId: string }) {
   };
   return <details data-testid="coding-workflow">
     <summary>Worktree, terminal and prepare PR</summary>
-    <div className="coding-actions">
+    <section className="coding-workflow-section">
+      <Heading level={4}>Worktree</Heading>
       <Button label="Enable DSH coding provider" isDisabled={busy} data-testid="coding-register"
         onClick={() => void action(async () => { await client.x['coding-workflow'].register(); return 'DSH provider ready: neo-coding'; })}>Enable DSH coding provider</Button>
-      <label>New branch <input data-testid="workflow-branch" value={branch} onChange={e => setBranch(e.target.value)} /></label>
+      <TextInput label="New branch" ref={el => { if (el) el.dataset.testid = "workflow-branch"; }} value={branch} onChange={setBranch} />
       <Button label="Create worktree" isDisabled={busy || !branch.trim()} data-testid="workflow-worktree"
         onClick={() => void action(async () => (await client.x['coding-workflow'].worktree({ threadId, branch })).path)}>Create worktree</Button>
+    </section>
+    <section className="coding-workflow-section">
+      <Heading level={4}>Terminal</Heading>
       <Button label="Open terminal output" isDisabled={busy} data-testid="workflow-terminal"
         onClick={() => void action(terminal)}>Open terminal output</Button>
-    </div>
-    <pre ref={output} data-testid="workflow-output" aria-label="Read-only terminal output" style={{ maxHeight: 240, overflow: 'auto' }} />
-    <label>Run command <input data-testid="workflow-command" value={command} onChange={e => setCommand(e.target.value)} /></label>
+    <pre ref={output} data-testid="workflow-output" aria-label="Read-only terminal output" className="coding-terminal" tabIndex={0} />
+    <TextInput label="Run command" ref={el => { if (el) el.dataset.testid = "workflow-command"; }} value={command} onChange={setCommand} />
     <Button label="Run in terminal" isDisabled={busy || !command.trim()} data-testid="workflow-run"
       onClick={() => void action(async () => { await client.x['coding-workflow'].terminal.run({ threadId, command }); return 'Command submitted'; })}>Run in terminal</Button>
-    <label>Commit title <input data-testid="workflow-title" value={title} onChange={e => setTitle(e.target.value)} /></label>
-    <label>Files to commit (one per line)<textarea data-testid="workflow-files" value={files} onChange={e => setFiles(e.target.value)} /></label>
-    <label>PR description<textarea data-testid="workflow-description" value={description} onChange={e => setDescription(e.target.value)} /></label>
+    </section>
+    <section className="coding-workflow-section">
+      <Heading level={4}>Prepare pull request locally</Heading>
+      <TextInput label="Commit title" ref={el => { if (el) el.dataset.testid = "workflow-title"; }} value={title} onChange={setTitle} />
+    <TextArea label="Files to commit (one per line)" ref={el => { if (el) el.dataset.testid = "workflow-files"; }} value={files} onChange={setFiles} rows={3} />
+    <TextArea label="PR description" ref={el => { if (el) el.dataset.testid = "workflow-description"; }} value={description} onChange={setDescription} rows={4} />
     <Button label="Prepare PR locally" isDisabled={busy || !title.trim() || !files.trim()} data-testid="workflow-prepare"
       onClick={() => void action(async () => {
         const result = await client.x['coding-workflow'].prepare({ threadId, title, description,
           files: files.split('\n').map(f => f.trim()).filter(Boolean) });
         return `Prepared ${result.branch} at ${result.commit}; description: ${result.descriptionFile}`;
       })}>Prepare PR locally</Button>
+    </section>
     <p role="status" data-testid="workflow-status">{status}</p>
   </details>;
 }

@@ -5,7 +5,7 @@ import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type A2uiActionInput, type T3Event } from '@neometaharness/contracts';
 import {
-  Button, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList, CheckboxInput,
+  AlertDialog, Badge, Banner, Button, ButtonGroup, Card, CodeBlock, Heading, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList, CheckboxInput,
   StreamView, type StreamViewHandle,
 } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
@@ -63,6 +63,7 @@ export default function Coding() {
   const [selectedTurn, setSelectedTurn] = useState(1);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [selectedCheckpoint, setSelectedCheckpoint] = useState('');
+  const [restoreRequest, setRestoreRequest] = useState<{ threadId: string; checkpointId: string } | null>(null);
   const [status, setStatus] = useState('Loading');
   const [availability, setAvailability] = useState<'ready' | 'disabled' | 'not_installed' | 'connecting' | 'error'>('connecting');
   const [availabilityReason, setAvailabilityReason] = useState('Connecting to the coding server…');
@@ -428,10 +429,10 @@ export default function Coding() {
     }
   }
 
-  async function restoreCheckpoint() {
-    const checkpoint = checkpoints.find((entry) => entry.id === selectedCheckpoint);
-    if (!threadId || !checkpoint || busy || running ||
-      !window.confirm('Restore the conversation to this checkpoint? Workspace files will stay as they are.')) return;
+  async function restoreCheckpoint(request: { threadId: string; checkpointId: string }) {
+    setRestoreRequest(null);
+    const checkpoint = checkpoints.find((entry) => entry.id === request.checkpointId);
+    if (threadId !== request.threadId || !checkpoint || busy || running) return;
     setBusy(true);
     setError('');
     try {
@@ -446,6 +447,8 @@ export default function Coding() {
     }
   }
 
+  useEffect(() => { setRestoreRequest(null); }, [threadId]);
+
   const project = catalog.projects.find((entry) => entry.id === projectId);
   const threads = catalog.threads.filter((thread) => thread.projectId === projectId);
   const current = catalog.threads.find((thread) => thread.id === threadId);
@@ -455,9 +458,9 @@ export default function Coding() {
       <span className="connection" data-testid="coding-status">{status}</span>
     </header>
     {error && <p className="page-error" role="alert">{error}</p>}
-    {availability === 'disabled' ? <p role="status" data-testid="coding-disabled">engine-t3 disabled</p>
-      : availability === 'not_installed' ? <p role="status" data-testid="coding-install-required">Install T3 from Extensions to use Coding.</p>
-      : availability !== 'ready' ? <p role="status" data-testid="coding-connection-required">{availabilityReason} Open Extensions to install, start or connect T3.</p>
+    {availability === 'disabled' ? <Banner status="warning" title="engine-t3 disabled" data-testid="coding-disabled">Enable T3 from Extensions to use Coding.</Banner>
+      : availability === 'not_installed' ? <Banner status="info" title="Install T3 from Extensions to use Coding." data-testid="coding-install-required" />
+      : availability !== 'ready' ? <Banner status="info" title={availabilityReason} data-testid="coding-connection-required">Open Extensions to install, start or connect T3.</Banner>
       : <div className="coding-workspace">
         <aside className="coding-sidebar" aria-label="Coding projects">
           <h2>Projects</h2>
@@ -505,32 +508,35 @@ export default function Coding() {
         <div className="coding-conversation">
           {threadId ? <>
             <div className="coding-conversation-title">
-              <h2>{current?.title ?? 'Coding thread'}</h2>
+              <Heading level={2}>{current?.title ?? 'Coding thread'}</Heading>
               <div className="coding-actions">
-                <label htmlFor="coding-diff-turn">Diff for turn</label>
-                <select id="coding-diff-turn" data-testid="coding-diff-turn" value={Math.min(selectedTurn, Math.max(1, turnCount))}
-                  onChange={(event) => { setSelectedTurn(Number(event.target.value)); setDiff(null); }}>
-                  {Array.from({ length: turnCount }, (_, index) => <option key={index + 1} value={index + 1}>Turn {index + 1}</option>)}
-                </select>
-                <Button label="View selected turn diff" variant="secondary" data-testid="coding-diff"
-                  isDisabled={turnCount === 0} onClick={() => void showDiff()}>Diff</Button>
-                <label htmlFor="coding-checkpoint">Checkpoint</label>
-                {checkpoints.length ? <select id="coding-checkpoint" data-testid="coding-checkpoint" value={selectedCheckpoint}
-                  onChange={(event) => setSelectedCheckpoint(event.target.value)}>
-                  {checkpoints.map((checkpoint) => <option key={checkpoint.id} value={checkpoint.id}>
-                    Checkpoint {checkpoint.ordinalWithinScope + 1}</option>)}
-                </select> : <span data-testid="coding-checkpoint-unavailable">Not available</span>}
-                <Button label="Restore to checkpoint" variant="secondary" data-testid="coding-restore"
-                  isDisabled={!selectedCheckpoint || busy || running} onClick={() => void restoreCheckpoint()}>Restore</Button>
-                <Button label="Settle" variant="secondary" data-testid="coding-settle" onClick={() => void settle()}>Settle</Button>
-                {running && <Button label="Stop" data-testid="coding-stop" onClick={() => void stop()}>Stop</Button>}
+                <ButtonGroup label="Thread tools">
+                  <Button label="View selected turn diff" variant="secondary" data-testid="coding-diff"
+                    isDisabled={turnCount === 0} onClick={() => void showDiff()}>Diff</Button>
+                  <Button label="Settle" variant="secondary" data-testid="coding-settle" onClick={() => void settle()}>Settle</Button>
+                </ButtonGroup>
+                {running && <Button label="Stop" variant="destructive" data-testid="coding-stop" onClick={() => void stop()}>Stop</Button>}
               </div>
             </div>
-            <CodingWorkflow key={threadId} threadId={threadId} />
-            {diff !== null && <pre className="coding-diff" data-testid="coding-diff-result">{diff}</pre>}
-            <ChatLayout composer={<ChatComposer value={draft} onChange={setDraft} onSubmit={(value) => void send(value)}
-              onStop={() => void stop()} isStopShown={running} placeholder="Ask the coding agent" isDisabled={busy || !subscribed} />}
-              scrollButton={null}>
+            {approval && <Card className="coding-approval" data-testid="coding-approval">
+              <div className="coding-approval-content">
+                <Badge variant="warning" label="Approval required" />
+                <Heading level={3}>Review this coding action</Heading>
+                <p>{approval.kind}</p>
+                <p className="coding-muted">Request: {approval.id}</p>
+                <div className="coding-actions">
+                  <Button label="Deny" variant="secondary" data-testid="coding-deny" isDisabled={approval.busy}
+                    onClick={() => void decide('decline')}>Deny</Button>
+                  <Button label="Approve" data-testid="coding-approve" isDisabled={approval.busy}
+                    onClick={() => void decide('approve')}>Approve</Button>
+                </div>
+              </div>
+            </Card>}
+            <div className="coding-thread-body">
+              <div className="coding-chat">
+                <ChatLayout composer={<ChatComposer value={draft} onChange={setDraft} onSubmit={(value) => void send(value)}
+                  onStop={() => void stop()} isStopShown={running} placeholder="Ask the coding agent" isDisabled={busy || !subscribed} />}
+                  scrollButton={null}>
               <ChatMessageList isStreaming={running} align="top" emptyState={<p>Send a prompt to start.</p>}>
                 {messages.map((message) => <ChatMessage key={message.id} sender={message.role}
                   name={message.role === 'assistant' ? 'Coding agent' : 'You'}>
@@ -541,18 +547,42 @@ export default function Coding() {
                         onAction={(action) => send('Submitted an interactive reply', action)}>
                         <StreamView className="coding-stream" ref={(view) => attach(message.id, view)} />
                       </InteractiveReply>}
-                    {message.role === 'assistant' && approval && message.id === messages.at(-1)?.id &&
-                      <div className="coding-approval" data-testid="coding-approval">
-                        <strong>Approval required</strong><p>{approval.kind}</p>
-                        <Button label="Approve" data-testid="coding-approve" isDisabled={approval.busy}
-                          onClick={() => void decide('approve')}>Approve</Button>
-                        <Button label="Deny" variant="secondary" data-testid="coding-deny" isDisabled={approval.busy}
-                          onClick={() => void decide('decline')}>Deny</Button>
-                      </div>}
                   </ChatMessageBubble>
                 </ChatMessage>)}
               </ChatMessageList>
-            </ChatLayout>
+                </ChatLayout>
+              </div>
+              <aside className="coding-inspector" aria-label="Thread inspection">
+                <Heading level={3}>Inspect thread</Heading>
+                <div className="coding-inspector-controls">
+                  <label htmlFor="coding-diff-turn">Diff for turn</label>
+                  <select id="coding-diff-turn" data-testid="coding-diff-turn" value={Math.min(selectedTurn, Math.max(1, turnCount))}
+                    onChange={(event) => { setSelectedTurn(Number(event.target.value)); setDiff(null); }}>
+                    {Array.from({ length: turnCount }, (_, index) => <option key={index + 1} value={index + 1}>Turn {index + 1}</option>)}
+                  </select>
+                  {diff !== null && <div className="coding-diff">
+                    <div className="coding-actions">
+                      <Heading level={4}>Turn {selectedTurn} diff</Heading>
+                      <Button variant="ghost" label="Close diff" onClick={() => setDiff(null)} />
+                    </div>
+                    <CodeBlock code={diff} isDiff isWrapped={false} maxHeight="min(36dvh, 420px)" data-testid="coding-diff-result" />
+                  </div>}
+                  <label htmlFor="coding-checkpoint">Checkpoint</label>
+                  {checkpoints.length ? <select id="coding-checkpoint" data-testid="coding-checkpoint" value={selectedCheckpoint}
+                    onChange={(event) => setSelectedCheckpoint(event.target.value)}>
+                    {checkpoints.map((checkpoint) => <option key={checkpoint.id} value={checkpoint.id}>
+                      Checkpoint {checkpoint.ordinalWithinScope + 1}</option>)}
+                  </select> : <span data-testid="coding-checkpoint-unavailable" className="coding-muted">Not available</span>}
+                  <Button label="Restore to checkpoint" variant="secondary" data-testid="coding-restore"
+                    isDisabled={!selectedCheckpoint || busy || running}
+                    onClick={() => setRestoreRequest({ threadId, checkpointId: selectedCheckpoint })}>Restore</Button>
+                </div>
+                <CodingWorkflow key={threadId} threadId={threadId} />
+              </aside>
+            </div>
+            <AlertDialog isOpen={restoreRequest?.threadId === threadId} onOpenChange={(open) => { if (!open) setRestoreRequest(null); }}
+              title="Restore conversation?" description="Restore the conversation to the selected checkpoint. Workspace files will stay as they are."
+              actionLabel="Restore checkpoint" onAction={() => { if (restoreRequest) void restoreCheckpoint(restoreRequest); }} />
           </> : <div className="coding-empty">Select a thread or create one.</div>}
         </div>
       </div>}
