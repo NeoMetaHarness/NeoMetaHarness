@@ -61,6 +61,7 @@ try {
   Object.assign(process.env, { NODE_ENV: 'test', NMH_TEST_UPSTREAM_LOCK: lock, NMH_TEST_T3_ASSET_URL: url + '/cli' });
 
   assert.equal(installedT3(engines), undefined);
+  await mkdir(join(engines, '.tmp-t3-cli-interrupted'), { recursive: true });
   let activated = 0;
   const installer = new T3Installer(engines, () => { activated++; });
   async function rejected() {
@@ -117,12 +118,14 @@ try {
 
   const environment = await isolatedT3Environment(join(engines, 'isolated-env'), {
     PATH: process.env.PATH, NMH_T3_SCOPED_SESSION: 'owner-secret', OPENAI_API_KEY: 'owner-secret',
-    T3CODE_HOME: 'owner-home', HOME: 'owner-home',
+    T3CODE_HOME: 'owner-home', HOME: 'owner-home', CODEX_HOME: 'owner-codex', CLAUDE_CONFIG_DIR: 'owner-claude',
   });
   assert.equal(environment.NMH_T3_SCOPED_SESSION, undefined);
   assert.equal(environment.OPENAI_API_KEY, undefined);
   assert.ok(environment.HOME?.includes('isolated-env'));
   assert.ok(environment.T3CODE_HOME?.includes('isolated-env'));
+  assert.equal(environment.CODEX_HOME, join(engines, 'isolated-env/codex'));
+  assert.equal(environment.CLAUDE_CONFIG_DIR, join(engines, 'isolated-env/claude'));
 
   const fixtureCli = join(temp, 'fake-t3.cjs');
   const fixtureScript = `
@@ -134,55 +137,69 @@ const option = (name) => args[args.indexOf(name) + 1];
 const base = option('--base-dir');
 fs.mkdirSync(base, { recursive: true });
 if (args[0] === 'auth') {
+  if (!fs.existsSync(path.join(base, 'ready'))) process.exit(4);
   fs.writeFileSync(path.join(base, 'auth.json'), JSON.stringify({ scopes: args.filter((a) => /^(orchestration|providers):/.test(a)), home: process.env.HOME }));
-  process.stdout.write('fixture-scoped-session-token\\n');
+  process.stdout.write(require('node:crypto').randomUUID() + '\\n');
   process.exit(0);
 }
 if (args[0] !== 'serve') process.exit(3);
 const host = option('--host');
 const port = Number(option('--port'));
-let probes = 0;
+const bootstrap = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (!bootstrap.shellEnvironmentPrepared) process.exit(5);
 const server = http.createServer((request, response) => {
   if (request.url !== '/api/auth/websocket-ticket') return response.writeHead(404).end();
-  if (request.headers.authorization !== 'Bearer fixture-scoped-session-token') return response.writeHead(401).end();
-  probes++;
-  if (probes === 1) return response.writeHead(503).end();
-  response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ticket: 'fixture' }));
+  if (request.headers.authorization) return response.writeHead(400).end();
+  fs.writeFileSync(path.join(base, 'ready'), '');
+  response.writeHead(401).end();
 });
 server.listen(port, host, () => {
-  fs.writeFileSync(path.join(base, 'serve.json'), JSON.stringify({ host, port, pid: process.pid, home: process.env.HOME }));
+  const userdata = path.join(base, 'userdata');
+  fs.mkdirSync(userdata, { recursive: true });
+  fs.writeFileSync(path.join(userdata, 'server-runtime.json'), JSON.stringify({
+    port, origin: 'http://' + host + ':' + port, pid: process.pid, startedAt: new Date().toISOString(), home: process.env.HOME,
+  }));
 });
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
 `;
   let connected = false;
   let disconnects = 0;
   let origin = '';
+  const tokens = new Set<string>();
+  let remoteClose: (() => void) | undefined;
   const client = {
     get connected() { return connected; },
-    connect: async (url: string, token: string) => {
+    connect: async (url: string, token: string, _signal: AbortSignal, onClose: () => void) => {
       assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
-      assert.equal(token, 'fixture-scoped-session-token');
+      assert.ok(!tokens.has(token));
+      tokens.add(token);
+      remoteClose = () => { connected = false; onClose(); };
       origin = url;
       connected = true;
     },
     disconnect: async () => { connected = false; disconnects++; },
   } as unknown as T3ControlPlane;
-  runtime = new T3LocalRuntime(client, installed!, engines, { executable: process.execPath, prefix: [fixtureCli] });
+  runtime = new T3LocalRuntime(client, installed!, engines, { executable: process.execPath, prefix: [fixtureCli], sessionTtlMs: 1500 });
   await assert.rejects(runtime.start());
-  assert.match(runtime.reason, /choose Start to retry/i);
+  assert.match(runtime.reason, /choose Start to try again/i);
   assert.equal(connected, false);
   await writeFile(fixtureCli, fixtureScript);
   await Promise.all([runtime.start(), runtime.start()]);
   assert.equal(connected, true);
   assert.equal(runtime.reason, '');
   const state = join(engines, 't3-home/state');
-  const launched = JSON.parse(readFileSync(join(state, 'serve.json'), 'utf8')) as { host: string; port: number; pid: number; home: string };
+  const launched = JSON.parse(readFileSync(join(state, 'userdata/server-runtime.json'), 'utf8')) as { port: number; pid: number; home: string };
   const issued = JSON.parse(readFileSync(join(state, 'auth.json'), 'utf8')) as { scopes: string[]; home: string };
-  assert.equal(launched.host, '127.0.0.1');
   assert.equal(origin, 'http://127.0.0.1:' + launched.port);
   assert.equal(issued.home, launched.home);
   assert.deepEqual(issued.scopes, ['orchestration:read', 'orchestration:operate', 'providers:manage']);
   assert.ok(launched.home.includes('t3-home'));
+  await eventually(() => tokens.size, (count) => count >= 2, 'proactive renewal');
+  assert.equal(runtime.pid, launched.pid);
+  const issuedBeforeClose = tokens.size;
+  remoteClose!();
+  await eventually(() => tokens.size, (count) => count > issuedBeforeClose, 'renewal after socket close');
+  assert.equal(runtime.pid, launched.pid);
   await runtime.stop();
   assert.equal(connected, false);
   assert.ok(disconnects >= 1);
@@ -192,7 +209,7 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   }, Boolean, 'server process stops');
 
   console.log('T3_INSTALL PASS checksum=true unsafe_entries=6 idempotent=true');
-  console.log('T3_RUNTIME PASS loopback=true isolated_home=true scoped_session=true retry=true stop=true');
+  console.log('T3_RUNTIME PASS loopback=true isolated_home=true first_run=true scoped_session=true proactive_renewal=true socket_close_reconnect=true same_pid=true stop=true');
 } finally {
   await runtime?.stop();
   if (server) await new Promise<void>((done) => server!.close(() => done()));

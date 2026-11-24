@@ -37,6 +37,17 @@ const rpcGroup = RpcGroup.make(
   }),
 );
 
+export function t3Origin(origin: string): URL {
+  const url = new URL(origin);
+  const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127\./.test(url.hostname)
+    && /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname);
+  if (!(url.protocol === 'https:' || url.protocol === 'http:' && loopback)
+    || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('T3 requires an HTTPS origin, or HTTP on loopback.');
+  }
+  return url;
+}
+
 type Runtime = ManagedRuntime.ManagedRuntime<any, never>;
 export type T3Event = {
   kind: 'snapshot' | 'synchronized' | 'event' | 'unknown-event' | 'text.delta';
@@ -104,11 +115,7 @@ export class T3ControlPlane {
   }
 
   async connect(origin: string, scopedSession: string, signal?: AbortSignal, onClose?: () => void): Promise<void> {
-    if (this.client) throw new Error('T3 is already connected');
-    const base = new URL(origin);
-    if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.pathname !== '/' || base.search || base.hash) {
-      throw new Error('T3 origin must be an HTTP(S) origin');
-    }
+    const base = t3Origin(origin);
     const response = await fetch(new URL('/api/auth/websocket-ticket', base), {
       method: 'POST', headers: { Authorization: `Bearer ${scopedSession}` },
       redirect: 'error',
@@ -130,8 +137,8 @@ export class T3ControlPlane {
         socket.addEventListener('close', () => {
           closed = true;
           if (this.runtime === runtime) {
+            void this.dropConnection().catch(() => {});
             onClose?.();
-            void this.disconnect(false).catch(() => {});
           }
         }, { once: true });
         return socket;
@@ -149,9 +156,12 @@ export class T3ControlPlane {
       await runtime.runPromise(client['server.getConfig']({}).pipe(Effect.timeout('10 seconds')), { signal });
       signal?.throwIfAborted();
       if (closed) throw new Error('T3 closed its connection');
+      // Validate the new socket before handing off, so failed renewal leaves the old socket serving.
+      const previous = this.dropConnection();
       this.scope = scope;
       this.runtime = runtime;
       this.client = client;
+      void previous.catch(() => {});
     } catch (error) {
       await runtime.dispose();
       throw error;
@@ -262,27 +272,37 @@ export class T3ControlPlane {
     }
   }
 
+  private async dropConnection(): Promise<void> {
+    const { runtime, scope } = this;
+    this.client = this.runtime = this.scope = undefined;
+    for (const controller of this.subscriptions) controller.abort();
+    this.subscriptions.clear();
+    try {
+      if (runtime && scope) await runtime.runPromise(Scope.close(scope, Exit.void));
+    } finally {
+      await runtime?.dispose();
+    }
+  }
+
   async disconnect(graceful = true): Promise<void> {
     const cleanups = [...this.workflowCleanups];
     this.workflowCleanups.clear();
     if (graceful) {
       for (const cleanup of cleanups) await cleanup().catch(() => {});
     }
-    const { client, runtime, scope } = this;
-    this.client = this.runtime = this.scope = undefined;
+    const { client, runtime } = this;
     const terminals = [...this.workflowTerminals.values()];
     this.workflowTerminals.clear();
-    for (const controller of this.subscriptions) controller.abort();
-    this.subscriptions.clear();
     if (!graceful) {
-      for (const cleanup of cleanups) await cleanup().catch(() => {});
+      const disconnected = this.dropConnection();
+      await Promise.all([disconnected, ...cleanups.map((cleanup) => cleanup().catch(() => {}))]);
+      return;
     }
-    if (graceful && runtime && client && terminals.length > 0) {
+    if (runtime && client && terminals.length > 0) {
       await Promise.all(terminals.map((terminal) => runtime.runPromise(
         client['terminal.close'](terminal).pipe(Effect.timeout('2 seconds')),
       ).catch(() => {})));
     }
-    if (runtime && scope) await runtime.runPromise(Scope.close(scope, Exit.void));
-    await runtime?.dispose();
+    await this.dropConnection();
   }
 }

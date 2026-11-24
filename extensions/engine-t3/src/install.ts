@@ -1,13 +1,15 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createWriteStream, existsSync, lstatSync, readFileSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { downloadEngineArchive, EngineInstallError, readEnginePin, retrying, safeEntryPath } from '@neometaharness/kernel';
+
+import { system32 } from './system-tools.js';
 
 const exec = promisify(execFile);
 const lockFile = fileURLToPath(new URL('../../../upstream.lock.json', import.meta.url));
@@ -74,26 +76,42 @@ function assetUrl(pin: ReleasePin, archive: string): URL {
 async function installCli(enginesDir: string, signal: AbortSignal, phase: (step: Exclude<T3InstallPhase, 'starting'>, progress?: number) => void): Promise<void> {
   const r = release(enginesDir);
   if (installedT3(enginesDir)) return;
-  const temp = await mkdtemp(join(enginesDir, '.tmp-t3-cli-'));
+  for (const entry of await readdir(enginesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('.tmp-t3-cli-')) continue;
+    const owner = /^\.tmp-t3-cli-(\d+)-/.exec(entry.name)?.[1];
+    if (owner) {
+      try { process.kill(Number(owner), 0); continue; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') continue; }
+    }
+    await retrying(() => rm(join(enginesDir, entry.name), { recursive: true, force: true }), signal).catch(() => {});
+  }
+  signal.throwIfAborted();
+  const temp = await mkdtemp(join(enginesDir, `.tmp-t3-cli-${process.pid}-`));
   const archivePath = join(temp, r.archive);
   const extracted = join(temp, 'extracted');
+  let stall: NodeJS.Timeout | undefined;
   try {
     // GNU tar accepts extra flags from the environment. Validate and extract with the same explicit options.
     const env = { ...process.env, TAR_OPTIONS: '', LC_ALL: 'C' };
-    const tar = (args: string[]) => exec('tar', args, { maxBuffer: 16 * 1024 * 1024, signal, env, windowsHide: true });
+    const tarPath = process.platform === 'win32' ? system32('tar.exe') : 'tar';
+    const tar = (args: string[]) => exec(tarPath, args, { maxBuffer: 16 * 1024 * 1024, signal, env, windowsHide: true });
     await mkdir(extracted);
     const url = assetUrl(r.pin, r.archive);
-    const downloadSignal = AbortSignal.any([signal, AbortSignal.timeout(5 * 60_000)]);
+    const stalled = new AbortController();
+    stall = setTimeout(() => stalled.abort(), 60_000).unref();
+    const downloadSignal = AbortSignal.any([signal, stalled.signal]);
     const response = await downloadEngineArchive(url, downloadSignal)
       .catch((error: unknown) => { throw new EngineInstallError('network', 'T3 release download failed', { cause: error }); });
     if (response.statusCode !== 200) {
       response.destroy();
       throw new EngineInstallError('network', 'T3 release download failed');
     }
+    stall.refresh();
     const total = Number(response.headers['content-length']) || undefined;
     const hash = createHash('sha256');
     let received = 0;
     const meter = new Transform({ transform(chunk: Buffer, _encoding, done) {
+      stall?.refresh();
       received += chunk.length;
       hash.update(chunk);
       phase('download', total ? Math.min(received / total, 1) * 0.90 : undefined);
@@ -103,6 +121,7 @@ async function installCli(enginesDir: string, signal: AbortSignal, phase: (step:
       const kind = ['ENOSPC', 'EACCES', 'EPERM'].includes(error.code ?? '') ? 'disk' : 'network';
       throw new EngineInstallError(kind, 'T3 archive download was interrupted', { cause: error });
     });
+    clearTimeout(stall);
     phase('verify', 0.90);
     if (hash.digest('hex') !== r.sha) throw new EngineInstallError('verify', 'T3 CLI checksum mismatch');
     // Check both names and types before extraction. Reject links and special files even in a checksum-pinned archive.
@@ -142,6 +161,7 @@ async function installCli(enginesDir: string, signal: AbortSignal, phase: (step:
     if (existsSync(r.target)) await retrying(() => rm(r.target, { recursive: true, force: true }), signal);
     await retrying(() => rename(extracted, r.target), signal);
   } finally {
+    clearTimeout(stall);
     await retrying(() => rm(temp, { recursive: true, force: true })).catch(() => {});
   }
 }
