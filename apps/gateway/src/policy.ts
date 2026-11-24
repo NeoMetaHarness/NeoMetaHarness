@@ -280,9 +280,12 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
 
 export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
   '/x/a2ui/action': 'internal',
+  '/x/a2ui/instructions': 'internal',
   '/x/a2ui/segments': 'internal',
+  '/x/engine-hermes/runs/status': 'internal',
   '/x/engine-t3/install/start': 'internal',
   '/x/engine-t3/runtime/start': 'internal',
+  '/x/engine-t3/threads/list': 'internal',
   '/internal/memory/context': 'internal',
   '/internal/memory/write': 'internal',
   '/internal/computers-mcp/action': 'internal',

@@ -53,6 +53,7 @@ import {
 } from '@neometaharness/auth';
 import { toNodeHandler } from 'better-auth/node';
 import { coalesceText } from './coalesce.js';
+import { ChatUi } from './chat-ui.js';
 import { ChannelBus } from './channel-bus.js';
 import { createAgentGateway } from './agents.js';
 import { backupSource } from './backup-source.js';
@@ -477,6 +478,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Hermes extension is disabled' });
     return kernel.invokeRoute(path, 'RPC', body);
   };
+  const chatUi = new ChatUi(db.chat, kernel, invokeHermes, invokeT3);
+  const chatActor = (context: GatewayAuthContext) => chatUi.actor(context, settingsWorkspace(context));
   const invokeChannels = async (route: string, body: unknown) => {
     const path = `/x/channels/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Channels extension is disabled' });
@@ -1352,35 +1355,42 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         },
         create: os.x['engine-t3'].create.handler(async ({ input, context }) => {
           authorize('x.engine-t3.create', context);
-          return invokeT3('create', input) as Promise<{ sequence: number }>;
+          return chatUi.createT3(input, chatActor(context));
         }),
         send: os.x['engine-t3'].send.handler(async ({ input, context }) => {
           authorize('x.engine-t3.send', context);
-          return invokeT3('send', input) as Promise<{ sequence: number }>;
+          chatUi.requireThread(input.threadId, settingsWorkspace(context));
+          return chatUi.sendT3(input, chatActor(context));
         }),
         events: os.x['engine-t3'].events.handler(async function* ({ input, signal, context }) {
           authorize('x.engine-t3.events', context);
+          chatUi.requireThread(input.threadId, settingsWorkspace(context));
           const stream = await invokeT3('events', { ...input, signal }) as AsyncIterable<T3Event>;
-          yield* coalesceText(stream);
+          yield* chatUi.t3Events(coalesceText(stream), input.threadId, chatActor(context));
         }),
         approval: os.x['engine-t3'].approval.handler(async ({ input, context }) => {
           authorize('x.engine-t3.approval', context);
+          chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return invokeT3('approval', input) as Promise<{ sequence: number }>;
         }),
         settle: os.x['engine-t3'].settle.handler(async ({ input, context }) => {
           authorize('x.engine-t3.settle', context);
+          chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return invokeT3('settle', input) as Promise<{ sequence: number }>;
         }),
         stop: os.x['engine-t3'].stop.handler(async ({ input, context }) => {
           authorize('x.engine-t3.stop', context);
+          chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return invokeT3('stop', input) as Promise<{ outcome: 'killed' | 'released' | 'releasing' | 'shared'; sharedWithThreadIds: string[] }>;
         }),
         diff: os.x['engine-t3'].diff.handler(async ({ input, context }) => {
           authorize('x.engine-t3.diff', context);
+          chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return invokeT3('diff', input) as Promise<{ threadId: string; fromTurnCount: number; toTurnCount: number; diff: string }>;
         }),
         rollback: os.x['engine-t3'].rollback.handler(async ({ input, context }) => {
           authorize('x.engine-t3.rollback', context);
+          chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return invokeT3('rollback', input) as Promise<{ sequence: number }>;
         }),
         providers: {
@@ -1395,7 +1405,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         threads: {
           list: os.x['engine-t3'].threads.list.handler(async ({ context }) => {
             authorize('x.engine-t3.threads.list', context);
-            return invokeT3('threads/list', {}) as Promise<any>;
+            const catalog = await invokeT3('threads/list', {}) as { threads: { id: string }[] };
+            return { ...catalog, threads: catalog.threads.filter(({ id }) => chatUi.visibleThread(id, settingsWorkspace(context))) } as any;
           }),
         },
       },
@@ -1477,19 +1488,22 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         runs: {
           start: os.x['engine-hermes'].runs.start.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.runs.start', context);
-            return invokeHermes('runs/start', input) as Promise<{ run_id: string }>;
+            return chatUi.sendHermes(input, chatActor(context));
           }),
           events: os.x['engine-hermes'].runs.events.handler(async function* ({ input, signal, context }) {
             authorize('x.engine-hermes.runs.events', context);
+            const record = chatUi.requireRun(input.profile, input.runId, settingsWorkspace(context));
             const stream = await invokeHermes('runs/events', { ...input, signal }) as AsyncIterable<HermesEvent>;
-            yield* coalesceText(stream);
+            yield* chatUi.hermesEvents(coalesceText(stream), input, record, chatActor(context));
           }),
           approve: os.x['engine-hermes'].runs.approve.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.runs.approve', context);
+            chatUi.requireRun(input.profile, input.runId, settingsWorkspace(context));
             return invokeHermes('runs/approve', input) as Promise<{ ok: boolean }>;
           }),
           stop: os.x['engine-hermes'].runs.stop.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.runs.stop', context);
+            chatUi.requireRun(input.profile, input.runId, settingsWorkspace(context));
             return invokeHermes('runs/stop', input) as Promise<{ status: string }>;
           }),
         },

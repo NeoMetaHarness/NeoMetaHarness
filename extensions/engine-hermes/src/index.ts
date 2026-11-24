@@ -94,8 +94,15 @@ export default defineExtension({
       return result;
     });
     ctx.route('runs/start', ({ body }) => {
-      const { profile, input } = body as { profile: string; input: string };
-      return service.startRun(profile, input);
+      const { profile, input, instructions, sessionId } = body as {
+        profile: string; input: string; instructions?: string; sessionId?: string;
+      };
+      return service.startRun(profile, input, { instructions, sessionId });
+    });
+    ctx.route('runs/status', ({ method, body }) => {
+      if (method !== 'RPC') return;
+      const { profile, runId } = body as { profile: string; runId: string };
+      return service.runStatus(profile, runId);
     });
     ctx.route('runs/events', ({ body }) => {
       const { profile, runId, signal } = body as { profile: string; runId: string; signal?: AbortSignal };

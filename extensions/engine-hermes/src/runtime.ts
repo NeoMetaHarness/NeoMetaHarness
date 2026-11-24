@@ -616,8 +616,13 @@ export class HermesRuntime {
     return this.startRun(profile, Buffer.concat(output).toString('utf8'));
   }
 
-  async startRun(profile: string, input: string): Promise<{ run_id: string }> {
-    return this.request('api', '/v1/runs', { method: 'POST', profile, body: { input } }).then(async (r) => await r.json() as { run_id: string });
+  async startRun(profile: string, input: string, options?: { instructions?: string; sessionId?: string }): Promise<{ run_id: string }> {
+    const body = { input, instructions: options?.instructions, session_id: options?.sessionId };
+    return this.request('api', '/v1/runs', { method: 'POST', profile, body }).then(async (r) => await r.json() as { run_id: string });
+  }
+  async runStatus(profile: string, runId: string): Promise<{ status: string; session_id?: string }> {
+    const response = await this.request('api', `/v1/runs/${encodeURIComponent(runId)}`, { profile });
+    return await response.json() as { status: string; session_id?: string };
   }
   async approve(profile: string, runId: string, choice: 'once' | 'session' | 'deny'): Promise<{ ok: boolean }> {
     await this.request('api', `/v1/runs/${encodeURIComponent(runId)}/approval`, { method: 'POST', profile, body: { choice } });

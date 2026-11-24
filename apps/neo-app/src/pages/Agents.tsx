@@ -3,17 +3,18 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
-import { neoContract, type HermesEvent } from '@neometaharness/contracts';
+import { neoContract, type A2uiActionInput, type HermesEvent } from '@neometaharness/contracts';
 import {
-  AlertDialog, Avatar, Badge, Banner, Button, Card, Collapsible, Drawer, EmptyState, Heading, MoreMenu, ResizeHandle, ScrollableArea, SelectableCard, TextInput, useResizable, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList,
+  AlertDialog, Avatar, Badge, Banner, Button, Card, Collapsible, Drawer, EmptyState, Heading, MoreMenu, ResizeHandle, ScrollableArea, SelectableCard, TextInput, useResizable, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList, CheckboxInput,
   StreamView, type StreamViewHandle,
 } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
+import { InteractiveReply, replySegments, useInteractiveReplies, type ReplySegment } from '../a2ui';
 import './agents.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
 type Bot = { name: string; path: string };
-type Turn = { id: number; role: 'user' | 'assistant'; text?: string; steps: string[] };
+type Turn = { id: number; role: 'user' | 'assistant'; text?: string; steps: string[]; segments?: ReplySegment[]; generation?: number };
 type ApprovalChoice = 'once' | 'session' | 'deny';
 type ActiveRun = {
   profile: string;
@@ -63,6 +64,9 @@ export default function Agents() {
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
+  const [interactive, setInteractive] = useState(false);
+  const a2ui = useInteractiveReplies(http);
+  const conversation = useRef<string | undefined>(undefined);
   const active = useRef<ActiveRun | null>(null);
   const mounted = useRef(true);
   const nextTurn = useRef(0);
@@ -111,6 +115,7 @@ export default function Agents() {
     if (pendingRef.current) return;
     setSelected(profile);
     setPickerOpen(false);
+    conversation.current = undefined;
     setTurns([]);
     setApproval(null);
     setStatus('Ready');
@@ -162,6 +167,11 @@ export default function Agents() {
       appendText(run.turnId, event.textDelta ?? '');
       return;
     }
+    const segments = replySegments(event);
+    if (segments) {
+      setTurns((previous) => previous.map((turn) => turn.id === run.turnId ? { ...turn, segments, generation: a2ui.generation } : turn));
+      return;
+    }
     const type = event.type ?? '';
     if (type === 'approval.request') {
       setApproval({ busy: false, detail: describeEvent(event) });
@@ -178,9 +188,12 @@ export default function Agents() {
     }
   }
 
-  async function send(value: string) {
+  async function send(value: string, action?: A2uiActionInput) {
     const input = value.trim();
-    if (!selected || !input || pendingRef.current) return;
+    if (!selected || !input || pendingRef.current) {
+      if (action) throw new Error('The conversation is busy.');
+      return;
+    }
     pendingRef.current = true;
     setPending(true);
     setStatus('Starting');
@@ -197,8 +210,14 @@ export default function Agents() {
       { id: assistantId, role: 'assistant', steps: [] },
     ]);
     try {
-      const started = await http.x['engine-hermes'].runs.start({ profile: selected, input });
+      const started = action ? await http.x.a2ui.action(action).then((result) => {
+        if (result.engine !== 'hermes') throw new Error('Unexpected conversation engine.');
+        return { run_id: result.runId, conversationId: result.conversationId };
+      }) : await http.x['engine-hermes'].runs.start({
+        profile: selected, input, conversationId: conversation.current, interactive: a2ui.enabled && interactive,
+      });
       if (active.current !== run) return;
+      conversation.current = started.conversationId;
       run.runId = started.run_id;
       setStatus('Running');
       const token = gatewayToken();
@@ -219,6 +238,7 @@ export default function Agents() {
         setStatus('Failed');
         setError(`Run failed: ${String(reason)}`);
       }
+      if (action) throw reason;
     } finally {
       if (active.current === run && mounted.current) {
         streams.current.get(assistantId)?.finish();
@@ -308,6 +328,8 @@ export default function Agents() {
       <div className="agents-conversation">
         {selected ? <>
           <div className="agents-conversation-title"><Heading level={2}>{selected}</Heading><Badge label="Hermes" />{pending && <Button label="Stop" data-testid="stop-run" onClick={() => void stop()} />}</div>
+          {a2ui.enabled && <CheckboxInput label="Interactive replies" value={interactive}
+            onChange={setInteractive} isDisabled={pending} />}
           <ChatLayout composer={<ChatComposer
             value={draft} onChange={setDraft} onSubmit={(value) => void send(value)}
             onStop={() => void stop()} isStopShown={pending}
@@ -318,7 +340,11 @@ export default function Agents() {
                 name={turn.role === 'assistant' ? selected : 'You'}>
                 <ChatMessageBubble variant={turn.role === 'assistant' ? 'ghost' : 'filled'} width="100%">
                   {turn.role === 'user' ? <p>{turn.text}</p>
-                    : <StreamView className="agents-stream" ref={(view) => attachStream(turn.id, view)} />}
+                    : <InteractiveReply segments={a2ui.enabled && turn.generation === a2ui.generation ? turn.segments : undefined}
+                        isBusy={pending || turn.id !== turns.at(-1)?.id}
+                        onAction={(action) => send('Submitted an interactive reply', action)}>
+                        <StreamView className="agents-stream" ref={(view) => attachStream(turn.id, view)} />
+                      </InteractiveReply>}
                   {turn.steps.length > 0 && <Collapsible trigger={`${turn.steps.length} tool steps`}><div className="agents-steps" aria-label="Tool steps">
                     {turn.steps.map((step) => <Badge key={step} label={step} />)}
                   </div></Collapsible>}

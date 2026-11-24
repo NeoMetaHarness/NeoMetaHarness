@@ -1,6 +1,7 @@
 import { createElement, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { renderMarkdown } from '@a2ui/markdown-it';
 import { Banner, Button, CheckboxInput, Heading, Text, TextInput, VStack } from '@neometaharness/ui';
+import type { A2uiActionInput } from '@neometaharness/contracts';
 import { maxInputLength, type FieldValue, type SurfaceMessage, type Widget } from './catalog.js';
 import { openSurface } from './render-model.js';
 import './render.css';
@@ -41,7 +42,7 @@ type RendererProps = {
   message: SurfaceMessage;
   actions: Record<string, { handle: string; fields: Record<string, string> }>;
   isBusy?: boolean;
-  onAction: (handle: string, fields: Record<string, FieldValue>) => Promise<void>;
+  onAction: (input: A2uiActionInput) => Promise<void>;
   fallback: ReactNode;
 };
 
@@ -65,6 +66,7 @@ function SurfaceForm({ surface, actions, isBusy, onAction }: Pick<RendererProps,
   surface: SurfaceView;
 }) {
   const pending = useRef(false);
+  const attempts = useRef(new Map<string, string>());
   const [working, setWorking] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState(false);
@@ -86,8 +88,10 @@ function SurfaceForm({ surface, actions, isBusy, onAction }: Pick<RendererProps,
     setWorking(true);
     setError(false);
     try {
-      await onAction(action.handle, Object.fromEntries(Object.entries(action.fields).map(([key, path]) =>
-        [key, surface.dataModel.get<FieldValue>(path)])));
+      const idempotencyKey = attempts.current.get(action.handle) ?? crypto.randomUUID();
+      attempts.current.set(action.handle, idempotencyKey);
+      await onAction({ handle: action.handle, idempotencyKey, fields:
+        Object.fromEntries(Object.entries(action.fields).map(([key, path]) => [key, surface.dataModel.get<FieldValue>(path)])) });
       setSent(true);
     } catch {
       setError(true);

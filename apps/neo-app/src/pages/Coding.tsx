@@ -3,12 +3,13 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
-import { neoContract, type T3Event } from '@neometaharness/contracts';
+import { neoContract, type A2uiActionInput, type T3Event } from '@neometaharness/contracts';
 import {
-  Button, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList,
+  Button, ChatComposer, ChatLayout, ChatMessage, ChatMessageBubble, ChatMessageList, CheckboxInput,
   StreamView, type StreamViewHandle,
 } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
+import { InteractiveReply, replySegments, useInteractiveReplies, type ReplySegment } from '../a2ui';
 import './coding.css';
 import CodingWorkflow from './CodingWorkflow';
 
@@ -16,7 +17,7 @@ type Client = ContractRouterClient<typeof neoContract>;
 type Catalog = Awaited<ReturnType<Client['x']['engine-t3']['threads']['list']>>;
 type Providers = Awaited<ReturnType<Client['x']['engine-t3']['providers']['list']>>['providers'];
 type Thread = Catalog['threads'][number];
-type Message = { id: number; role: 'user' | 'assistant'; text?: string };
+type Message = { id: number; role: 'user' | 'assistant'; text?: string; segments?: ReplySegment[]; generation?: number };
 type Approval = { id: string; kind: string; busy: boolean };
 type ProjectedItem = { item?: { type?: string; messageId?: string; text?: string } };
 type Checkpoint = { id: string; scopeId: string; status: string; ordinalWithinScope: number };
@@ -69,6 +70,10 @@ export default function Coding() {
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
   const [subscribed, setSubscribed] = useState(false);
+  const [interactive, setInteractive] = useState(false);
+  const a2ui = useInteractiveReplies(http);
+  const a2uiGeneration = useRef(a2ui.generation);
+  a2uiGeneration.current = a2ui.generation;
   const live = useRef(true);
   const connection = useRef<{ threadId: string; socket: WebSocket } | null>(null);
   const selected = useRef('');
@@ -249,6 +254,13 @@ export default function Coding() {
       return;
     }
     if (event.kind !== 'event') return;
+    const segments = replySegments(event);
+    if (segments && event.messageId) {
+      const messageId = messageIds.current.get(event.messageId);
+      if (messageId !== undefined) setMessages((previous) => previous.map((entry) =>
+        entry.id === messageId ? { ...entry, segments, generation: a2uiGeneration.current } : entry));
+      return;
+    }
     const details = event.payload && typeof event.payload === 'object'
       ? event.payload as Record<string, unknown> : {};
     if (event.type === 'runtime-request.updated' && details.status === 'pending' &&
@@ -320,11 +332,12 @@ export default function Coding() {
     setError('');
     try {
       const id = crypto.randomUUID();
-      await http.x['engine-t3'].create({
+      const created = await http.x['engine-t3'].create({
         threadId: id, projectId, title: title.trim(), providerId: providerId.trim(), model: model.trim(),
+        interactive: a2ui.enabled && interactive,
       });
       await refresh();
-      openThread(id);
+      openThread(created.threadId ?? id);
       setTitle('');
     } catch (reason) {
       setError(`Could not create thread: ${String(reason)}`);
@@ -333,9 +346,12 @@ export default function Coding() {
     }
   }
 
-  async function send(text: string) {
+  async function send(text: string, action?: A2uiActionInput) {
     const input = text.trim();
-    if (!threadId || !subscribed || !input || running || busy || status === 'disabled') return;
+    if (!threadId || !subscribed || !input || running || busy || status === 'disabled') {
+      if (action) throw new Error('The conversation is busy.');
+      return;
+    }
     setBusy(true);
     setError('');
     setDraft('');
@@ -351,11 +367,17 @@ export default function Coding() {
       { id: assistantId, role: 'assistant' },
     ]);
     try {
-      await http.x['engine-t3'].send({ threadId, text: input });
+      if (action) {
+        const result = await http.x.a2ui.action(action);
+        if (result.engine !== 't3') throw new Error('Unexpected conversation engine.');
+      } else {
+        await http.x['engine-t3'].send({ threadId, text: input, interactive: a2ui.enabled && interactive });
+      }
     } catch (reason) {
       setRunning(false);
       setStatus(isDisabled(reason) ? 'disabled' : 'Failed');
       setError(`Could not send prompt: ${String(reason)}`);
+      if (action) throw reason;
     } finally {
       setBusy(false);
     }
@@ -470,6 +492,7 @@ export default function Coding() {
             </select>
             <label htmlFor="coding-model">Model</label>
             <input id="coding-model" data-testid="coding-model" value={model} onChange={(event) => setModel(event.target.value)} required />
+            {a2ui.enabled && <CheckboxInput label="Interactive replies" value={interactive} onChange={setInteractive} />}
             <Button type="submit" label="Create thread" isDisabled={busy || !title.trim() || !providerId.trim()}>Create thread</Button>
           </form>}
           <h2>Threads</h2>
@@ -513,7 +536,11 @@ export default function Coding() {
                   name={message.role === 'assistant' ? 'Coding agent' : 'You'}>
                   <ChatMessageBubble variant={message.role === 'assistant' ? 'ghost' : 'filled'} width="100%">
                     {message.role === 'user' ? <p>{message.text}</p> :
-                      <StreamView className="coding-stream" ref={(view) => attach(message.id, view)} />}
+                      <InteractiveReply segments={a2ui.enabled && message.generation === a2ui.generation ? message.segments : undefined}
+                        isBusy={busy || running || message.id !== messages.at(-1)?.id}
+                        onAction={(action) => send('Submitted an interactive reply', action)}>
+                        <StreamView className="coding-stream" ref={(view) => attach(message.id, view)} />
+                      </InteractiveReply>}
                     {message.role === 'assistant' && approval && message.id === messages.at(-1)?.id &&
                       <div className="coding-approval" data-testid="coding-approval">
                         <strong>Approval required</strong><p>{approval.kind}</p>

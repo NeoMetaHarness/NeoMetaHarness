@@ -101,9 +101,9 @@ export const t3Contract = {
   },
   create: oc.input(z.object({
     threadId: z.string().min(1), projectId: z.string().min(1), title: z.string(),
-    providerId: z.string().min(1), model: z.string().min(1),
-  })).output(z.object({ sequence: z.number().int() })),
-  send: oc.input(z.object({ threadId: z.string().min(1), text: z.string(), messageId: z.string().optional() }))
+    providerId: z.string().min(1), model: z.string().min(1), interactive: z.boolean().optional(),
+  })).output(z.object({ sequence: z.number().int(), threadId: z.string().optional() })),
+  send: oc.input(z.object({ threadId: z.string().min(1), text: z.string(), messageId: z.string().optional(), interactive: z.boolean().optional() }))
     .output(z.object({ sequence: z.number().int() })),
   events: oc.input(z.object({ threadId: z.string().min(1) })).output(eventIterator(t3EventSchema)),
   approval: oc.input(z.object({
@@ -243,8 +243,9 @@ export const hermesContract = {
     delete: oc.input(z.object({ name: z.string().min(1) })).output(z.unknown()),
   },
   runs: {
-    start: oc.input(z.object({ profile: z.string().min(1), input: z.string().min(1) }))
-      .output(z.object({ run_id: z.string() })),
+    start: oc.input(z.object({ profile: z.string().min(1), input: z.string().min(1),
+      interactive: z.boolean().optional(), conversationId: z.uuid().optional() }))
+      .output(z.object({ run_id: z.string(), conversationId: z.uuid().optional() })),
     events: oc.input(z.object({ profile: z.string().min(1), runId: z.string().min(1) }))
       .output(eventIterator(hermesEventSchema)),
     approve: oc.input(z.object({ profile: z.string().min(1), runId: z.string().min(1),

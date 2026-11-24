@@ -159,11 +159,15 @@ export interface DatabaseProvider {
   close(): Promise<void>;
 }
 
+import { ChatRecords } from './chat.js';
+export type { ChatRunBinding } from './chat.js';
+
 export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStore {
   public readonly sqlite: DatabaseSync;
   public readonly db: Kysely<NeoTables>;
   readonly agents: AgentRecords;
   readonly memories: MemoryRecords;
+  readonly chat: ChatRecords;
 
   constructor(filename: string) {
     if (filename !== ':memory:') mkdirSync(dirname(filename), { recursive: true });
@@ -171,6 +175,7 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
     this.db = createNodeSqliteKysely<NeoTables>(this.sqlite);
     this.agents = new AgentRecords(this.db);
     this.memories = new MemoryRecords(this.db);
+    this.chat = new ChatRecords(this.sqlite);
   }
 
   get kysely(): Kysely<NeoTables> {
@@ -220,6 +225,7 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
       .execute();
     await this.agents.migrate();
     await this.memories.migrate();
+    this.chat.migrate();
   }
 
   async getEnabled(id: string): Promise<boolean> {
