@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
-import { neoContract, type ExtensionStatus, type GatewayEvent } from '@neometaharness/contracts';
-import { Badge, Button, Heading, SegmentedControl, SegmentedControlItem, Switch } from '@neometaharness/ui';
+import { neoContract, type ExtensionStatus } from '@neometaharness/contracts';
+import { Badge, Banner, Button, Card, Collapsible, EmptyState, Heading, NumberInput, SegmentedControl, SegmentedControlItem, Selector, Spinner, Switch, Text, TextInput } from '@neometaharness/ui';
 import { checkForUpdates, getUpdateState, installUpdate, subscribeUpdateState, type UpdateInfo } from '../updater';
 import { gatewayUrl, gatewayToken } from '../config';
 import { appearanceModes, type Appearance } from '../appearance';
@@ -46,137 +46,87 @@ function SchemaField({
   prop,
   value,
   isSecretSet,
+  disabled,
   onChange,
+  onInvalidChange,
 }: {
   extension: string;
   name: string;
   prop: SettingProp;
   value: unknown;
   isSecretSet?: boolean;
+  disabled: boolean;
   onChange: (val: unknown) => void;
+  onInvalidChange: (invalid: boolean) => void;
 }) {
   const title = prop.title ?? name;
-  const isSecret = Boolean(prop.secret);
+  const inputId = `setting-input-${extension}-${name}`;
+  const common = { label: title, description: prop.description, isDisabled: disabled, width: '100%' };
+  let control;
 
-  if (isSecret) {
-    return (
-      <div className="settings-field" data-testid={`setting-field-${name}`}>
-        <label htmlFor={`field-${extension}-${name}`}>
-          <span>{title}</span>
-          <span
-            className={`settings-secret-status ${isSecretSet ? 'configured' : 'unset'}`}
-            data-testid={`setting-secret-status-${extension}-${name}`}
-          >
-            {isSecretSet ? 'Configured' : 'Not configured'}
-          </span>
-        </label>
-        {prop.description && <small>{prop.description}</small>}
-        <input
-          id={`field-${extension}-${name}`}
-          data-testid={`setting-input-${extension}-${name}`}
-          type="password"
-          autoComplete="new-password"
-          value={typeof value === 'string' ? value : ''}
-          placeholder={isSecretSet ? 'Leave blank to keep existing secret' : 'Enter secret value'}
-          onChange={(e) => onChange(e.target.value)}
-        />
+  if (prop.secret) {
+    control = <>
+      <div data-testid={`setting-secret-status-${extension}-${name}`}>
+        <Badge variant={isSecretSet ? 'success' : 'neutral'} label={isSecretSet ? 'Configured' : 'Not configured'} />
       </div>
-    );
+      <TextInput {...common} data-testid={inputId} type="password" autoComplete="new-password"
+        value={typeof value === 'string' ? value : ''}
+        placeholder={isSecretSet ? 'Leave blank to keep existing secret' : 'Enter secret value'}
+        onChange={onChange} />
+    </>;
+  } else if (prop.enum && prop.enum.length > 0) {
+    const options = prop.enum.map((option) => ({ label: String(option), value: String(option) }));
+    control = <Selector {...common} data-testid={`setting-select-${extension}-${name}`}
+      options={options} value={String(value ?? prop.default ?? prop.enum[0])}
+      onChange={(selected) => onChange(prop.enum!.find((option) => String(option) === selected))} />;
+  } else if (prop.type === 'boolean') {
+    control = <Switch {...common} data-testid={`setting-switch-${extension}-${name}`}
+      value={Boolean(value ?? prop.default ?? false)} onChange={onChange} />;
+  } else if (prop.type === 'number' || prop.type === 'integer') {
+    control = <NumberInput {...common} data-testid={inputId} hasClear
+      min={prop.minimum} max={prop.maximum} isIntegerOnly={prop.type === 'integer'}
+      value={value === '' || value == null ? null : Number(value)}
+      onEntryErrorChange={(error) => onInvalidChange(error !== null)}
+      onChange={(number) => onChange(number ?? '')} />;
+  } else {
+    control = <TextInput {...common} data-testid={inputId}
+      value={String(value ?? prop.default ?? '')} onChange={onChange} />;
   }
 
-  if (prop.enum && prop.enum.length > 0) {
-    const currentVal = value !== undefined ? String(value) : (prop.default !== undefined ? String(prop.default) : String(prop.enum[0]));
-    return (
-      <div className="settings-field" data-testid={`setting-field-${name}`}>
-        <label htmlFor={`field-${extension}-${name}`}>{title}</label>
-        {prop.description && <small>{prop.description}</small>}
-        <select
-          id={`field-${extension}-${name}`}
-          data-testid={`setting-select-${extension}-${name}`}
-          value={currentVal}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          {prop.enum.map((opt) => (
-            <option key={String(opt)} value={String(opt)}>
-              {String(opt)}
-            </option>
-          ))}
-        </select>
-      </div>
-    );
-  }
-
-  if (prop.type === 'boolean') {
-    const checked = Boolean(value ?? prop.default ?? false);
-    return (
-      <div className="settings-field" data-testid={`setting-field-${name}`}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span>{title}</span>
-          <Switch
-            data-testid={`setting-switch-${extension}-${name}`}
-            label={title} value={checked}
-            onChange={(selected) => onChange(selected)}
-          />
-        </label>
-        {prop.description && <small>{prop.description}</small>}
-      </div>
-    );
-  }
-
-  if (prop.type === 'number' || prop.type === 'integer') {
-    const numVal = value !== undefined ? value : (prop.default ?? '');
-    return (
-      <div className="settings-field" data-testid={`setting-field-${name}`}>
-        <label htmlFor={`field-${extension}-${name}`}>{title}</label>
-        {prop.description && <small>{prop.description}</small>}
-        <input
-          id={`field-${extension}-${name}`}
-          data-testid={`setting-input-${extension}-${name}`}
-          type="number"
-          min={prop.minimum}
-          max={prop.maximum}
-          value={numVal === '' ? '' : Number(numVal)}
-          onChange={(e) => {
-            const v = e.target.value;
-            onChange(v === '' ? '' : Number(v));
-          }}
-        />
-      </div>
-    );
-  }
-
-  // Default string
-  const strVal = value !== undefined ? String(value) : (prop.default !== undefined ? String(prop.default) : '');
-  return (
-    <div className="settings-field" data-testid={`setting-field-${name}`}>
-      <label htmlFor={`field-${extension}-${name}`}>{title}</label>
-      {prop.description && <small>{prop.description}</small>}
-      <input
-        id={`field-${extension}-${name}`}
-        data-testid={`setting-input-${extension}-${name}`}
-        type="text"
-        value={strVal}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </div>
-  );
+  return <div className="settings-field" data-testid={`setting-field-${name}`}>{control}</div>;
 }
 
 function ExtensionSchemaForm({
   extension,
   schema,
+  unavailable,
+  onDirtyChange,
 }: {
   extension: string;
   schema: ExtensionSettingsSchema;
+  unavailable: boolean;
+  onDirtyChange: (extension: string, dirty: boolean) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, unknown>>({});
   const [secretFlags, setSecretFlags] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState<string>('');
+  const [status, setStatus] = useState<{ kind: 'success' | 'warning' | 'error'; message: string } | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  const [savedDrafts, setSavedDrafts] = useState<Record<string, unknown>>({});
+  const submitting = useRef(false);
+  const [invalidFields, setInvalidFields] = useState<string[]>([]);
+  const dirty = invalidFields.length > 0 || Object.keys(drafts).some((key) => !Object.is(drafts[key], savedDrafts[key]));
+  useEffect(() => {
+    onDirtyChange(extension, dirty || saving);
+    return () => onDirtyChange(extension, false);
+  }, [extension, dirty, saving, onDirtyChange]);
 
   useEffect(() => {
     let disposed = false;
+    setLoading(true);
+    setLoadError('');
     http.settings.get({ extension })
       .then((res) => {
         if (disposed) return;
@@ -195,12 +145,13 @@ function ExtensionSchemaForm({
           }
         }
         setDrafts(initialDrafts);
+        setSavedDrafts(initialDrafts);
         setSecretFlags(initialSecrets);
         setLoading(false);
       })
       .catch((err) => {
         if (!disposed) {
-          setStatus(`Failed to load settings: ${String(err)}`);
+          setLoadError(String(err));
           setLoading(false);
         }
       });
@@ -208,13 +159,14 @@ function ExtensionSchemaForm({
     return () => {
       disposed = true;
     };
-  }, [extension]);
+  }, [extension, attempt]);
 
-  const handleSubmit = async (e?: FormEvent) => {
-    if (e) e.preventDefault();
-    if (saving) return;
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (submitting.current || loading || loadError || unavailable || invalidFields.length > 0) return;
+    submitting.current = true;
     setSaving(true);
-    setStatus('');
+    setStatus(null);
     try {
       const payload: Record<string, unknown> = {};
       for (const [key, prop] of Object.entries(schema.properties ?? {})) {
@@ -238,7 +190,7 @@ function ExtensionSchemaForm({
       }
 
       const res = await http.settings.set({ extension, values: payload });
-      setStatus(res.warning ?? 'Saved successfully');
+      setStatus(res.warning ? { kind: 'warning', message: res.warning } : { kind: 'success', message: 'Saved successfully' });
 
       // Clear write-only inputs and update configured flags
       const updatedSecrets = { ...secretFlags };
@@ -253,18 +205,23 @@ function ExtensionSchemaForm({
         }
       }
       setDrafts(updatedDrafts);
+      setSavedDrafts(updatedDrafts);
       setSecretFlags(updatedSecrets);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      setStatus(`Error: ${message}`);
+      setStatus({ kind: 'error', message });
     } finally {
+      submitting.current = false;
       setSaving(false);
     }
   };
 
   if (loading) {
-    return <div data-testid={`settings-loading-${extension}`}>Loading ${extension} settings...</div>;
+    return <div role="status" data-testid={`settings-loading-${extension}`}><Spinner label="Loading settings" /></div>;
   }
+
+  if (loadError) return <Banner status="error" title="Could not load settings" description={loadError}
+    endContent={<Button label="Retry" onClick={() => setAttempt((value) => value + 1)} />} />;
 
   return (
     <form
@@ -280,6 +237,8 @@ function ExtensionSchemaForm({
           prop={prop}
           value={drafts[key]}
           isSecretSet={secretFlags[key]}
+          disabled={saving || unavailable}
+          onInvalidChange={(invalid) => setInvalidFields((fields) => invalid ? [...new Set([...fields, key])] : fields.filter((field) => field !== key))}
           onChange={(val) => setDrafts((prev) => ({ ...prev, [key]: val }))}
         />
       ))}
@@ -288,33 +247,41 @@ function ExtensionSchemaForm({
           type="submit"
           label={`Save ${extension} settings`}
           data-testid={`settings-save-${extension}`}
-          isDisabled={saving}
-          onClick={() => {
-            void handleSubmit();
-          }}
+          variant="primary"
+          isLoading={saving}
+          isDisabled={unavailable || invalidFields.length > 0}
         >
           {saving ? 'Saving...' : 'Save settings'}
         </Button>
-        {status && (
-          <span
-            data-testid={`settings-status-${extension}`}
-            className="settings-status"
-          >
-            {status}
-          </span>
-        )}
+        {dirty && <Badge variant="warning" label="Unsaved changes" />}
       </div>
+      {status && <div data-testid={`settings-status-${extension}`} role={status.kind === 'error' ? 'alert' : 'status'}>
+        <Banner status={status.kind} title={status.message} />
+      </div>}
     </form>
   );
 }
 
-export default function Settings({ onOpen, appearance, onAppearanceChange }: {
-  onOpen: (path: '/settings/channels' | '/settings/models' | '/settings/metrics' | '/onboarding') => void;
+export default function Settings({ onOpen, appearance, onAppearanceChange, onDirtyChange }: {
+  onOpen: (path: '/settings/channels' | '/settings/models' | '/settings/metrics' | '/onboarding' | '/extensions') => void;
   appearance: Appearance;
   onAppearanceChange: (mode: string) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const [extensions, setExtensions] = useState<ExtensionStatus[]>([]);
   const latest = useRef(0);
+  const [extensionsLoading, setExtensionsLoading] = useState(true);
+  const [extensionsLoaded, setExtensionsLoaded] = useState(false);
+  const [dirtyExtensions, setDirtyExtensions] = useState<string[]>([]);
+  const reportDirty = useCallback((extension: string, dirty: boolean) => {
+    setDirtyExtensions((previous) => dirty ? [...new Set([...previous, extension])] : previous.filter((id) => id !== extension));
+  }, []);
+  useEffect(() => {
+    onDirtyChange(dirtyExtensions.length > 0);
+  }, [dirtyExtensions, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  const [extensionsError, setExtensionsError] = useState('');
+  const listRequest = useRef(0);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>(getUpdateState);
   // Captured at render: the Install click sends exactly this {generation, version}, never a later state.
   const shownCandidate =
@@ -328,9 +295,18 @@ export default function Settings({ onOpen, appearance, onAppearanceChange }: {
   }, []);
 
   const loadExtensions = () => {
-    http.extensions.list().then((list) => {
+    const request = ++listRequest.current;
+    setExtensionsLoading(true);
+    setExtensionsError('');
+    void http.extensions.list().then((list) => {
+      if (request !== listRequest.current) return;
       setExtensions(list);
-    }).catch(() => {});
+      setExtensionsLoaded(true);
+    }).catch((error) => {
+      if (request === listRequest.current) setExtensionsError(String(error));
+    }).finally(() => {
+      if (request === listRequest.current) setExtensionsLoading(false);
+    });
   };
 
   useEffect(() => {
@@ -378,6 +354,7 @@ export default function Settings({ onOpen, appearance, onAppearanceChange }: {
 
     return () => {
       disposed = true;
+      ++listRequest.current;
       try {
         socket?.close();
       } catch {}
@@ -396,50 +373,52 @@ export default function Settings({ onOpen, appearance, onAppearanceChange }: {
 
   return (
     <section aria-label="Settings" className="settings-page">
-      <h1>Settings</h1>
-
-      <section aria-labelledby="appearance-heading">
-        <Heading id="appearance-heading" level={2}>Appearance</Heading>
-        <SegmentedControl className="settings-appearance" value={appearance} onChange={onAppearanceChange} label="Color mode">
-          {appearanceModes.map(({ value, label }) => <SegmentedControlItem key={value} value={value} label={label} />)}
-        </SegmentedControl>
+      <Heading level={1}>Settings</Heading>
+      <Card className="settings-group" padding={4}>
+        <section aria-labelledby="appearance-heading" className="settings-appearance-section">
+          <Heading id="appearance-heading" level={2}>Appearance</Heading>
+          <Text as="p">Choose a color mode for this device.</Text>
+          <SegmentedControl className="settings-appearance" value={appearance} onChange={onAppearanceChange} label="Color mode">
+            {appearanceModes.map(({ value, label }) => <SegmentedControlItem key={value} value={value} label={label} />)}
+          </SegmentedControl>
+        </section>
+      </Card>
+      <section className="settings-group" aria-label="Workspace preferences">
+        <Heading level={2}>Workspace</Heading>
+        <div className="settings-destinations">
+          <Card className="settings-destination" padding={4}>
+            <Heading level={3}>Workspace setup</Heading>
+            <Text as="p">Review your owner account, model, first bot, and channels.</Text>
+            <Button label="Open workspace setup" data-testid="settings-onboarding-open" onClick={() => onOpen('/onboarding')}>Open setup</Button>
+          </Card>
+          <Card className="settings-destination" padding={4}>
+            <Heading level={3}>Channels</Heading>
+            <Text as="p">Manage messaging connections for your bots.</Text>
+            <Button label="Manage channels" data-testid="settings-channels-open" onClick={() => onOpen('/settings/channels')}>Manage channels</Button>
+          </Card>
+          <Card className="settings-destination" padding={4}>
+            <Heading level={3}>Models</Heading>
+            <Text as="p">Providers, roles and bot overrides.</Text>
+            <Button label="Manage models" data-testid="settings-models-open" onClick={() => onOpen('/settings/models')}>Manage models</Button>
+          </Card>
+          {extensions.some((ext) => ext.id === 'metrics' && ext.status === 'running') && <Card className="settings-destination" padding={4}>
+            <Heading level={3}>Success metrics</Heading>
+            <Text as="p">Review attention, learning and time-to-first-value measures from recorded activity.</Text>
+            <Button label="View success metrics" data-testid="settings-metrics-open" onClick={() => onOpen('/settings/metrics')}>View metrics</Button>
+          </Card>}
+        </div>
       </section>
 
-      <h2>Workspace setup</h2>
-      <p>Review your owner account, model, first bot, and channels.</p>
-      <Button label="Open workspace setup" data-testid="settings-onboarding-open" onClick={() => onOpen('/onboarding')}>
-        Open setup
-      </Button>
-
-      <h2>Channels</h2>
-      <p>Manage messaging connections for your bots.</p>
-      <Button label="Manage channels" data-testid="settings-channels-open" onClick={() => onOpen('/settings/channels')}>
-        Manage channels
-      </Button>
-
-      <h2>Models</h2>
-      <p>Providers, roles and bot overrides.</p>
-      <Button label="Manage models" data-testid="settings-models-open" onClick={() => onOpen('/settings/models')}>
-        Manage models
-      </Button>
-
-      {extensions.some((ext) => ext.id === 'metrics' && ext.status === 'running') && <>
-        <h2>Success metrics</h2>
-        <p>Review attention, learning and time-to-first-value measures from recorded activity.</p>
-        <Button label="View success metrics" data-testid="settings-metrics-open" onClick={() => onOpen('/settings/metrics')}>
-          View metrics
-        </Button>
-      </>}
-
       {native && (
-        <section aria-label="Desktop updates">
-          <h2>Desktop updates</h2>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <Button label="Check for updates" data-testid="settings-update-check" onClick={() => void checkForUpdates()}>
+        <Card className="settings-group" padding={4}>
+          <section aria-label="Desktop updates" className="settings-group">
+          <Heading level={2}>Desktop updates</Heading>
+          <div className="settings-actions">
+            <Button label="Check for updates" data-testid="settings-update-check" isLoading={updateInfo.checking} onClick={() => void checkForUpdates()}>
               Check for updates
             </Button>
             {shownCandidate && (
-              <Button label="Install and restart" data-testid="settings-update-install" onClick={() => void installUpdate(shownCandidate)}>
+              <Button label="Install and restart" data-testid="settings-update-install" isDisabled={dirtyExtensions.length > 0} onClick={() => void installUpdate(shownCandidate)}>
                 Install and restart
               </Button>
             )}
@@ -449,16 +428,22 @@ export default function Settings({ onOpen, appearance, onAppearanceChange }: {
               <Badge variant="success" label={`Update available: ${updateInfo.version}`} />
             </div>
           )}
-          {updateInfo.status && <p role="status">{updateInfo.status}</p>}
-        </section>
+          {updateInfo.error ? <Banner status="error" title="Update failed" description={updateInfo.error} /> :
+            updateInfo.status && <div role="status"><Text as="p">{updateInfo.status}</Text></div>}
+          </section>
+        </Card>
       )}
 
       <div className="settings-section">
-        <h2>Extension Settings</h2>
-        <p>Configure settings for enabled extensions.</p>
+        <Heading level={2}>Extension settings</Heading>
+        <Text as="p">Configure settings for enabled extensions.</Text>
+        {extensionsLoading && <div role="status"><Spinner label="Loading extensions" /></div>}
+        {extensionsError && <Banner status="error" title="Could not load extensions" description={extensionsError}
+          endContent={<Button label="Retry" onClick={loadExtensions} />} />}
 
-        {configurableExtensions.length === 0 ? (
-          <p data-testid="settings-no-extensions">No configurable extensions enabled.</p>
+        {extensionsLoaded && (configurableExtensions.length === 0 ? (
+          !extensionsLoading && !extensionsError && <div data-testid="settings-no-extensions"><EmptyState title="No configurable extensions enabled"
+            actions={<Button label="View extensions" onClick={() => onOpen('/extensions')} />} isCompact /></div>
         ) : (
           configurableExtensions.map((ext) => (
             <div
@@ -466,14 +451,17 @@ export default function Settings({ onOpen, appearance, onAppearanceChange }: {
               data-testid={`settings-extension-${ext.id}`}
               className="settings-extension-panel"
             >
-              <h3>{ext.id}</h3>
+              <Collapsible defaultIsOpen trigger={<Heading level={3}>{ext.id}</Heading>}>
               <ExtensionSchemaForm
                 extension={ext.id}
                 schema={ext.settings as unknown as ExtensionSettingsSchema}
+                unavailable={Boolean(extensionsError)}
+                onDirtyChange={reportDirty}
               />
+              </Collapsible>
             </div>
           ))
-        )}
+        ))}
       </div>
     </section>
   );

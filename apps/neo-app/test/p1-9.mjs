@@ -263,6 +263,7 @@ async function trial(number, previewPort) {
             const el = document.querySelector(${JSON.stringify(selector)});
             if (!el) throw new Error('Element not found: ' + ${JSON.stringify(selector)});
             const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+            el.focus();
             setter.call(el, ${JSON.stringify(val)});
             el.dispatchEvent(new Event('input', { bubbles: true }));
           })()
@@ -275,6 +276,7 @@ async function trial(number, previewPort) {
       await setInput('[data-testid=setting-input-sample-ts-maxRetries]', String(newRetries));
       await page.eventually(`document.querySelector("[data-testid=setting-input-sample-ts-maxRetries]")?.value === "${newRetries}"`, 'maxRetries input set');
 
+      await page.evaluate('document.querySelector("[data-testid=setting-input-sample-ts-maxRetries]").blur()');
       await setInput('[data-testid=setting-input-sample-ts-apiSecret]', secretValue);
       await page.eventually(`document.querySelector("[data-testid=setting-input-sample-ts-apiSecret]")?.value === ${JSON.stringify(secretValue)}`, 'apiSecret input set');
 
