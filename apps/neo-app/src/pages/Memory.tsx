@@ -3,7 +3,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
-import { Button } from '@neometaharness/ui';
+import { AlertDialog, Badge, Banner, Button, Card, Dialog, DialogHeader, EmptyState, MoreMenu, Selector, Skeleton, TextArea, TextInput, Timestamp } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './memory.css';
 
@@ -30,9 +30,13 @@ export default function Memory() {
   const [subject, setSubject] = useState<'user' | 'bot'>('user');
   const [subjectId, setSubjectId] = useState('global');
   const [editing, setEditing] = useState<string | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [deleting, setDeleting] = useState<Entry | null>(null);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [refreshError, setRefreshError] = useState('');
   const refresh = useCallback(async (query = '') => {
     try {
       const found = await memory.list({ workspace, query });
@@ -49,8 +53,8 @@ export default function Memory() {
         setHonchoStatus('degraded');
         setHonchoEntries([]);
       }
-      setError('');
-    } catch (reason) { setError('Memory unavailable: ' + String(reason)); }
+      setRefreshError('');
+    } catch (reason) { setRefreshError('Memory unavailable: ' + String(reason)); } finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -74,7 +78,7 @@ export default function Memory() {
         setNotice('Memory saved');
       }
       setText('');
-      setEditing(null);
+      setEditing(null); setEditorOpen(false);
       await refresh(search);
     } catch (reason) { setError('Save failed: ' + String(reason)); }
     finally { setBusy(false); }
@@ -85,7 +89,7 @@ export default function Memory() {
     setError('');
     try {
       await memory.delete({ id });
-      setNotice('Memory deleted');
+      setNotice('Memory deleted'); setDeleting(null);
       await refresh(search);
     } catch (reason) { setError('Delete failed: ' + String(reason)); }
     finally { setBusy(false); }
@@ -110,65 +114,66 @@ export default function Memory() {
   const shown = sourceFilter === 'local' ? entries
     : sourceFilter === 'honcho' ? honchoEntries : [...entries, ...honchoEntries];
 
+  function openEditor(entry?: Entry) {
+    setEditing(entry?.id ?? null);
+    setText(entry?.text ?? '');
+    setError('');
+    setEditorOpen(true);
+  }
+
   return <section className="memory-page" data-testid="memory-page">
     <header className="page-header memory-header">
       <div><h1>Memory</h1><p>Review what your agents remember and where each entry came from.</p>
-        <span data-testid="honcho-status" className={'honcho-status honcho-' + honchoStatus}
-          role="status">Honcho {honchoStatus}</span>
+        <span data-testid="honcho-status" role="status"><Badge label={'Honcho ' + honchoStatus} variant={honchoStatus === 'ok' ? 'success' : honchoStatus === 'degraded' ? 'warning' : 'neutral'} /></span>
       </div>
-      <Button label="Export Markdown" data-testid="memory-export" variant="secondary"
-        onClick={() => void download()}>Export Markdown</Button>
-    </header>
-    {error && <p role="alert" className="page-error" data-testid="memory-error">{error}</p>}
-    {notice && <p role="status">{notice}</p>}
-    <form className="memory-editor" onSubmit={(event) => void save(event)}>
-      <h2>{editing ? 'Edit memory' : 'Add memory'}</h2>
-      <label htmlFor="memory-text">Memory text</label>
-      <textarea id="memory-text" data-testid="memory-text" value={text}
-        onChange={(event) => setText(event.target.value)} maxLength={16000} required />
-      {!editing && <div className="memory-fields">
-        <label>Subject <select data-testid="memory-subject" value={subject}
-          onChange={(event) => setSubject(event.target.value as 'user' | 'bot')}>
-          <option value="user">User</option><option value="bot">Bot</option>
-        </select></label>
-        <label>Profile or global <input data-testid="memory-subject-id" value={subjectId}
-          onChange={(event) => setSubjectId(event.target.value)} maxLength={100} /></label>
-      </div>}
       <div className="memory-actions">
-        <Button type="submit" label={editing ? 'Save changes' : 'Add memory'} data-testid="memory-save"
-          isDisabled={busy || !text.trim()}>{editing ? 'Save changes' : 'Add memory'}</Button>
-        {editing && <Button label="Cancel edit" variant="secondary" onClick={() => {
-          setEditing(null); setText('');
-        }}>Cancel</Button>}
+        <Button label="Export Markdown" data-testid="memory-export" variant="secondary" onClick={() => void download()}>Export Markdown</Button>
+        <Button label="Add memory" data-testid="memory-add" onClick={() => openEditor()}>Add memory</Button>
       </div>
-    </form>
+    </header>
+    {(error || refreshError) && <Banner role="alert" status="error" title={error || refreshError} data-testid="memory-error" />}
+    {notice && <Banner role="status" status="success" title={notice} isDismissable onDismiss={() => setNotice('')} />}
     <section className="memory-library">
       <div className="memory-heading"><h2>Library</h2>
-        <label>Source <select data-testid="memory-source-filter" value={sourceFilter}
-          onChange={(event) => setSourceFilter(event.target.value as 'all' | 'local' | 'honcho')}>
-          <option value="all">All</option><option value="local">Local</option>
-          <option value="honcho">Honcho</option>
-        </select></label>
-        <label>Search <input data-testid="memory-search" value={search}
-          onChange={(event) => { setSearch(event.target.value); void refresh(event.target.value); }} /></label>
+        <Selector data-testid="memory-source-filter" label="Source" value={sourceFilter} options={[{value: 'all', label: 'All'}, {value: 'local', label: 'Local'}, {value: 'honcho', label: 'Honcho'}]} onChange={value => setSourceFilter(value as typeof sourceFilter)} />
+        <TextInput label="Search" type="search" hasClear data-testid="memory-search" value={search} onChange={setSearch} />
       </div>
-      <ul data-testid="memory-list">{shown.map((entry) =>
-        <li key={entry.id} data-testid="memory-entry" className="memory-entry">
-          <p>{entry.text}</p>
-          <div className="memory-meta">
-            <span>{entry.subject} / {entry.subject_id}</span>
-            <span>{entry.source}</span><span>{entry.trust}</span>
-            <span>Provenance: {entry.provenance}</span>
-            <time dateTime={new Date(entry.updated_at).toISOString()}>{new Date(entry.updated_at).toLocaleString()}</time>
-          </div>
-          {!entry.id.startsWith('nmh:') && <div className="memory-actions">
-            <Button label="Edit" size="sm" variant="secondary" isDisabled={busy}
-              onClick={() => { setEditing(entry.id); setText(entry.text); }}>Edit</Button>
-            <Button label="Delete" size="sm" variant="secondary" isDisabled={busy}
-              onClick={() => void remove(entry.id)}>Delete</Button>
-          </div>}
+      {loading && <div role="status" aria-label="Loading memories"><Skeleton height={72} /></div>}
+      <ul data-testid="memory-list">{shown.map(entry =>
+        <li key={entry.id} data-testid="memory-entry">
+          <Card>
+            <div className="memory-record">
+              <p>{entry.text}</p>
+              {!entry.id.startsWith('nmh:') && <MoreMenu label="Memory actions" data-testid="memory-actions-menu" isDisabled={busy} items={[
+                {label: 'Edit', onClick: () => openEditor(entry)},
+                {label: 'Delete', variant: 'destructive', onClick: () => setDeleting(entry)},
+              ]} />}
+            </div>
+            <div className="memory-meta">
+              <Badge label={entry.subject + ' / ' + entry.subject_id} />
+              <Badge label={entry.source} /><Badge label={entry.trust} />
+              <Timestamp value={entry.updated_at} format="date_time" />
+            </div>
+            <div className="memory-meta">Provenance: {entry.provenance}</div>
+          </Card>
         </li>)}</ul>
-      {!shown.length && !error && <p>No memories found.</p>}
+      {!loading && !shown.length && !refreshError && <EmptyState title={search || sourceFilter !== 'all' ? 'No matching memories' : 'No memories yet'} description={search || sourceFilter !== 'all' ? 'Try another search or source.' : 'Add a memory to your library.'} actions={search || sourceFilter !== 'all' ? <Button label="Clear filters" variant="secondary" onClick={() => { setSearch(''); setSourceFilter('all'); }}>Clear filters</Button> : <Button label="Add memory" onClick={() => openEditor()}>Add memory</Button>} />}
     </section>
+    <Dialog isOpen={editorOpen} purpose="form" width={560} onOpenChange={open => { if (!busy) setEditorOpen(open); }}>
+      <DialogHeader title={editing ? 'Edit memory' : 'Add memory'} />
+      <form className="memory-editor" onSubmit={event => void save(event)}>
+        {error && <Banner status="error" title={error} />}
+        <TextArea label="Memory text" data-testid="memory-text" value={text} onChange={setText} htmlMaxLength={16000} rows={5} isRequired />
+        {!editing && <>
+          <Selector label="Subject" value={subject} options={[{value: 'user', label: 'User'}, {value: 'bot', label: 'Bot'}]} onChange={value => setSubject(value as 'user' | 'bot')} />
+          <TextInput label="Profile or global" description="Use global for shared memory, or enter a specific profile." value={subjectId} onChange={value => setSubjectId(value.slice(0, 100))} />
+        </>}
+        <div className="memory-actions">
+          <Button label="Cancel" variant="secondary" isDisabled={busy} onClick={() => setEditorOpen(false)}>Cancel</Button>
+          <Button type="submit" label={editing ? 'Save changes' : 'Add memory'} data-testid="memory-save" isLoading={busy} isDisabled={busy || !text.trim()}>{editing ? 'Save changes' : 'Add memory'}</Button>
+        </div>
+      </form>
+    </Dialog>
+    <AlertDialog data-testid="memory-delete-dialog" isOpen={Boolean(deleting)} onOpenChange={open => { if (!open && !busy) setDeleting(null); }} title="Delete memory?" description={deleting ? 'Permanently delete this memory: ' + deleting.text.slice(0, 160) : ''} actionLabel="Delete memory" isActionLoading={busy} onAction={() => { if (deleting) void remove(deleting.id); }} />
   </section>;
 }

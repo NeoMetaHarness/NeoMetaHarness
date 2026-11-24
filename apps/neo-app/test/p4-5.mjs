@@ -242,9 +242,9 @@ async function trial() {
     await eventually(async () => await page.evaluate(
       'document.querySelector("[data-testid=honcho-status]")?.textContent === "Honcho ok"'),
     'Honcho ok badge');
-    assert.ok(await page.evaluate(
-      '!!document.querySelector("[data-testid=memory-source-filter] option[value=honcho]")'),
-    'Honcho source filter missing');
+    await page.evaluate('document.querySelector("[data-testid=memory-source-filter] button, button[data-testid=memory-source-filter]").click()');
+    await eventually(async () => await page.evaluate('[...document.querySelectorAll("[role=option]")].some(el => el.textContent.trim() === "Honcho")'), 'Honcho source filter option');
+    await page.evaluate('[...document.querySelectorAll("[role=option]")].find(el => el.textContent.trim() === "All").click()');
     await eventually(async () => await page.evaluate(
       'document.querySelector("[data-testid=memory-list]")?.textContent.includes("Hermes fake answer complete.")'),
     'Honcho memory rows');

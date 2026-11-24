@@ -1,22 +1,8 @@
-.memory-page { padding: 0 0 36px; }
-.memory-header, .memory-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.memory-editor, .memory-library { border: 1px solid var(--neo-color-border); padding: 20px; margin-top: 18px; }
-.memory-editor { display: grid; gap: 12px; }
-.memory-editor h2, .memory-library h2 { margin: 0; font-size: 21px; }
-.memory-editor textarea { min-height: 100px; resize: vertical; width: 100%; }
-.memory-editor textarea, .memory-editor input, .memory-editor select, .memory-heading input {
-  border: 1px solid var(--neo-color-control-border);
-  padding: 10px; background: transparent; color: inherit; font: inherit;
-}
-.memory-fields, .memory-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.memory-fields label, .memory-heading label { display: grid; gap: 6px; }
-.memory-library ul { list-style: none; margin: 18px 0 0; padding: 0; }
-.memory-entry { border-top: 1px solid var(--neo-color-border); padding: 16px 0; }
-.memory-entry p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10px; }
-.memory-meta { display: flex; gap: 10px; flex-wrap: wrap; color: var(--neo-color-text-muted); font-size: 12px; margin-bottom: 12px; }
-@media(max-width: 760px) { .memory-header, .memory-heading { align-items: stretch; flex-direction: column; } }
-.memory-heading select { border: 1px solid var(--neo-color-control-border); padding: 10px; background: transparent; color: inherit; font: inherit; }
-.honcho-status { display: inline-block; padding: 3px 8px; border: 1px solid currentColor; margin-top: 8px; font-size: 12px; font-weight: 600; }
-.honcho-ok { color: var(--neo-color-success); }
-.honcho-degraded { color: var(--neo-color-warning); }
-.honcho-off { color: var(--neo-color-text-muted); }
+﻿.memory-page { display: grid; gap: var(--neo-space-4); padding-bottom: var(--neo-space-6); }
+.memory-header, .memory-heading, .memory-record { display: flex; align-items: start; justify-content: space-between; gap: var(--neo-space-4); flex-wrap: wrap; }
+.memory-editor { display: grid; gap: var(--neo-space-4); }
+.memory-actions, .memory-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--neo-space-2); }
+.memory-library ul { display: grid; gap: var(--neo-space-3); list-style: none; margin: var(--neo-space-4) 0; padding: 0; }
+.memory-record { flex-wrap: nowrap; }
+.memory-record p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 var(--neo-space-3); min-width: 0; }
+.memory-meta { color: var(--neo-color-text-muted); font-size: var(--neo-text-sm); margin-top: var(--neo-space-2); overflow-wrap: anywhere; }

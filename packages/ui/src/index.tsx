@@ -33,4 +33,7 @@ export { Avatar } from '@astryxdesign/core/Avatar';
 export { CodeBlock } from '@astryxdesign/core/CodeBlock';
 export { Section } from '@astryxdesign/core/Section';
 export { StatusDot } from '@astryxdesign/core/StatusDot';
-export { Dialog } from '@astryxdesign/core/Dialog';
+export { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
+export { TextArea } from '@astryxdesign/core/TextArea';
+export { InfoTip } from '@astryxdesign/core/InfoTip';
+export { Timestamp } from '@astryxdesign/core/Timestamp';

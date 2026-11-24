@@ -1,0 +1,6 @@
+﻿.metrics-page { display: grid; gap: var(--neo-space-4); }
+.metrics-header { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: var(--neo-space-4); }
+.metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: var(--neo-space-4); }
+.metric-content { display: grid; justify-items: start; gap: var(--neo-space-3); }
+.metric-proxy { width: 100%; box-sizing: border-box; display: grid; justify-items: start; gap: var(--neo-space-2); padding: var(--neo-space-3); background: var(--neo-color-surface-muted); border-radius: var(--neo-radius-md); }
+.metric-reason { display: flex; gap: var(--neo-space-2); align-items: start; color: var(--neo-color-text-muted); }

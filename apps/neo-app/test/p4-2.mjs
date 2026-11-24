@@ -145,6 +145,12 @@ async function pageSession(chrome, url) {
         type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13,
       }, sessionId);
     },
+    async click(expression) {
+      const point = await evaluate(`(() => { const element = (${expression}); const rect = element.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; })()`);
+      await chrome.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point }, sessionId);
+      await chrome.send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...point }, sessionId);
+      await chrome.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...point }, sessionId);
+    },
     async screenshot(file) {
       const { data } = await chrome.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, sessionId);
       await writeFile(file, Buffer.from(data, 'base64'));
@@ -289,6 +295,8 @@ async function trial(previewPort) {
     const page = await pageSession(chrome, url);
     try {
       await page.eventually('!!document.querySelector("[data-testid=memory-page]")', 'Memory lazy route');
+      await page.evaluate('document.querySelector("[data-testid=memory-add]").click()');
+      await page.eventually('!!document.querySelector("[data-testid=memory-text]")', 'memory editor open');
       await page.evaluate(`(() => {
         const input = document.querySelector('[data-testid=memory-text]');
         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
@@ -338,9 +346,12 @@ async function trial(previewPort) {
       const scoped = await rpc.x['memory-local'].list({ workspace: 'default', subjectId: 'default' });
       assert.ok(!scoped.some((item) => item.id === other.id), 'Another profile memory leaked');
       await page.eventually('document.querySelector("[data-testid=memory-list]")?.textContent?.includes("Private profile memory")', 'editable memory visible');
-      await page.evaluate(`[...document.querySelectorAll('[data-testid=memory-entry]')]
-        .find((entry) => entry.textContent.includes('Private profile memory'))
-        .querySelector('button').click()`);
+      const editTrigger = `[...document.querySelectorAll('[data-testid=memory-entry]')].find(entry => entry.textContent.includes('Private profile memory'))?.querySelector('button')`;
+      await page.eventually(`Boolean((${editTrigger}) && !(${editTrigger}).disabled && (${editTrigger}).getAttribute('aria-disabled') !== 'true' && !document.querySelector('dialog[open]'))`, 'edit actions ready');
+      await page.click(editTrigger);
+      const editItem = `[...document.querySelectorAll('[role=menuitem]')].find(el => el.textContent.trim() === 'Edit' && el.checkVisibility())`;
+      await page.eventually(`(() => { const item = ${editItem}; if (!item) return false; const rect = item.getBoundingClientRect(); return item.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })()`, 'edit menu actionable');
+      await page.click(editItem);
       await page.eventually('document.querySelector("[data-testid=memory-text]")?.value === "Private profile memory"', 'edit loaded');
       await page.evaluate(`(() => {
         const input = document.querySelector('[data-testid=memory-text]');
@@ -354,9 +365,17 @@ async function trial(previewPort) {
       assert.ok(exported['SOUL.md'].includes('Edited private profile memory'));
       assert.ok(exported['MEMORY.md'].includes('Edited private profile memory'));
       assert.ok(!exported['USER.md'].includes('Edited private profile memory'));
-      await page.evaluate(`[...document.querySelectorAll('[data-testid=memory-entry]')]
-        .find((entry) => entry.textContent.includes('Edited private profile memory'))
-        .querySelectorAll('button')[1].click()`);
+      const deleteTrigger = `[...document.querySelectorAll('[data-testid=memory-entry]')]
+        .find((entry) => entry.textContent.includes('Edited private profile memory'))?.querySelector('button')`;
+      await page.eventually(`Boolean((${deleteTrigger}) && !(${deleteTrigger}).disabled && (${deleteTrigger}).getAttribute('aria-disabled') !== 'true' && !document.querySelector('dialog[open]'))`, 'memory actions ready');
+      await page.evaluate(`(${deleteTrigger}).focus()`);
+      await page.pressEnter();
+      const deleteItem = `[...document.querySelectorAll('[role=menuitem]')].find(el => el.textContent.trim() === 'Delete' && el.checkVisibility())`;
+      await page.eventually(`(() => { const item = ${deleteItem}; if (!item) return false; const rect = item.getBoundingClientRect(); return item.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })()`, 'delete menu actionable');
+      await page.click(deleteItem);
+      const confirm = `[...document.querySelectorAll('[role=alertdialog][open] button')].find(el => el.textContent.trim() === 'Delete memory')`;
+      await page.eventually(`(() => { const button = ${confirm}; if (!button) return false; const rect = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })()`, 'delete confirmation actionable');
+      await page.click(confirm);
       await page.eventually('!document.querySelector("[data-testid=memory-list]")?.textContent?.includes("Edited private profile memory")', 'memory delete persisted');
       assert.ok(!(await rpc.x['memory-local'].list({ workspace: 'default' })).some((item) => item.id === other.id));
       console.log('P4-2_STORE PASS fts_search=true profile_scope=true ui_edit=true ui_delete=true markdown_export=true');
