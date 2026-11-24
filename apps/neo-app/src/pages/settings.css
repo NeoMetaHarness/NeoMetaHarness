@@ -19,6 +19,9 @@
 .settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 .settings-status { font-size: 0.9em; color: var(--neo-color-text-muted); }
 
+.settings-appearance { --color-neutral: var(--neo-color-surface-muted); }
+.settings-appearance [role="radio"] { --color-text-secondary: var(--neo-color-text-muted); }
+
 @media (forced-colors: none) {
   .settings-appearance [role="radio"][aria-checked="true"] {
     box-shadow: inset 0 0 0 1px var(--neo-color-control-border);

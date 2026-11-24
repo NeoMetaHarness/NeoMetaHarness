@@ -44,6 +44,7 @@
     "test:p2-9": "pnpm --dir apps/neo-app build && pnpm --dir extensions/models-router-panda typecheck && pnpm --dir extensions/engine-superagent typecheck && pnpm --dir extensions/models-router-panda exec tsx test/escalation.gateway.test.ts",
     "docs:build": "pnpm --dir apps/docs build",
     "docs:check": "pnpm --dir apps/docs check",
+    "test:p7-18": "pnpm --dir apps/neo-app test:p7-18",
     "test:p7-8": "pnpm --dir apps/neo-app test:p7-8",
     "test:p7-16": "pnpm --dir packages/kernel exec tsx test/engine-source.test.ts && pnpm --dir packages/kernel exec tsx test/reactivate.test.ts && pnpm --dir extensions/engine-hermes test:install && pnpm --dir extensions/engine-superagent test:install",
 
