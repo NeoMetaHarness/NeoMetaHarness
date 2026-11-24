@@ -228,13 +228,14 @@ async function main() {
     await viewer.evaluate('document.querySelector("[data-testid=settings-channels-open]").click()');
     await eventually(() => viewer.evaluate('location.pathname === "/settings/channels"'), 'Settings Channels navigation');
     await eventually(() => viewer.evaluate('!!document.querySelector("[data-testid=channels-page]")'), 'lazy Channels route');
-    await eventually(() => viewer.evaluate('Array.from(document.querySelectorAll("#channels-profile option")).some(item => item.value === "channel_ui")'), 'profile list from Hermes');
-    await viewer.evaluate(`const select = document.querySelector('#channels-profile'); select.value = 'channel_ui'; select.dispatchEvent(new Event('change', { bubbles: true }));`);
-    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=channels-status]")?.textContent?.includes("disconnected") && !!document.querySelector("#channels-platform option[value=telegram]")'), 'platform picker populated by Hermes');
+    await viewer.evaluate('document.querySelector("#channels-profile").click()');
+    await eventually(() => viewer.evaluate('Array.from(document.querySelectorAll("[role=option]")).some(item => item.textContent.trim() === "channel_ui")'), 'profile list from Hermes');
+    await viewer.evaluate('Array.from(document.querySelectorAll("[role=option]")).find(item => item.textContent.trim() === "channel_ui").click()');
+    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=channels-status]")?.textContent?.includes("disconnected") && document.querySelector("#channels-platform")?.textContent?.toLowerCase().includes("telegram")'), 'platform picker populated by Hermes');
     await viewer.type('[data-testid=channels-token]', token);
     await viewer.evaluate('document.querySelector("[data-testid=channels-connect]").click()');
     await eventually(async () => (await rpc.x.channels.status({ profile: 'channel_ui' })).platforms.find((item) => item.id === 'telegram')?.configured, 'UI token stored in vault');
-    await eventually(() => viewer.evaluate('document.querySelector("[data-testid=channels-token]")?.value === "" && document.body.innerText.includes("Telegram connected")'), 'write-only token cleared after connect');
+    await eventually(() => viewer.evaluate('!document.querySelector("[data-testid=channels-token]") && document.body.innerText.includes("Telegram connected")'), 'write-only token cleared after connect');
     await eventually(() => telegram.calls.some((call) => call.method === 'getUpdates'), 'Hermes Telegram polling active');
     telegram.dm('Send fake Telegram reply');
     await eventually(() => telegram.calls.some((call) => call.method === 'sendMessage' &&
@@ -242,6 +243,8 @@ async function main() {
     assert.ok(model.calls > 0, 'scripted model invoked');
 
     await viewer.evaluate('document.querySelector("[data-testid=channels-disconnect]").click()');
+    await eventually(() => viewer.evaluate('!!document.querySelector("[role=alertdialog][open]")'), 'disconnect confirmation');
+    await viewer.evaluate('Array.from(document.querySelectorAll("[role=alertdialog] button")).find(button => button.textContent === "Confirm disconnect").click()');
     await eventually(async () => !(await rpc.x.channels.status({ profile: 'channel_ui' })).platforms.find((item) => item.id === 'telegram')?.configured,
       'UI disconnect removed vault token');
     await eventually(() => viewer.evaluate('document.body.innerText.includes("Telegram disconnected")'), 'disconnect feedback');

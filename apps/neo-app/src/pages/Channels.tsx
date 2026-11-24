@@ -3,7 +3,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
-import { Button } from '@neometaharness/ui';
+import { AlertDialog, Badge, Banner, Button, Card, Heading, Selector, Spinner, Text, TextInput } from '@neometaharness/ui';
 import { gatewayToken, gatewayUrl } from '../config';
 import './channels.css';
 
@@ -32,6 +32,7 @@ export default function Channels() {
   const [status, setStatus] = useState('Loading');
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const live = useRef(true);
   const selected = useRef('default');
 
@@ -45,6 +46,9 @@ export default function Channels() {
 
   useEffect(() => {
     selected.current = profile;
+    setPlatforms([]);
+    setStatus('Loading');
+    setError('');
     setToken('');
     setNotice('');
     void refresh(profile);
@@ -108,32 +112,30 @@ export default function Channels() {
   const selectedPlatform = platforms.find((item) => item.id === platform);
   return <section className="channels-page" data-testid="channels-page">
     <header className="page-header"><div><h1>Channels</h1><p>Connect messaging platforms to a bot.</p></div></header>
-    <div className="channels-panel">
-      <label htmlFor="channels-profile">Bot</label>
-      <select id="channels-profile" data-testid="channels-profile" value={profile} disabled={busy}
-        onChange={(event) => setProfile(event.target.value)}>{profiles.map((name) =>
-          <option key={name} value={name}>{name}</option>)}</select>
-      <label htmlFor="channels-platform">Platform</label>
-      <select id="channels-platform" data-testid="channels-platform" value={platform} disabled={busy || status === 'disabled'}
-        onChange={(event) => { setPlatform(event.target.value); setToken(''); }}>
-        {platforms.map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
-      </select>
-      <p data-testid="channels-status" role="status">{status === 'disabled' ? 'Channels extension disabled'
-        : `${selectedPlatform?.name ?? platform ?? 'Platform'}: ${selectedPlatform?.enabled ? 'enabled' : 'disconnected'}`}</p>
-      {selectedPlatform?.description && <p>{selectedPlatform.description}</p>}
-      <form onSubmit={(event) => void connect(event)}>
-        <label htmlFor="channels-token">Telegram bot token</label>
-        <input id="channels-token" data-testid="channels-token" type="password" autoComplete="off"
-          value={token} onChange={(event) => setToken(event.target.value)} disabled={busy || platform !== 'telegram' || status === 'disabled'} />
-        <div className="channels-actions">
-          <Button label="Connect" data-testid="channels-connect" type="submit"
-            isDisabled={busy || !token.trim() || platform !== 'telegram' || status === 'disabled'}>Connect</Button>
-          <Button label="Disconnect" data-testid="channels-disconnect" type="button" variant="secondary"
-            isDisabled={busy || platform !== 'telegram' || status === 'disabled'} onClick={() => void disconnect()}>Disconnect</Button>
-        </div>
-      </form>
-      {notice && <p role="status">{notice}</p>}
-      {error && <p className="page-error" role="alert">{error}</p>}
-    </div>
+    <Card className="channels-panel" padding={4}>
+      <Heading level={2}>Bot connection</Heading>
+      <Selector label="Bot" id="channels-profile" data-testid="channels-profile" options={profiles} value={profile} isDisabled={busy}
+        onChange={setProfile} />
+      <Selector label="Platform" id="channels-platform" data-testid="channels-platform" value={platform}
+        options={platforms.map(item => ({ value: item.id, label: item.name || item.id }))} isDisabled={busy || status !== 'Ready'}
+        onChange={value => { setPlatform(value); setToken(''); }} />
+      <div data-testid="channels-status" role="status" className="channels-state">
+        {status === 'Loading' ? <Spinner label="Checking connection" /> : status === 'Ready'
+          ? <><Text weight="bold">{selectedPlatform?.name ?? platform}</Text><Badge label={selectedPlatform?.enabled ? 'enabled' : 'disconnected'} variant={selectedPlatform?.enabled ? 'success' : 'neutral'} /></>
+          : <Badge label={status === 'disabled' ? 'Channels extension disabled' : 'Unavailable'} variant="warning" />}
+      </div>
+      {selectedPlatform?.description && <Text as="p">{selectedPlatform.description}</Text>}
+      {status === 'Ready' && selectedPlatform && platform === 'telegram' && (selectedPlatform.enabled
+        ? <Button label="Disconnect" data-testid="channels-disconnect" variant="destructive" isDisabled={busy} onClick={() => setConfirmDisconnect(true)}>Disconnect</Button>
+        : <form onSubmit={event => void connect(event)}>
+          <TextInput label="Telegram bot token" id="channels-token" data-testid="channels-token" type="password" autoComplete="off" value={token} onChange={setToken} isDisabled={busy} isRequired />
+          <Button label="Connect" data-testid="channels-connect" type="submit" isDisabled={busy || !token.trim()}>Connect</Button>
+        </form>)}
+      {notice && <Banner status="success" title={notice} />}
+      {error && <Banner status="error" title={error} />}
+    </Card>
+    <AlertDialog isOpen={confirmDisconnect} onOpenChange={setConfirmDisconnect} title="Disconnect Telegram?"
+      description={`Disconnect Telegram from ${profile}. This bot will stop receiving messages from this channel.`}
+      actionLabel="Confirm disconnect" actionVariant="destructive" onAction={() => { setConfirmDisconnect(false); if (selectedPlatform?.enabled) void disconnect(); }} />
   </section>;
 }
