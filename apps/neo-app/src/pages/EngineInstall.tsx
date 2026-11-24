@@ -3,7 +3,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type HermesInstallStatus, type SuperagentInstallStatus, type T3InstallStatus } from '@neometaharness/contracts';
-import { Banner, Button, ProgressBar, Text } from '@neometaharness/ui';
+import { Banner, Button, Card, Heading, ProgressBar, Spinner, Step, Stepper, Text } from '@neometaharness/ui';
 import { gatewayToken, gatewayUrl } from '../config';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -195,16 +195,23 @@ export default function EngineInstall({ engine = 'engine-hermes', onReady, testI
     }
   };
 
-  if (unavailable !== null) return <div className="hermes-install" data-testid={testId} data-state="unavailable">
+  if (unavailable !== null) return <Card className="hermes-install" padding={3} data-testid={testId} data-state="unavailable">
     <div data-testid={`${testId}-error`}>
       <Banner status="error" title={`${copy.title} could not start`} description={<Text as="p">{unavailable}</Text>}
         endContent={<Button label={`Try starting ${copy.name} again`} data-testid={`${testId}-retry`} isDisabled={starting} onClick={() => { void restart(); }}>Try again</Button>} />
     </div>
-  </div>;
+  </Card>;
   const connection = runtime && status?.state === 'ready' && 'connected' in status ? status : undefined;
-  if (!status && !runtimeError || status?.state === 'ready' && (!connection || connection.connected) && !runtimeError) return null;
+  if (status?.state === 'ready' && (!connection || connection.connected) && !runtimeError) return null;
   const actionLabel = connection?.external ? `Reconnect to ${copy.name}` : `Start ${copy.name}`;
-  return <div className="hermes-install" data-testid={testId} data-state={status?.state ?? 'unknown'}>
+  return <Card className="hermes-install" padding={3} data-testid={testId} data-state={status?.state ?? 'unknown'}>
+    <Heading level={3}>{copy.title} setup</Heading>
+    <Stepper activeStep={status?.state === 'ready' ? 1 : 0} label={copy.title + ' setup progress'} orientation="vertical" density="compact">
+      <Step step={0} label="Install engine" status={status?.state === 'failed' ? 'error' : undefined} />
+      {runtime && <Step step={1} label="Connect runtime" status={runtimeError ? 'error' : undefined} />}
+    </Stepper>
+    {!status && !runtimeError && <Spinner label="Checking engine status" />}
+    {starting && <Spinner label="Starting request" />}
     {needsMissing && <div data-testid={`${testId}-needs`}>
       <Banner status="warning" title={needsMissing.title} description={<Text as="p">{needsMissing.detail}</Text>} />
     </div>}
@@ -220,7 +227,7 @@ export default function EngineInstall({ engine = 'engine-hermes', onReady, testI
       <Banner status="error" title={`${copy.title} could not be installed`} description={<Text as="p">{status.error ?? status.message}</Text>}
         endContent={<Button label={`Try installing ${copy.name} again`} data-testid={`${testId}-retry`} isDisabled={starting} onClick={() => { void install(); }}>Try again</Button>} />
     </div>}
-    {connection && !connection.connected && (connection.phase === 'starting'
+    {connection && !connection.connected && !runtimeError && (connection.phase === 'starting'
       ? <div data-testid={`${testId}-progress`}><ProgressBar label={connection.message} isIndeterminate /></div>
       : <>
         <Button label={actionLabel} data-testid={`${testId}-runtime-start`} isDisabled={starting} onClick={() => { void startRuntime(); }}>
@@ -235,5 +242,5 @@ export default function EngineInstall({ engine = 'engine-hermes', onReady, testI
           setRound((value) => value + 1);
         }}>Retry</Button>} />
     </div>}
-  </div>;
+  </Card>;
 }

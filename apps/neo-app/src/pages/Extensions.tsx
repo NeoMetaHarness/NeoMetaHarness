@@ -4,7 +4,7 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type ExtensionStatus, type GatewayEvent } from '@neometaharness/contracts';
-import { Switch } from '@neometaharness/ui';
+import { Badge, Banner, Card, EmptyState, Heading, Skeleton, Switch, Text } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import EngineInstall, { type InstallableEngine } from './EngineInstall';
 
@@ -124,14 +124,22 @@ export default function Extensions() {
       </div>
       <span role="status" className="connection" aria-label="Gateway event connection">{connection}</span>
     </header>
-    {error && <p role="alert" className="page-error">{error}</p>}
-    {loading ? <p role="status">Loading extensions…</p> :
+    {error && <Banner status="error" title="Extensions could not be updated" description={error} />}
+    {loading ? <div className="extensions-list" role="status" aria-label="Loading extensions">{[0, 1, 2].map((index) => <Skeleton key={index} height={88} width="100%" />)}</div> :
       <div className="extensions-list" aria-label="Installed extensions">
+        {rows.length === 0 && <EmptyState title="No extensions installed" description="Available extensions will appear here." />}
         {rows.map((row) => <article key={row.id} className="extension-row" data-testid={`extension-${row.id}`} data-event-seq={observed[row.id] ?? 0}>
+          <Card padding={4}>
+          <div className="extension-card-content">
           <div className="extension-details">
-            <h2>{row.id}</h2>
-            <p>{row.status === 'running' ? 'Running' : row.status === 'degraded' ? 'Needs attention' : 'Disabled'}
-              {' · '}{row.health ? (row.health.ok ? 'Healthy' : 'Unhealthy') : 'Inactive'}</p>
+            <Heading level={2}>{row.id.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ')}</Heading>
+            <Text as="p">{row.id}{row.version ? ' / v' + row.version : ''}</Text>
+            <div className="extension-badges">
+              <Badge variant={row.status === 'running' ? 'success' : row.status === 'degraded' ? 'warning' : 'neutral'}
+                label={row.status === 'running' ? 'Running' : row.status === 'degraded' ? 'Needs attention' : 'Disabled'} />
+              <Badge variant={row.health ? row.health.ok ? 'success' : 'error' : 'neutral'}
+                label={row.health ? row.health.ok ? 'Healthy' : 'Unhealthy' : 'Inactive'} />
+            </div>
             {(row.reason || row.health?.reason) && <p className="extension-reason">{row.reason || row.health?.reason}</p>}
             {isInstallable(row.id) && row.status !== 'disabled' && <EngineInstall
               key={row.id} engine={row.id} testId={`extension-${row.id}-install`}
@@ -139,6 +147,8 @@ export default function Extensions() {
           </div>
           <Switch label={`Enable ${row.id}`} value={row.desired} isLoading={busy === row.id}
             isDisabled={busy !== null} onChange={(enabled) => { void toggle(row, enabled); }} />
+          </div>
+          </Card>
         </article>)}
       </div>}
   </section>;
