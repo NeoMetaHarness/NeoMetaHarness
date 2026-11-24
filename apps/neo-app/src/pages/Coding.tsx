@@ -109,12 +109,12 @@ export default function Coding() {
         return;
       }
       if (!extension.health?.ok) {
-        const installation = await http.x['engine-t3'].install.status();
+        const installation = await http.x['engine-t3'].install.status().catch(() => undefined);
         if (!live.current) return;
-        const state = installation.state === 'not_installed' ? 'not_installed'
-          : installation.state === 'installing' || installation.phase === 'starting' ? 'connecting' : 'error';
+        const state = installation?.state === 'not_installed' ? 'not_installed'
+          : installation?.state === 'installing' || installation?.phase === 'starting' ? 'connecting' : 'error';
         unavailable(state, state === 'not_installed' ? 'Not installed' : state === 'connecting' ? 'Connecting' : 'Unavailable',
-          installation.error ?? extension.health?.reason ?? installation.message);
+          installation?.error ?? extension.health?.reason ?? installation?.message ?? 'T3 is disconnected.');
         return;
       }
       const [result, providerResult] = await Promise.all([
@@ -142,9 +142,11 @@ export default function Coding() {
             ?? chosen?.models[0]?.id ?? previous : previous);
       }
       setStatus((previous) => ['disabled', 'Loading', 'Not installed', 'Connecting', 'Unavailable'].includes(previous) ? 'Ready' : previous);
-      if (!silent) setError('');
+      if (selected.current && !connection.current && result.threads.some((thread) => thread.id === selected.current)) {
+        openThread(selected.current);
+      } else if (!silent) setError('');
     } catch (reason) {
-      if (!live.current) return;
+      if (!live.current || silent) return;
       if (isDisabled(reason)) unavailable('disabled', 'disabled');
       else unavailable('error', 'Unavailable', 'Cannot load coding projects. Check the T3 connection in Extensions.');
     }
@@ -160,6 +162,7 @@ export default function Coding() {
     connection.current?.socket.close();
     connection.current = null;
     setRunning(false);
+    setSubscribed(false);
   }
 
   function append(id: number, delta: string) {
@@ -188,7 +191,16 @@ export default function Coding() {
       const count = history.filter(({ item }) => item?.type === 'user_message').length;
       setTurnCount(count);
       setSelectedTurn(count || 1);
-      const projection = (event.payload as { projection?: { checkpoints?: Checkpoint[] } })?.projection;
+      const projection = (event.payload as { projection?: {
+        checkpoints?: Checkpoint[];
+        runs?: Array<{ status: string }>;
+        runtimeRequests?: Array<{ id: string; kind: string; status: string }>;
+      } })?.projection;
+      const activeRun = projection?.runs?.some(({ status }) => ['pending', 'running', 'waiting'].includes(status)) ?? false;
+      const pendingApproval = projection?.runtimeRequests?.find(({ status }) => status === 'pending');
+      setRunning(activeRun);
+      setApproval(pendingApproval ? { id: pendingApproval.id, kind: pendingApproval.kind, busy: false } : null);
+      if (pendingApproval || activeRun) setStatus(pendingApproval ? 'Approval required' : 'Running');
       const ready = projection?.checkpoints?.filter((checkpoint) => checkpoint.status === 'ready') ?? [];
       setCheckpoints(ready);
       setSelectedCheckpoint(ready.at(-1)?.id ?? '');
@@ -284,17 +296,19 @@ export default function Coding() {
     void (async () => {
       try {
         for await (const event of await client.x['engine-t3'].events({ threadId: id })) {
-          if (selected.current !== id) break;
+          if (connection.current?.socket !== socket) break;
           receive(id, event);
         }
       } catch (reason) {
         if (live.current && selected.current === id && connection.current?.socket === socket) {
-          setStatus(isDisabled(reason) ? 'disabled' : 'Unavailable');
-          if (!isDisabled(reason)) setError(`Stream interrupted: ${String(reason)}`);
+          setStatus(isDisabled(reason) ? 'disabled' : 'Reconnecting');
         }
       } finally {
         socket.close();
-        if (connection.current?.socket === socket) connection.current = null;
+        if (connection.current?.socket === socket) {
+          connection.current = null;
+          setSubscribed(false);
+        }
       }
     })();
   }
