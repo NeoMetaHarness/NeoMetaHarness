@@ -367,6 +367,9 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     // P7-16: engine sources installed on demand, their venvs and caches (outside the versioned runtime).
     ...(options.enginesDir ? { enginesDir: options.enginesDir }
       : options.dataDir || options.databaseFile !== ':memory:' ? { enginesDir: join(dataDir, 'engines') } : {}),
+    // The repository or unpacked runtime holding the extensions folder and upstream.lock.json. An upgraded
+    // generation lives in extension storage, so it cannot find the lock from its own location.
+    runtimeRoot: dirname(resolve(options.extensionsDir ?? defaultExtensions)),
     gatewayUrl: () => `http://127.0.0.1:${gatewayPort}`,
     // P1-13: where an extension keeps a workspace's own configuration (Model Hub, Panda). Desktop has one
     // ('default', unchanged); server mode keeps each workspace apart, and 'default' is the deployment's.

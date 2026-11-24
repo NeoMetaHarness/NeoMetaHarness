@@ -9,6 +9,8 @@ export default defineExtension({
   async activate(ctx) {
     const service = new T3ControlPlane();
     const enginesDir = ctx.inject<string>('enginesDir');
+    // The repository or unpacked runtime the Gateway serves; it holds upstream.lock.json.
+    const runtimeRoot = ctx.inject<string>('runtimeRoot');
     const settings = ctx.inject<T3Settings>('settings') ?? {};
     const externalUrl = process.env.NMH_T3_URL?.trim() || settings.existingServerUrl?.trim();
     // Treat legacy unbound secrets and a partially saved URL/secret pair as unconfigured.
@@ -24,7 +26,7 @@ export default defineExtension({
       try { t3Origin(externalUrl); } catch { validUrl = false; }
     }
     const abort = new AbortController();
-    const executable = externalUrl ? undefined : installedT3(enginesDir);
+    const executable = externalUrl ? undefined : installedT3(enginesDir, runtimeRoot);
     const testTtl = process.env.NODE_ENV === 'test' ? Number(process.env.NMH_TEST_T3_SESSION_TTL_MS) : 0;
     const local = executable && enginesDir ? new T3LocalRuntime(service, executable, enginesDir,
       Number.isSafeInteger(testTtl) && testTtl > 0 ? { sessionTtlMs: testTtl } : undefined) : undefined;
@@ -49,7 +51,7 @@ export default defineExtension({
     };
     const installer = new T3Installer(enginesDir, () => {
       void ctx.reactivate().catch((error) => console.error('T3 restart after install failed', error));
-    });
+    }, runtimeRoot);
     const status = (): T3InstallStatus => {
       if (externalUrl) return { state: 'ready', message: reason || 'Connected to the existing T3 server.',
         connected: service.connected, external: true, ...(connecting ? { phase: 'starting' as const } : {}) };

@@ -12,11 +12,20 @@ import { downloadEngineArchive, EngineInstallError, readEnginePin, retrying, saf
 import { system32 } from './system-tools.js';
 
 const exec = promisify(execFile);
-const lockFile = fileURLToPath(new URL('../../../upstream.lock.json', import.meta.url));
+/**
+ * upstream.lock.json of the repository or unpacked runtime the Gateway serves (its runtimeRoot). Without one,
+ * this source tree's own root; an upgraded generation is copied elsewhere and must be given the root.
+ * Isolated tests (NODE_ENV=test) may point at a fixture lock.
+ */
+export function t3LockFile(runtimeRoot?: string): string {
+  const fixture = process.env.NODE_ENV === 'test' ? process.env.NMH_TEST_UPSTREAM_LOCK : undefined;
+  return fixture || (runtimeRoot ? join(runtimeRoot, 'upstream.lock.json')
+    : fileURLToPath(new URL('../../../upstream.lock.json', import.meta.url)));
+}
 
 type ReleasePin = { ref: string; commit?: string; cli_assets?: Record<string, string> };
-function release(enginesDir: string) {
-  const pin = readEnginePin((process.env.NODE_ENV === 'test' && process.env.NMH_TEST_UPSTREAM_LOCK) || lockFile, 't3code') as ReleasePin;
+function release(enginesDir: string, runtimeRoot?: string) {
+  const pin = readEnginePin(t3LockFile(runtimeRoot), 't3code') as ReleasePin;
   const platform = `${process.platform}-${process.arch}`;
   const sha = pin.cli_assets?.[platform];
   if (!sha || !/^[a-f0-9]{64}$/.test(sha)) {
@@ -31,10 +40,10 @@ function release(enginesDir: string) {
   return { pin, sha, base, archive, executable, target: join(enginesDir, `t3-cli@${pin.ref}-${platform}`) };
 }
 
-export function installedT3(enginesDir?: string): string | undefined {
+export function installedT3(enginesDir?: string, runtimeRoot?: string): string | undefined {
   if (!enginesDir) return undefined;
   try {
-    const r = release(enginesDir);
+    const r = release(enginesDir, runtimeRoot);
     const executable = join(r.target, r.base, r.executable);
     const marker = JSON.parse(readFileSync(join(r.target, '.neo-t3-cli.json'), 'utf8')) as Record<string, string>;
     if (marker.ref === r.pin.ref && marker.commit === r.pin.commit && marker.sha256 === r.sha && lstatSync(executable).isFile()) return executable;
@@ -73,9 +82,9 @@ function assetUrl(pin: ReleasePin, archive: string): URL {
   return url;
 }
 
-async function installCli(enginesDir: string, signal: AbortSignal, phase: (step: Exclude<T3InstallPhase, 'starting'>, progress?: number) => void): Promise<void> {
-  const r = release(enginesDir);
-  if (installedT3(enginesDir)) return;
+async function installCli(enginesDir: string, runtimeRoot: string | undefined, signal: AbortSignal, phase: (step: Exclude<T3InstallPhase, 'starting'>, progress?: number) => void): Promise<void> {
+  const r = release(enginesDir, runtimeRoot);
+  if (installedT3(enginesDir, runtimeRoot)) return;
   for (const entry of await readdir(enginesDir, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith('.tmp-t3-cli-')) continue;
     const owner = /^\.tmp-t3-cli-(\d+)-/.exec(entry.name)?.[1];
@@ -171,7 +180,8 @@ export class T3Installer {
   private job?: Promise<void>;
   private readonly abort = new AbortController();
 
-  constructor(private readonly enginesDir: string | undefined, private readonly onInstalled: () => void) {}
+  constructor(private readonly enginesDir: string | undefined, private readonly onInstalled: () => void,
+    private readonly runtimeRoot?: string) {}
   current(): T3InstallStatus { return { ...this.status }; }
   async cancel(): Promise<void> { this.abort.abort(); await this.job; }
   start(): T3InstallStatus {
@@ -190,7 +200,7 @@ export class T3Installer {
     try {
       if (!this.enginesDir) throw new EngineInstallError('config', 'Neo has no engine storage folder');
       await mkdir(this.enginesDir, { recursive: true });
-      await installCli(this.enginesDir, this.abort.signal, (phase, progress) => this.phase(phase, progress));
+      await installCli(this.enginesDir, this.runtimeRoot, this.abort.signal, (phase, progress) => this.phase(phase, progress));
       if (this.abort.signal.aborted) return;
       this.status = { state: 'ready', message: 'T3 is installed and ready to start.' };
       this.onInstalled();

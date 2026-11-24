@@ -518,6 +518,8 @@ async function upgradeWhileConnected(temp: string, http: Client, pid: number) {
   assert.equal(result.reason, undefined, 'the old generation retires cleanly');
   const status = (await http.extensions.list()).find((row) => row.id === 'engine-t3');
   assert.equal(status?.version, '0.1.1');
+  // No lock override: the upgraded copy lives in extension storage and finds the lock through the Gateway's runtimeRoot.
+  assert.equal((await http.x['engine-t3'].install.status()).state, 'ready');
   assert.equal(status?.health?.ok, true, status?.health?.reason);
   assert.equal(status?.health?.pid, pid, 'the upgraded generation serves from the same T3 server');
   process.kill(pid, 0);
@@ -538,8 +540,6 @@ async function realInstall() {
     OPENAI_API_KEY: 'fixture-value-must-not-be-inherited',
     CODEX_HOME: poison, CLAUDE_CONFIG_DIR: join(temp, 'ambient-claude'), GEMINI_HOME: join(temp, 'ambient-gemini'),
     PATH: poisonedPath, Path: poisonedPath,
-    // A managed generation (the upgrade candidate) resolves the lock file from its own folder.
-    NMH_TEST_UPSTREAM_LOCK: join(repo, 'upstream.lock.json'),
   };
   let app: Awaited<ReturnType<typeof gateway>> | undefined;
   let pid: number | undefined;
