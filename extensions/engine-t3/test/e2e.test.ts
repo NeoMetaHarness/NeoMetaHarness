@@ -498,10 +498,10 @@ async function realInstall() {
     assert.deepEqual(reads, [['PATH'], ['PATH', 'FNM_DIR', 'FNM_MULTISHELL_PATH']]);
     assert.ok(binary.includes('if (options?.shellEnvironmentPrepared === true) return;'));
     console.log('T3_RELEASE_BUNDLE PASS bootstrap_skip=true restored_keys=PATH,FNM_DIR,FNM_MULTISHELL_PATH');
+    console.log('T3_REAL_INSTALL PASS download=github first_run=true renewal_past_expiry=true same_pid=true stale_reclaimed=true disable=stopped gateway_exit=stopped');
     const ownerAfter = await ownerT3Timestamps();
     assert.deepEqual(ownerAfter, ownerBefore, 'Owner .t3 tree timestamps changed');
     console.log('T3_OWNER_T3 PASS unchanged_entries=' + ownerAfter.entries);
-    console.log('T3_REAL_INSTALL PASS download=github first_run=true renewal_past_expiry=true same_pid=true stale_reclaimed=true disable=stopped gateway_exit=stopped');
   } finally {
     await stop(app?.child, true);
     await stop(stale);
