@@ -1,0 +1,10 @@
+{
+  "name": "@neometaharness/a2ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@a2ui/markdown-it": "file:vendor/a2ui-markdown-it-0.2.3.tgz",
+    "@a2ui/web_core": "file:vendor/a2ui-web_core-0.16.0.tgz"
+  }
+}

@@ -47,6 +47,13 @@ upstreams:
     bump: weekly
     role: [design-system]
     seams: [components, themes-css-vars, cli]
+  a2ui:
+    upstream: ubermensch-site/a2ui-intrective-UI-for-chatbots # Apache-2.0 fork of a2ui-project/a2ui
+    lang: ts
+    channel: main
+    bump: weekly
+    role: [agent-ui-protocol]
+    seams: [v1-json-protocol, catalog, web-core, markdown-sanitizer]
   panda-router:
     upstream: aicodeking/PandaOrchestrator
     lang: py

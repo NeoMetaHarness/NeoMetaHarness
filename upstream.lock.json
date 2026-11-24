@@ -41,6 +41,14 @@
       "upstream": "meta/astryx",
       "pinned_on": "2026-11-25"
     },
+    "a2ui": {
+      "kind": "commit",
+      "ref": "5ff1b05f02d39",
+      "upstream": "ubermensch-site/a2ui-intrective-UI-for-chatbots",
+      "pinned_on": "2026-11-25",
+      "commit": "5ff1b05f02d39f969b52a942e78e864ef3ac01fa",
+      "archive_sha256": "77e7151e01ad935e125f8ac40f566b4fcab6c9750b2462ad22a41bb40f92d338"
+    },
     "panda-router": {
       "kind": "commit",
       "ref": "83e408c794ef",
