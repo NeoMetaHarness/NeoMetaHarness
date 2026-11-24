@@ -37,3 +37,5 @@ export { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
 export { TextArea } from '@astryxdesign/core/TextArea';
 export { InfoTip } from '@astryxdesign/core/InfoTip';
 export { Timestamp } from '@astryxdesign/core/Timestamp';
+export { TabList, Tab } from '@astryxdesign/core/TabList';
+export { Table } from '@astryxdesign/core/Table';

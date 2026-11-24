@@ -303,6 +303,8 @@ async function trial(previewPort) {
       await page.eventually('!!document.querySelector("[data-testid=skills-page]")', 'lazy Skills page');
       await page.eventually('document.querySelector("[data-testid=curator-state]")?.textContent !== "Loading"', 'curator status');
       assert.ok(await page.evaluate('!!document.querySelector("[data-testid=skills-hub]")'), 'official skills catalog panel');
+      await page.evaluate('document.querySelector("[data-testid=learn-open]").click()');
+      await page.eventually('!!document.querySelector("[data-testid=learn-description]")', 'learn dialog open');
       await page.evaluate(`(() => {
         const input = document.querySelector('[data-testid=learn-description]');
         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
