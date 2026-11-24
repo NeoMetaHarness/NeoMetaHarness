@@ -187,6 +187,9 @@ const desktop = spawn(exe, [], {
     NMH_DESKTOP_REPO_ROOT: repoDir,
     NMH_DESKTOP_DATA_DIR: join(home, 'state'),
     NMH_HERMES_HOME: join(home, 'hermes'),
+    NMH_ENGINES_DIR: join(home, 'engines'),
+    NMH_T3_URL: '',
+    NMH_T3_SCOPED_SESSION: '',
     NMH_DESKTOP_STATUS_FILE: statusFile,
     WEBVIEW2_USER_DATA_FOLDER: join(home, 'webview'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
@@ -251,6 +254,18 @@ try {
     assert.doesNotMatch(superagentCard, /NMH_UPSTREAM_CACHE|nmh-upstream-cache/i, 'no raw env-var error');
     assert.match(superagentCard, /Install the super agent/);
     assert.match(superagentCard, /Install Hermes first/);
+    assert.equal((await rpc.extensions.enable({ id: 'engine-t3' })).status, 'running', 'engine-t3 runs in install mode');
+    await view.wait('!!document.querySelector("[data-testid=extension-engine-t3-install-start]")', 'Extensions card offers Install T3');
+    await rpc.settings.set({ extension: 'engine-t3', values: {
+      existingServerUrl: 'http://127.0.0.1:' + modelPort,
+    } });
+    await view.wait('document.querySelector("[data-testid=extension-engine-t3-install-runtime-start]")?.textContent.includes("Reconnect to T3")',
+      'T3 card offers Reconnect for an existing server');
+    await view.wait('document.querySelector("[data-testid=extension-engine-t3] .extension-reason")?.textContent.includes("needs a scoped session")',
+      'T3 card shows the existing-server connection reason');
+    await rpc.settings.set({ extension: 'engine-t3', values: { existingServerUrl: '' } });
+    await view.wait('!!document.querySelector("[data-testid=extension-engine-t3-install-start]")', 'T3 card returns to Install T3');
+    console.log('P7-8 T3_CARD PASS shared_install=true reconnect=true connection_reason=true');
     // Hermes turned off is a different note than Hermes not installed.
     const needsNote = 'document.querySelector("[data-testid=extension-engine-superagent-install-needs]")?.textContent ?? ""';
     assert.equal((await rpc.extensions.disable({ id: 'engine-hermes' })).status, 'disabled');

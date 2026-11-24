@@ -7,10 +7,9 @@ import { neoContract, type ExtensionStatus, type GatewayEvent } from '@neometaha
 import { Switch } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import EngineInstall, { type InstallableEngine } from './EngineInstall';
-import T3Install from './T3Install';
 
 /** Engines whose card offers Install (P7-16). */
-const INSTALLABLE: readonly string[] = ['engine-hermes', 'engine-superagent'] satisfies InstallableEngine[];
+const INSTALLABLE: readonly string[] = ['engine-hermes', 'engine-superagent', 'engine-t3'] satisfies InstallableEngine[];
 const isInstallable = (id: string): id is InstallableEngine => INSTALLABLE.includes(id);
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -137,8 +136,6 @@ export default function Extensions() {
             {isInstallable(row.id) && row.status !== 'disabled' && <EngineInstall
               key={row.id} engine={row.id} testId={`extension-${row.id}-install`}
               onReady={() => { void http.extensions.list().then(setRows).catch(() => { /* the event stream refreshes */ }); }} />}
-            {row.id === 'engine-t3' && row.status !== 'disabled' && <T3Install
-              onReady={() => { void http.extensions.list().then(setRows).catch(() => {}); }} />}
           </div>
           <Switch label={`Enable ${row.id}`} value={row.desired} isLoading={busy === row.id}
             isDisabled={busy !== null} onChange={(enabled) => { void toggle(row, enabled); }} />
