@@ -461,7 +461,12 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
   const invokeT3 = async (route: string, body: unknown) => {
     const path = `/x/engine-t3/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'T3 extension is disabled' });
-    return kernel.invokeRoute(path, 'RPC', body);
+    try { return await kernel.invokeRoute(path, 'RPC', body); }
+    catch (error) {
+      // engine-t3 waits for a connect in flight; otherwise it says why T3 is unavailable.
+      if ((error as { code?: unknown })?.code === 'T3_NOT_CONNECTED') throw new ORPCError('SERVICE_UNAVAILABLE', { message: (error as Error).message });
+      throw error;
+    }
   };
   const invokeHermes = async (route: string, body: unknown) => {
     const path = `/x/engine-hermes/${route}`;

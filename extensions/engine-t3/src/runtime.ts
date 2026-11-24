@@ -45,7 +45,11 @@ async function stopTree(pid: number) {
   }
 }
 
-async function readState(path: string): Promise<{ pid?: number; gatewayPid?: number; port?: number; origin?: string; startedAt?: string }> {
+type RuntimeMarker = {
+  pid?: number; gatewayPid?: number; gatewayExecutable?: string; port?: number; origin?: string; startedAt?: string;
+};
+
+async function readState(path: string): Promise<RuntimeMarker> {
   try { return JSON.parse(await readFile(path, 'utf8')) ?? {}; }
   catch (error) {
     if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === 'ENOENT') return {};
@@ -53,24 +57,64 @@ async function readState(path: string): Promise<{ pid?: number; gatewayPid?: num
   }
 }
 
+/** The executable and command line of a live process, or undefined once it has exited. */
+async function inspectProcess(pid: number): Promise<{ image: string; command: string } | undefined> {
+  if (windows) {
+    const { stdout } = await execute(system32('WindowsPowerShell', 'v1.0', 'powershell.exe'), [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `$p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; if ($p) { $p.ExecutablePath; $p.CommandLine }`,
+    ], { windowsHide: true, timeout: 5000 });
+    const [image = '', ...command] = stdout.trim().split(/\r?\n/);
+    return image || command.length ? { image, command: command.join('\n') } : undefined;
+  }
+  const { stdout } = await execute('/bin/ps', ['-ww', '-p', String(pid), '-o', 'command='], { timeout: 5000 })
+    .catch((error: unknown) => { if (isAlive(pid)) throw error; return { stdout: '' }; });
+  const command = stdout.trim();
+  return command ? { image: command.split(' ')[0], command } : undefined;
+}
+
+/** A marker's Gateway PID counts only while it still is a Neo Gateway: Windows reuses PIDs. */
+async function isNeoGateway(pid: number, executable?: string): Promise<boolean> {
+  const inspected = await inspectProcess(pid).catch(() => undefined);
+  if (!inspected) return false;
+  // The desktop shell and the dev server both start `<node> --import tsx src/main.ts` (src-tauri/src/lib.rs).
+  const gateway = /(^|[\s"])--import\s+tsx\s+"?src[\\/]main\.ts"?(\s|$)/.test(inspected.command);
+  if (!gateway || !executable) return gateway;
+  return windows ? inspected.image.toLowerCase() === executable.toLowerCase() || inspected.command.toLowerCase().includes(executable.toLowerCase())
+    : inspected.image === executable || inspected.command.startsWith(executable + ' ');
+}
+
+export class T3OwnedElsewhere extends Error {
+  constructor() {
+    super('Another Neo Gateway on this computer runs the local T3 server. Close it, then choose Start.');
+  }
+}
+
+/** A server belongs to the Gateway process, not to one generation, so a staged upgrade reuses it. */
+type SharedServer = {
+  child: ChildProcess; port: number; launchedAt: number; exited: boolean;
+  owners: Set<() => void>; entry?: Promise<SharedServer>;
+};
+// Generations load separate copies of this module; the registry is per process.
+const registryKey = Symbol.for('neometaharness.engine-t3.local-servers');
+const registry = globalThis as unknown as Record<symbol, { servers: Map<string, Promise<SharedServer>>; pids: Set<number> } | undefined>;
+const { servers, pids: livePids } = registry[registryKey] ??= { servers: new Map(), pids: new Set() };
+
 async function removeStaleServer(marker: string, statePath: string, executable: string, base: string) {
   const owned = await readState(marker);
-  if (owned.gatewayPid !== undefined && owned.gatewayPid !== process.pid && isAlive(owned.gatewayPid)) {
-    throw new Error('Another Gateway owns the local T3 runtime');
+  if (owned.gatewayPid !== undefined && owned.gatewayPid !== process.pid && isAlive(owned.gatewayPid)
+    && await isNeoGateway(owned.gatewayPid, owned.gatewayExecutable)) {
+    throw new T3OwnedElsewhere();
   }
   const previous = await readState(statePath);
   const pid = owned.pid ?? previous.pid;
-  if (pid === undefined || !isAlive(pid)) return;
+  // Never stop a server that a live generation in this Gateway is serving.
+  if (pid === undefined || livePids.has(pid) || !isAlive(pid)) return;
   // A reused PID could belong to an unrelated process. Verify the executable and the isolated state path.
-  const inspected = windows
-    ? await execute(system32('WindowsPowerShell', 'v1.0', 'powershell.exe'), [
-      '-NoProfile', '-NonInteractive', '-Command',
-      `$p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; if ($p) { $p.ExecutablePath; $p.CommandLine }`,
-    ], { windowsHide: true, timeout: 5000 })
-    : await execute('/bin/ps', ['-ww', '-p', String(pid), '-o', 'command='], { timeout: 5000 })
-      .catch((error: unknown) => { if (isAlive(pid)) throw error; return { stdout: '' }; });
-  const [image, ...commandLines] = inspected.stdout.trim().split(/\r?\n/);
-  const command = windows ? commandLines.join('\n').toLowerCase() : image;
+  const inspected = await inspectProcess(pid);
+  if (!inspected) return;
+  const { image } = inspected;
+  const command = windows ? inspected.command.toLowerCase() : inspected.command;
   const normalizedBase = windows ? base.toLowerCase() : base;
   const installed = windows ? image.toLowerCase() === executable.toLowerCase()
     : command.startsWith(executable + ' ') || command.startsWith('"' + executable + '" ');
@@ -127,14 +171,14 @@ export async function isolatedT3Environment(root: string, original = process.env
 }
 
 type TestOptions = { executable?: string; prefix?: string[]; sessionTtlMs?: number };
+const exitedReason = 'The local T3 server exited. Choose Start to try again.';
 
 export class T3LocalRuntime {
-  private child?: ChildProcess;
-  private port?: number;
-  private launchedAt = 0;
-  private ownedPid?: number;
+  private server?: SharedServer;
   private starting?: Promise<void>;
   private renewal?: NodeJS.Timeout;
+  private sessionId?: string;
+  private exited = false;
   private readonly abort = new AbortController();
   private readonly ttlMs: number;
   private readonly root: string;
@@ -148,8 +192,13 @@ export class T3LocalRuntime {
     this.ttlMs = testOptions?.sessionTtlMs ?? 15 * 60_000;
   }
 
-  get pid(): number | undefined { return this.child?.pid; }
+  /** True while this Gateway already runs the server, e.g. for the serving generation during an upgrade. */
+  static serving(enginesDir: string): boolean { return servers.has(join(enginesDir, 't3-home')); }
+
+  get pid(): number | undefined { return this.server?.child.pid; }
   get pending(): boolean { return !!this.starting; }
+  /** The connect or launch in flight, if any. */
+  get connecting(): Promise<void> | undefined { return this.starting; }
 
   start(): Promise<void> {
     if (this.abort.signal.aborted) return Promise.reject(new Error('T3 extension is disabled'));
@@ -159,13 +208,13 @@ export class T3LocalRuntime {
 
   private scheduleRenewal(ms: number) {
     clearTimeout(this.renewal);
-    if (this.abort.signal.aborted || !this.child) return;
+    if (this.abort.signal.aborted || !this.server) return;
     this.renewal = setTimeout(() => { void this.connect().catch(() => {}); }, ms).unref();
   }
 
   private connect(): Promise<void> {
     if (!this.starting) {
-      this.reason = this.child ? 'Reconnecting to the local T3 server...' : 'Starting the local T3 server...';
+      this.reason = this.server ? 'Reconnecting to the local T3 server...' : 'Starting the local T3 server...';
       this.starting = this.connectChild().then(() => {
         this.reason = '';
         this.scheduleRenewal(this.ttlMs * 0.65);
@@ -173,7 +222,9 @@ export class T3LocalRuntime {
         if (!this.abort.signal.aborted) {
           // Keep a live server and its turns intact even when renewing the connection fails.
           console.error('T3 local connection failed', error instanceof Error ? error.message : error);
-          this.reason = "Couldn't connect to the local T3 server. Choose Start to try again.";
+          this.reason = error instanceof T3OwnedElsewhere ? error.message
+            : this.exited && !this.server ? exitedReason
+              : "Couldn't connect to the local T3 server. Choose Start to try again.";
           this.scheduleRenewal(Math.min(3000, this.ttlMs / 3));
         }
         throw error;
@@ -187,36 +238,82 @@ export class T3LocalRuntime {
     const base = env.T3CODE_HOME!;
     const command = this.testOptions?.executable ?? this.executable;
     const prefix = this.testOptions?.prefix ?? [];
-    if (!this.child) await this.launch(command, prefix, base, env);
-    const child = this.child;
-    if (!child) throw new Error('T3 server exited');
+    if (!this.server) {
+      this.exited = false;
+      this.server = await this.acquire(command, prefix, base, env);
+    }
+    const server = this.server;
     // Wait for the child to publish its own listening address before opening auth storage.
-    const origin = await this.waitForChild(child, base);
-    const { stdout } = await execute(command, [...prefix, 'auth', 'session', 'issue', '--base-dir', base,
-      '--scope', 'orchestration:read', '--scope', 'orchestration:operate', '--scope', 'providers:manage',
-      '--ttl', String(this.ttlMs) + 'ms', '--label', 'neo-gateway', '--token-only'],
-    { cwd: this.root, env, windowsHide: true, timeout: 30_000, signal: this.abort.signal, maxBuffer: 16_384 });
-    const token = stdout.trim();
-    if (token.length < 12) throw new Error('T3 did not issue a scoped session');
-    if (child !== this.child) throw new Error('T3 server exited during session issuance');
+    const origin = await this.waitForChild(server, base);
+    const session = ([action, ...args]: string[]) => execute(command, [...prefix, 'auth', 'session', action, '--base-dir', base, ...args],
+      { cwd: this.root, env, windowsHide: true, timeout: 30_000, signal: this.abort.signal, maxBuffer: 16_384 });
+    // coding-workflow's read-only terminal needs the terminal scopes (T3 v0.1.9 auth/RpcAuthorization.ts:185-191).
+    const { stdout } = await session(['issue', '--scope', 'orchestration:read', '--scope', 'orchestration:operate',
+      '--scope', 'providers:manage', '--scope', 'terminal:read', '--scope', 'terminal:operate',
+      '--ttl', String(this.ttlMs) + 'ms', '--label', 'neo-gateway', '--json']);
+    let issued: { sessionId?: unknown; token?: unknown } = {};
+    try { issued = JSON.parse(stdout); } catch { /* reported below */ }
+    const token = typeof issued.token === 'string' ? issued.token : '';
+    if (token.length < 12 || typeof issued.sessionId !== 'string') throw new Error('T3 did not issue a scoped session');
+    if (server !== this.server) throw new Error('T3 server exited during session issuance');
     await this.client.connect(origin, token, this.abort.signal, () => this.scheduleRenewal(0));
+    // T3 v0.1.9 apps/server/src/cli/auth.ts:217-237: the replaced session stops working right away.
+    const previous = this.sessionId;
+    this.sessionId = issued.sessionId;
+    if (previous) {
+      await session(['revoke', previous]).catch((error: unknown) =>
+        console.error('T3 could not revoke the previous session', error instanceof Error ? error.message : error));
+    }
   }
 
-  private async launch(command: string, prefix: string[], base: string, env: NodeJS.ProcessEnv) {
+  /** Reuse the server this Gateway runs for the engines folder, or launch one. */
+  private async acquire(command: string, prefix: string[], base: string, env: NodeJS.ProcessEnv): Promise<SharedServer> {
+    for (;;) {
+      const existing = servers.get(this.root);
+      if (existing) {
+        const server = await existing.catch(() => undefined);
+        if (server && !server.exited) {
+          server.owners.add(this.onServerExit);
+          return server;
+        }
+        if (servers.get(this.root) === existing) servers.delete(this.root);
+        continue;
+      }
+      const entry = this.launch(command, prefix, base, env);
+      servers.set(this.root, entry);
+      entry.catch(() => { if (servers.get(this.root) === entry) servers.delete(this.root); });
+      const server = await entry;
+      server.entry = entry;
+      server.owners.add(this.onServerExit);
+      return server;
+    }
+  }
+
+  private readonly onServerExit = () => {
+    clearTimeout(this.renewal);
+    this.server = undefined;
+    this.sessionId = undefined;
+    this.exited = true;
+    if (!this.abort.signal.aborted) {
+      this.reason = exitedReason;
+      void this.client.disconnect(false).catch(() => {});
+    }
+  };
+
+  private async launch(command: string, prefix: string[], base: string, env: NodeJS.ProcessEnv): Promise<SharedServer> {
     const statePath = join(base, 'userdata', 'server-runtime.json');
     await removeStaleServer(this.marker, statePath, command, base);
     // v0.1.9 rejects port 0 in both its CLI and bootstrap. Trust only the address
     // published by the child for this launch, even if another process takes the candidate port.
     const port = await loopbackPort();
     this.abort.signal.throwIfAborted();
-    this.port = port;
-    this.launchedAt = Date.now();
     const child = spawn(command, [...prefix, 'serve', '--mode', 'desktop', '--host', '127.0.0.1',
       '--base-dir', base, '--port', String(port), '--no-browser', '--bootstrap-fd', '0'], {
       cwd: this.root, env, detached: !windows,
       windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
     });
-    this.child = child;
+    const server: SharedServer = { child, port, launchedAt: Date.now(), exited: false, owners: new Set() };
+    if (child.pid) livePids.add(child.pid);
     child.stdout?.resume();
     child.stderr?.resume();
     child.stdin?.on('error', () => { /* startup reports the child exit */ });
@@ -224,18 +321,18 @@ export class T3LocalRuntime {
       mode: 'desktop', host: '127.0.0.1', noBrowser: true, port, shellEnvironmentPrepared: true,
       desktopBootstrapToken: randomBytes(32).toString('hex'), tailscaleServeEnabled: false, tailscaleServePort: 443,
     }) + '\n');
+    const root = this.root;
     const onExit = () => {
-      if (this.child !== child) return;
+      if (server.exited) return;
+      server.exited = true;
+      if (child.pid) livePids.delete(child.pid);
       if (!windows && child.pid) {
         try { process.kill(-child.pid, 'SIGKILL'); } catch { /* process group already exited */ }
       }
-      this.child = undefined;
-      this.port = undefined;
-      clearTimeout(this.renewal);
-      if (!this.abort.signal.aborted) {
-        this.reason = 'The local T3 server exited. Choose Start to try again.';
-        void this.client.disconnect(false).catch(() => {});
-      }
+      if (server.entry && servers.get(root) === server.entry) servers.delete(root);
+      const owners = [...server.owners];
+      server.owners.clear();
+      for (const owner of owners) owner();
     };
     const closeOnExit = () => {
       if (!child.pid || !isAlive(child.pid)) return;
@@ -249,19 +346,25 @@ export class T3LocalRuntime {
     child.once('exit', onExit);
     child.once('error', onExit);
     if (child.pid) {
-      this.ownedPid = child.pid;
-      await writeFile(this.marker, JSON.stringify({ pid: child.pid, gatewayPid: process.pid }), { mode: 0o600 });
+      try {
+        await writeFile(this.marker, JSON.stringify({ pid: child.pid, gatewayPid: process.pid,
+          gatewayExecutable: process.execPath }), { mode: 0o600 });
+      } catch (error) {
+        await stopTree(child.pid).catch(() => {});
+        throw error;
+      }
     }
+    return server;
   }
 
-  private async waitForChild(child: ChildProcess, base: string): Promise<string> {
+  private async waitForChild(server: SharedServer, base: string): Promise<string> {
     const statePath = join(base, 'userdata', 'server-runtime.json');
     const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline && child === this.child) {
+    const origin = `http://127.0.0.1:${server.port}`;
+    while (Date.now() < deadline && server === this.server && !server.exited) {
       const state = await readState(statePath);
-      const origin = `http://127.0.0.1:${this.port}`;
-      if (child.pid && state.pid === child.pid && state.port === this.port && state.origin === origin
-        && Date.parse(state.startedAt ?? '') >= this.launchedAt) {
+      if (server.child.pid && state.pid === server.child.pid && state.port === server.port && state.origin === origin
+        && Date.parse(state.startedAt ?? '') >= server.launchedAt) {
         try {
           // The server has initialized the state DB and can serve its auth routes.
           const response = await fetch(origin + '/api/auth/websocket-ticket', {
@@ -274,6 +377,7 @@ export class T3LocalRuntime {
       }
       await delay(100, undefined, { signal: this.abort.signal });
     }
+    if (server !== this.server || server.exited) throw new Error('T3 server exited');
     throw new Error('T3 did not publish the address of its loopback server');
   }
 
@@ -281,13 +385,29 @@ export class T3LocalRuntime {
     this.abort.abort();
     clearTimeout(this.renewal);
     await this.starting?.catch(() => {});
-    const pid = this.child?.pid;
+    const server = this.server;
+    this.server = undefined;
     try { await this.client.disconnect(); } finally {
-      if (pid && isAlive(pid)) await stopTree(pid);
-      if (this.ownedPid) {
-        const owner = await readState(this.marker);
-        if (owner.pid === this.ownedPid && owner.gatewayPid === process.pid) await rm(this.marker, { force: true });
+      if (server) {
+        server.owners.delete(this.onServerExit);
+        const pid = server.child.pid;
+        if (server.owners.size > 0 && !server.exited) {
+          // A newer generation serves from this server now. End only this generation's session.
+          if (this.sessionId) await this.revokeOwnSession().catch(() => {});
+        } else {
+          if (server.entry && servers.get(this.root) === server.entry) servers.delete(this.root);
+          if (pid && isAlive(pid)) await stopTree(pid);
+          const owner = await readState(this.marker);
+          if (owner.pid === pid && owner.gatewayPid === process.pid) await rm(this.marker, { force: true });
+        }
       }
     }
+  }
+
+  private async revokeOwnSession() {
+    const env = await isolatedT3Environment(this.root);
+    await execute(this.testOptions?.executable ?? this.executable, [...this.testOptions?.prefix ?? [],
+      'auth', 'session', 'revoke', '--base-dir', env.T3CODE_HOME!, this.sessionId!],
+    { cwd: this.root, env, windowsHide: true, timeout: 15_000, maxBuffer: 16_384 });
   }
 }

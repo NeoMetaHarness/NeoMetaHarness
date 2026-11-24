@@ -76,21 +76,47 @@ export default defineExtension({
       return status();
     });
 
-    ctx.route('create', ({ body }) => service.createThread(body as Parameters<typeof service.createThread>[0]));
-    ctx.route('send', ({ body }) => service.sendMessage(body as Parameters<typeof service.sendMessage>[0]));
-    ctx.route('events', ({ body }) => {
+    // Activation does not wait for T3. A request waits for a connect in flight, or says why T3 is unavailable.
+    const ready = async () => {
+      if (service.connected) return;
+      const pending = externalUrl ? connecting : local?.connecting;
+      if (pending) {
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([pending.catch(() => {}), new Promise((done) => { timer = setTimeout(done, 20_000); })]);
+        clearTimeout(timer);
+      }
+      if (service.connected) return;
+      const current = status();
+      const why = current.error ?? (current.state === 'ready' && current.message === 'T3 is ready.'
+        ? 'the connection closed. Choose Start in Extensions to reconnect.' : current.message);
+      throw Object.assign(new Error('T3 is not connected: ' + why), { code: 'T3_NOT_CONNECTED' });
+    };
+    const connected = <T>(handler: (body: unknown) => T) => async ({ body }: { body?: unknown }) => {
+      await ready();
+      return handler(body);
+    };
+
+    ctx.route('create', connected((body) => service.createThread(body as Parameters<typeof service.createThread>[0])));
+    ctx.route('send', connected((body) => service.sendMessage(body as Parameters<typeof service.sendMessage>[0])));
+    ctx.route('events', connected((body) => {
       const input = body as { threadId: string; signal?: AbortSignal };
       return service.subscribeThread(input.threadId, input.signal);
-    });
-    ctx.route('approval', ({ body }) => service.respond(body as Parameters<typeof service.respond>[0]));
-    ctx.route('settle', ({ body }) => service.settle((body as { threadId: string }).threadId));
-    ctx.route('stop', ({ body }) => service.stop(body as Parameters<typeof service.stop>[0]));
-    ctx.route('diff', ({ body }) => service.diff(body as Parameters<typeof service.diff>[0]));
-    ctx.route('rollback', ({ body }) => service.rollback(body as Parameters<typeof service.rollback>[0]));
-    ctx.route('providers/list', () => service.listProviders());
-    ctx.route('threads/list', () => service.listThreads());
+    }));
+    ctx.route('approval', connected((body) => service.respond(body as Parameters<typeof service.respond>[0])));
+    ctx.route('settle', connected((body) => service.settle((body as { threadId: string }).threadId)));
+    ctx.route('stop', connected((body) => service.stop(body as Parameters<typeof service.stop>[0])));
+    ctx.route('diff', connected((body) => service.diff(body as Parameters<typeof service.diff>[0])));
+    ctx.route('rollback', connected((body) => service.rollback(body as Parameters<typeof service.rollback>[0])));
+    ctx.route('providers/list', connected(() => service.listProviders()));
+    ctx.route('threads/list', connected(() => service.listThreads()));
 
     if (externalUrl) void connectExternal().catch(() => {});
-    else if (local) void local.start().catch(() => {});
+    else if (local && enginesDir && T3LocalRuntime.serving(enginesDir)) {
+      // A staged upgrade reuses the server the serving generation runs. Connect before the
+      // kernel's one health check, but never hold activation past its deadline.
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([local.start().catch(() => {}), new Promise((done) => { timer = setTimeout(done, 4000); })]);
+      clearTimeout(timer);
+    } else if (local) void local.start().catch(() => {});
   },
 });
