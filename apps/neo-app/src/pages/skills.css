@@ -21,10 +21,9 @@
 .skills-tabs button[aria-current="page"] { background: var(--neo-color-surface-selected); }
 .skills-registry-grid { display: grid; grid-template-columns: minmax(220px, 1fr) 2fr; gap: 24px; margin-top: 18px; }
 .skills-registry-grid > div { display: grid; gap: 10px; align-content: start; }
-.skills-registry-grid label { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.skills-registry-grid select, .skills-registry-grid input { min-height: 38px; padding: 6px; background: transparent; color: inherit; border: 1px solid var(--neo-color-control-border); font: inherit; }
 .skills-registry-grid li { display: grid; align-items: start; }
-.skills-registry-select { text-align: left; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
 .skills-registry-grid small { color: var(--neo-color-text-muted); overflow-wrap: anywhere; }
-.skills-registry-grid pre { white-space: pre-wrap; max-height: 320px; overflow: auto; border: 1px solid currentColor; padding: 12px; }
 @media (max-width: 800px) { .skills-registry-grid { grid-template-columns: 1fr; } }
+.skills-registry-grid [data-testid="registry-details"] > section { display: grid; gap: var(--neo-space-3); min-width: 0; }
+.skills-registry-grid li > div { display: flex; flex-wrap: wrap; gap: var(--neo-space-2); align-items: center; }
+.skills-registry-grid li strong, .skills-registry-grid li small { flex-basis: 100%; overflow-wrap: anywhere; }

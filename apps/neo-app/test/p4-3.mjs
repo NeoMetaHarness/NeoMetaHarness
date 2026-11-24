@@ -347,7 +347,7 @@ async function trial(previewPort) {
       await page.evaluate('document.querySelector("[data-testid=registry-tab]").click()');
       await page.eventually('!!document.querySelector("[data-testid=registry-panel]")', 'Registry tab');
       await page.eventually('!!document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow]")', 'Registry skill');
-      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] button").click()');
+      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] input").click()');
       await page.eventually('document.querySelector("[data-testid=registry-details]")?.textContent.includes("1 versions")', 'Registry version listing');
       await page.evaluate(`(() => {
         const input = document.querySelector('[data-testid=registry-target]');
@@ -368,21 +368,17 @@ async function trial(previewPort) {
       // Hold the target's old value until after the user edits it. A slow read
       // must not overwrite the selection that Save is about to persist.
       const ceilingRead = await page.holdResponse('*ceiling*');
-      await page.evaluate(`(() => {
-        const select = document.querySelector('[data-testid=registry-engine]');
-        select.value = 'superagent';
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-      })()`);
+      await page.evaluate('document.querySelector("[data-testid=registry-engine]").click()');
+      await page.eventually('!!Array.from(document.querySelectorAll("[role=option]")).find(option => option.textContent.trim() === "Superagent")', 'Superagent option');
+      await page.evaluate('Array.from(document.querySelectorAll("[role=option]")).find(option => option.textContent.trim() === "Superagent").click()');
       await page.eventually('document.querySelector("[data-testid=registry-target]")?.value === "default"', 'superagent target default');
       await ceilingRead.ready;
-      await page.evaluate(`(() => {
-        const select = document.querySelector('[data-testid=registry-ceiling]');
-        select.value = 'auto-low';
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-      })()`);
+      await page.evaluate('document.querySelector("[data-testid=registry-ceiling]").click()');
+      await page.eventually('!!Array.from(document.querySelectorAll("[role=option]")).find(option => option.textContent.trim() === "Auto low")', 'Auto low option');
+      await page.evaluate('Array.from(document.querySelectorAll("[role=option]")).find(option => option.textContent.trim() === "Auto low").click()');
       await ceilingRead.release();
       await page.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
-      await page.eventually('document.querySelector("[data-testid=registry-ceiling]")?.value === "auto-low"', 'user ceiling survives delayed read');
+      await page.eventually('document.querySelector("[data-testid=registry-ceiling]")?.textContent.includes("Auto low")', 'user ceiling survives delayed read');
       await page.evaluate('document.querySelector("[data-testid=registry-ceiling-save]").click()');
       await page.eventually('document.body?.innerText?.includes("Autonomy ceiling set to auto-low")', 'superagent ceiling saved');
       await page.eventually('!(document.querySelector("[data-testid=registry-assign]")?.disabled || document.querySelector("[data-testid=registry-assign]")?.getAttribute("aria-disabled") === "true")', 'assign enabled for superagent');
@@ -415,12 +411,13 @@ async function trial(previewPort) {
       assert.equal(v2.version, 2);
       const diff = await registry.diff({ name: skill.name, from: 1, to: 2 });
       assert.ok(diff.diff.includes('papaya checksum twice'));
-      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] button").click()');
+      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] input").click()');
       await page.eventually('document.querySelector("[data-testid=registry-details]")?.textContent.includes("2 versions")', 'v2 in Registry UI');
-      await page.evaluate('document.querySelector("[data-testid=registry-to]").value = "2"');
       await page.evaluate('document.querySelector("[data-testid=registry-diff-button]").click()');
       await page.eventually('document.querySelector("[data-testid=registry-diff]")?.textContent.includes("papaya checksum twice")', 'diff in UI');
       await page.evaluate('document.querySelector("[data-testid=registry-rollback]").click()');
+      await page.eventually('!!document.querySelector("dialog[open]")', 'restore confirmation');
+      await page.evaluate('Array.from(document.querySelectorAll("dialog[open] button")).find(button => button.textContent === "Confirm restore").click()');
       await page.eventually('document.querySelector("[data-testid=registry-details]")?.textContent.includes("3 versions")', 'rollback in UI');
       const rollback = await registry.get({ name: skill.name });
       assert.equal(rollback.metadata.version, 3);

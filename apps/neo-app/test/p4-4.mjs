@@ -382,7 +382,7 @@ async function trial(previewPort) {
       await page.evaluate('document.querySelector("[data-testid=registry-tab]").click()');
       await page.eventually('!!document.querySelector("[data-testid=registry-panel]")', 'Registry tab');
       await page.eventually('!!document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow]")', 'Registry skill');
-      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] button").click()');
+      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] input").click()');
       await page.eventually('document.querySelector("[data-testid=registry-details]")?.textContent.includes("1 versions")', 'Registry version listing');
       await page.evaluate(`(() => {
         const input = document.querySelector('[data-testid=registry-target]');
@@ -462,12 +462,13 @@ async function trial(previewPort) {
       assert.equal(v2.version, 2);
       const diff = await registry.diff({ name: skill.name, from: 1, to: 2 });
       assert.ok(diff.diff.includes('papaya checksum twice'));
-      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] button").click()');
+      await page.evaluate('document.querySelector("[data-testid=registry-skill-bota--neo-learned-workflow] input").click()');
       await page.eventually('document.querySelector("[data-testid=registry-details]")?.textContent.includes("2 versions")', 'v2 in Registry UI');
-      await page.evaluate('document.querySelector("[data-testid=registry-to]").value = "2"');
       await page.evaluate('document.querySelector("[data-testid=registry-diff-button]").click()');
       await page.eventually('document.querySelector("[data-testid=registry-diff]")?.textContent.includes("papaya checksum twice")', 'diff in UI');
       await page.evaluate('document.querySelector("[data-testid=registry-rollback]").click()');
+      await page.eventually('!!document.querySelector("dialog[open]")', 'restore confirmation');
+      await page.evaluate('Array.from(document.querySelectorAll("dialog[open] button")).find(button => button.textContent === "Confirm restore").click()');
       await page.eventually('document.querySelector("[data-testid=registry-details]")?.textContent.includes("3 versions")', 'rollback in UI');
       const rollback = await registry.get({ name: skill.name });
       assert.equal(rollback.metadata.version, 3);
