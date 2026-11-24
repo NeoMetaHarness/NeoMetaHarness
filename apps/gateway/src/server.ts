@@ -1359,38 +1359,38 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         }),
         send: os.x['engine-t3'].send.handler(async ({ input, context }) => {
           authorize('x.engine-t3.send', context);
-          chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return chatUi.sendT3(input, chatActor(context));
         }),
         events: os.x['engine-t3'].events.handler(async function* ({ input, signal, context }) {
           authorize('x.engine-t3.events', context);
-          chatUi.requireThread(input.threadId, settingsWorkspace(context));
+          await chatUi.requireThread(input.threadId, settingsWorkspace(context));
           const stream = await invokeT3('events', { ...input, signal }) as AsyncIterable<T3Event>;
           yield* chatUi.t3Events(coalesceText(stream), input.threadId, chatActor(context));
         }),
         approval: os.x['engine-t3'].approval.handler(async ({ input, context }) => {
           authorize('x.engine-t3.approval', context);
-          chatUi.requireThread(input.threadId, settingsWorkspace(context));
+          await chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return invokeT3('approval', input) as Promise<{ sequence: number }>;
         }),
         settle: os.x['engine-t3'].settle.handler(async ({ input, context }) => {
           authorize('x.engine-t3.settle', context);
-          chatUi.requireThread(input.threadId, settingsWorkspace(context));
+          await chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return invokeT3('settle', input) as Promise<{ sequence: number }>;
         }),
         stop: os.x['engine-t3'].stop.handler(async ({ input, context }) => {
           authorize('x.engine-t3.stop', context);
-          chatUi.requireThread(input.threadId, settingsWorkspace(context));
+          await chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return invokeT3('stop', input) as Promise<{ outcome: 'killed' | 'released' | 'releasing' | 'shared'; sharedWithThreadIds: string[] }>;
         }),
         diff: os.x['engine-t3'].diff.handler(async ({ input, context }) => {
           authorize('x.engine-t3.diff', context);
-          chatUi.requireThread(input.threadId, settingsWorkspace(context));
+          await chatUi.requireThread(input.threadId, settingsWorkspace(context));
           return invokeT3('diff', input) as Promise<{ threadId: string; fromTurnCount: number; toTurnCount: number; diff: string }>;
         }),
         rollback: os.x['engine-t3'].rollback.handler(async ({ input, context }) => {
           authorize('x.engine-t3.rollback', context);
-          chatUi.requireThread(input.threadId, settingsWorkspace(context));
+          await chatUi.requireThread(input.threadId, settingsWorkspace(context));
+          chatUi.retireT3(input.threadId);
           return invokeT3('rollback', input) as Promise<{ sequence: number }>;
         }),
         providers: {
@@ -1406,7 +1406,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           list: os.x['engine-t3'].threads.list.handler(async ({ context }) => {
             authorize('x.engine-t3.threads.list', context);
             const catalog = await invokeT3('threads/list', {}) as { threads: { id: string }[] };
-            return { ...catalog, threads: catalog.threads.filter(({ id }) => chatUi.visibleThread(id, settingsWorkspace(context))) } as any;
+            const hidden = await db.chat.hiddenThreads(settingsWorkspace(context));
+            return { ...catalog, threads: catalog.threads.filter(({ id }) => !hidden.has(id)) } as any;
           }),
         },
       },
@@ -1492,18 +1493,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           }),
           events: os.x['engine-hermes'].runs.events.handler(async function* ({ input, signal, context }) {
             authorize('x.engine-hermes.runs.events', context);
-            const record = chatUi.requireRun(input.profile, input.runId, settingsWorkspace(context));
+            const record = await chatUi.requireRun(input.profile, input.runId, settingsWorkspace(context));
             const stream = await invokeHermes('runs/events', { ...input, signal }) as AsyncIterable<HermesEvent>;
             yield* chatUi.hermesEvents(coalesceText(stream), input, record, chatActor(context));
           }),
           approve: os.x['engine-hermes'].runs.approve.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.runs.approve', context);
-            chatUi.requireRun(input.profile, input.runId, settingsWorkspace(context));
+            await chatUi.requireRun(input.profile, input.runId, settingsWorkspace(context));
             return invokeHermes('runs/approve', input) as Promise<{ ok: boolean }>;
           }),
           stop: os.x['engine-hermes'].runs.stop.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.runs.stop', context);
-            chatUi.requireRun(input.profile, input.runId, settingsWorkspace(context));
+            await chatUi.requireRun(input.profile, input.runId, settingsWorkspace(context));
             return invokeHermes('runs/stop', input) as Promise<{ status: string }>;
           }),
         },
@@ -2050,7 +2051,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         return;
       }
 
-      if (path.startsWith('/x/coding-workflow/') || path.startsWith('/x/models-router-panda/') || path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/') || path.startsWith('/x/voice-xai/') || path.startsWith('/x/metrics/') || path.startsWith('/x/x-search/')) {
+      if (path.startsWith('/x/a2ui/') || path.startsWith('/x/coding-workflow/') || path.startsWith('/x/models-router-panda/') || path.startsWith('/x/engine-t3/') || path.startsWith('/x/engine-hermes/') || path.startsWith('/x/engine-dsh/') || path.startsWith('/x/engine-superagent/') || path.startsWith('/x/memory-local/') || path.startsWith('/x/memory-honcho/') || path.startsWith('/x/skills-registry/') || path.startsWith('/x/models/') || path.startsWith('/x/channels/') || path.startsWith('/x/voice-xai/') || path.startsWith('/x/metrics/') || path.startsWith('/x/x-search/')) {
         // Order for every role: authorize the procedure, then report availability,
         // then let oRPC validate method and input. Authorization runs before
         // anything else, so no role learns more than its policy allows, and a

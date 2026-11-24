@@ -1,4 +1,5 @@
-import type { DatabaseSync } from 'node:sqlite';
+import type { Kysely } from 'kysely';
+import type { NeoTables } from './index.js';
 
 export type ChatBinding = {
   id: string;
@@ -8,52 +9,63 @@ export type ChatBinding = {
   last_run: string | null;
 };
 export type ChatRunBinding = ChatBinding & { sender_id: string; interactive: number };
+export interface ChatTables {
+  chat_binding: ChatBinding;
+  chat_run: {
+    id: string;
+    conversation_id: string;
+    sender_id: string;
+    interactive: number;
+  };
+}
 
 export class ChatRecords {
-  constructor(private readonly sqlite: DatabaseSync) {}
+  constructor(private readonly db: Kysely<NeoTables>) {}
 
-  migrate() {
-    this.sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS chat_binding (
-        id TEXT PRIMARY KEY,
-        engine TEXT NOT NULL,
-        workspace_id TEXT NOT NULL,
-        profile TEXT,
-        last_run TEXT
-      );
-      CREATE TABLE IF NOT EXISTS chat_run (
-        id TEXT PRIMARY KEY,
-        conversation_id TEXT NOT NULL REFERENCES chat_binding(id),
-        sender_id TEXT NOT NULL,
-        interactive INTEGER NOT NULL
-      );
-    `);
+  async migrate() {
+    await this.db.schema.createTable('chat_binding').ifNotExists()
+      .addColumn('id', 'text', (column) => column.primaryKey())
+      .addColumn('engine', 'text', (column) => column.notNull())
+      .addColumn('workspace_id', 'text', (column) => column.notNull())
+      .addColumn('profile', 'text')
+      .addColumn('last_run', 'text')
+      .execute();
+    await this.db.schema.createTable('chat_run').ifNotExists()
+      .addColumn('id', 'text', (column) => column.primaryKey())
+      .addColumn('conversation_id', 'text', (column) => column.notNull().references('chat_binding.id'))
+      .addColumn('sender_id', 'text', (column) => column.notNull())
+      .addColumn('interactive', 'integer', (column) => column.notNull())
+      .execute();
   }
 
-  create(id: string, engine: ChatBinding['engine'], workspaceId: string, profile?: string) {
-    this.sqlite.prepare('INSERT INTO chat_binding (id, engine, workspace_id, profile) VALUES (?, ?, ?, ?)')
-      .run(id, engine, workspaceId, profile ?? null);
+  async create(id: string, engine: ChatBinding['engine'], workspaceId: string, profile?: string) {
+    await this.db.insertInto('chat_binding').values({
+      id, engine, workspace_id: workspaceId, profile: profile ?? null, last_run: null,
+    }).execute();
   }
 
-  get(id: string): ChatBinding | undefined {
-    return this.sqlite.prepare('SELECT * FROM chat_binding WHERE id = ?').get(id) as ChatBinding | undefined;
+  get(id: string): Promise<ChatBinding | undefined> {
+    return this.db.selectFrom('chat_binding').selectAll().where('id', '=', id).executeTakeFirst();
   }
 
-  forRun(runId: string): ChatRunBinding | undefined {
-    return this.sqlite.prepare('SELECT b.*, r.sender_id, r.interactive FROM chat_binding b JOIN chat_run r ON r.conversation_id = b.id WHERE r.id = ?')
-      .get(runId) as ChatRunBinding | undefined;
+  async hiddenThreads(workspaceId?: string) {
+    const query = this.db.selectFrom('chat_binding').select('id').where('engine', '=', 't3');
+    const rows = await (workspaceId ? query.where('workspace_id', '!=', workspaceId) : query).execute();
+    return new Set(rows.map(({ id }) => id));
   }
 
-  recordRun(conversationId: string, runId: string, senderId: string, interactive: boolean) {
-    this.sqlite.exec('BEGIN');
-    try {
-      this.sqlite.prepare('INSERT INTO chat_run (id, conversation_id, sender_id, interactive) VALUES (?, ?, ?, ?)')
-        .run(runId, conversationId, senderId, Number(interactive));
-      this.sqlite.prepare('UPDATE chat_binding SET last_run = ? WHERE id = ?').run(runId, conversationId);
-      this.sqlite.exec('COMMIT');
-    } catch (error) {
-      this.sqlite.exec('ROLLBACK');
-      throw error;
-    }
+  forRun(runId: string): Promise<ChatRunBinding | undefined> {
+    return this.db.selectFrom('chat_binding').innerJoin('chat_run', 'chat_run.conversation_id', 'chat_binding.id')
+      .selectAll('chat_binding').select(['chat_run.sender_id', 'chat_run.interactive']).where('chat_run.id', '=', runId)
+      .executeTakeFirst();
+  }
+
+  async recordRun(conversationId: string, runId: string, senderId: string, interactive: boolean) {
+    await this.db.transaction().execute(async (transaction) => {
+      await transaction.insertInto('chat_run').values({
+        id: runId, conversation_id: conversationId, sender_id: senderId, interactive: Number(interactive),
+      }).execute();
+      await transaction.updateTable('chat_binding').set({ last_run: runId }).where('id', '=', conversationId).execute();
+    });
   }
 }

@@ -37,38 +37,37 @@ export class ChatUi {
     }
   }
 
-  visibleThread(threadId: string, workspaceId?: string) {
-    const record = this.records.get(threadId);
-    return record?.engine !== 't3' || record.workspace_id === workspaceId;
+  async requireThread(threadId: string, workspaceId?: string) {
+    const record = await this.records.get(threadId);
+    if (record?.engine === 't3' && record.workspace_id !== workspaceId) throw new ORPCError('NOT_FOUND');
   }
 
-  requireThread(threadId: string, workspaceId?: string) {
-    if (!this.visibleThread(threadId, workspaceId)) throw new ORPCError('NOT_FOUND');
-  }
-
-  requireRun(profile: string, runId: string, workspaceId?: string) {
-    const record = this.records.forRun(runId);
+  async requireRun(profile: string, runId: string, workspaceId?: string) {
+    const record = await this.records.forRun(runId);
     if (record && (record.workspace_id !== workspaceId || record.profile !== profile)) throw new ORPCError('NOT_FOUND');
     return record;
   }
 
   async createT3(input: { threadId: string; interactive?: boolean }, actor?: Actor): Promise<{ sequence: number; threadId?: string }> {
-    if (this.records.get(input.threadId)?.engine === 't3') throw new ORPCError('CONFLICT', { message: 'Thread already exists.' });
+    if ((await this.records.get(input.threadId))?.engine === 't3') throw new ORPCError('CONFLICT', { message: 'Thread already exists.' });
     if (!input.interactive || !actor || !this.kernel.hasRoute(segmentsRoute)) {
       return await this.t3('create', input) as { sequence: number };
     }
     const threadId = randomUUID();
     const response = await this.t3('create', { ...input, threadId }) as { sequence: number };
-    this.records.create(threadId, 't3', actor.workspaceId);
+    await this.records.create(threadId, 't3', actor.workspaceId);
     return { ...response, threadId };
   }
 
-  async sendT3(input: { threadId: string; text: string; messageId?: string; interactive?: boolean }, actor?: Actor) {
-    const record = this.records.get(input.threadId);
+  async sendT3(input: { threadId: string; text: string; messageId?: string; interactive?: boolean },
+    actor?: Actor, checkRevision?: () => void) {
+    const record = await this.records.get(input.threadId);
     if (record?.engine !== 't3') return await this.t3('send', input) as { sequence: number };
     if (record.workspace_id !== actor?.workspaceId) throw new ORPCError('NOT_FOUND');
     return this.serialize(input.threadId, async () => {
+      checkRevision?.();
       const instructions = input.interactive ? await this.instructions() : undefined;
+      checkRevision?.();
       const messageId = instructions ? randomUUID() : input.messageId;
       if (instructions && messageId) {
         // Bound memory. Losing a live binding only disables actions on that reply.
@@ -96,9 +95,9 @@ export class ChatUi {
     }
     if (!actor) throw new ORPCError('FORBIDDEN');
     const conversationId = input.conversationId ?? randomUUID();
-    if (!input.conversationId) this.records.create(conversationId, 'hermes', actor.workspaceId, input.profile);
+    if (!input.conversationId) await this.records.create(conversationId, 'hermes', actor.workspaceId, input.profile);
     return this.serialize(conversationId, async () => {
-      const binding = this.records.get(conversationId);
+      const binding = await this.records.get(conversationId);
       if (binding?.engine !== 'hermes' || binding.workspace_id !== actor.workspaceId || binding.profile !== input.profile) {
         throw new ORPCError('NOT_FOUND');
       }
@@ -115,7 +114,7 @@ export class ChatUi {
       const started = await this.hermes('runs/start', {
         profile: input.profile, input: input.input, instructions, sessionId,
       }) as { run_id: string };
-      this.records.recordRun(conversationId, started.run_id, actor.userId, Boolean(instructions));
+      await this.records.recordRun(conversationId, started.run_id, actor.userId, Boolean(instructions));
       return { ...started, conversationId };
     });
   }
@@ -144,7 +143,7 @@ export class ChatUi {
   }
 
   async *t3Events(stream: AsyncIterable<T3Event>, threadId: string, actor?: Actor): AsyncGenerator<T3Event> {
-    const bound = this.records.get(threadId)?.engine === 't3';
+    const bound = (await this.records.get(threadId))?.engine === 't3';
     const pending = new Map<string, { runId: string; text: string }>();
     for await (const event of stream) {
       if (event.type === 'a2ui.message') continue;
@@ -171,6 +170,11 @@ export class ChatUi {
       if (!turn) continue;
       const payload = event.payload as { id?: string; runId?: string; userMessageId?: string; status?: string } | undefined;
       if (event.kind === 'text.delta' && event.messageId && payload?.runId && event.textDelta !== undefined) {
+        if (event.fullText && turn.completedRun === payload.runId) {
+          const segment = await this.t3Segment(threadId, { id: event.messageId, text: event.textDelta }, actor, turn);
+          yield segment ?? { kind: 'event', type: 'a2ui.message', messageId: event.messageId };
+          continue;
+        }
         const previous = pending.get(event.messageId);
         const size = (event.fullText ? 0 : previous?.text.length ?? 0) + event.textDelta.length;
         if (size > maxText) { pending.delete(event.messageId); continue; }
@@ -179,7 +183,7 @@ export class ChatUi {
           text: event.fullText ? event.textDelta : (previous?.text ?? '') + event.textDelta });
       }
       if (event.type !== 'run.updated' || !payload?.id || !payload.status) continue;
-      if (!(terminal.has(payload.status))) {
+      if (!terminal.has(payload.status)) {
         if (turn.completedRun && payload.id !== turn.completedRun) this.t3Turns.delete(threadId);
         continue;
       }
@@ -195,15 +199,24 @@ export class ChatUi {
     }
   }
 
+  retireT3(threadId: string) {
+    this.t3Turns.delete(threadId);
+  }
+
   private async t3Segment(threadId: string, entry: { id: string; text: string }, actor?: Actor, turn?: T3Turn) {
+    if (entry.text.length > maxText) {
+      turn?.revisions.delete(entry.id);
+      return;
+    }
     const revision = createHash('sha256').update(entry.text).digest('hex');
     const matchingActor = actor && turn && actor.userId === turn.actor.userId && actor.workspaceId === turn.actor.workspaceId;
-    if (matchingActor) turn.revisions.set(entry.id, revision);
+    turn?.revisions.set(entry.id, revision);
     const send: Sender | undefined = matchingActor ? async (text) => {
-      if (this.t3Turns.get(threadId) !== turn || turn.revisions.get(entry.id) !== revision) {
-        throw new ORPCError('CONFLICT', { message: 'Action is stale.' });
-      }
-      const result = await this.sendT3({ threadId, text, interactive: true }, actor);
+      const result = await this.sendT3({ threadId, text, interactive: true }, actor, () => {
+        if (this.t3Turns.get(threadId) !== turn || turn.revisions.get(entry.id) !== revision) {
+          throw new ORPCError('CONFLICT', { message: 'Action is stale.' });
+        }
+      });
       return { engine: 't3', ...result };
     } : undefined;
     return this.decorate(entry.text, entry.id, threadId, actor, `${entry.id}:${revision}`, send);

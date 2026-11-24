@@ -33,8 +33,8 @@ test('managed Hermes runs resume the resolved session through disable and re-ena
     }, async () => {});
     const first = await chat.sendHermes({ profile: 'p', input: 'Show a form', interactive: true }, actor);
     assert.ok(first.conversationId);
-    assert.throws(() => chat.requireRun('p', first.run_id, other.workspaceId), { code: 'NOT_FOUND' });
-    const binding = chat.requireRun('p', first.run_id, actor.workspaceId);
+    await assert.rejects(chat.requireRun('p', first.run_id, other.workspaceId), { code: 'NOT_FOUND' });
+    const binding = await chat.requireRun('p', first.run_id, actor.workspaceId);
     const events = await collect(chat.hermesEvents(chunks(
       { kind: 'text.delta', textDelta: 'a2' }, { kind: 'text.delta', textDelta: 'ui data' },
       { kind: 'event', type: 'run.completed' },
@@ -68,7 +68,7 @@ test('T3 complete revisions only derive actions for the matched run and workspac
     });
     const { threadId } = await chat.createT3({ threadId: 'untrusted', interactive: true }, actor) as { threadId: string };
     assert.notEqual(threadId, 'untrusted');
-    assert.throws(() => chat.requireThread(threadId, other.workspaceId), { code: 'NOT_FOUND' });
+    await assert.rejects(chat.requireThread(threadId, other.workspaceId), { code: 'NOT_FOUND' });
     await chat.sendT3({ threadId, text: 'show', interactive: true }, actor);
     const delta = (text: string): T3Event => ({ kind: 'text.delta', messageId: 'a', fullText: true,
       textDelta: text, payload: { runId: 'right' } });
@@ -81,7 +81,13 @@ test('T3 complete revisions only derive actions for the matched run and workspac
     assert.equal(decorated.length, 1);
     const prepared = decorated[0].payload as { text: string; target: { send(text: string): Promise<unknown> } };
     assert.equal(prepared.text, 'a2ui finished');
-    await prepared.target.send('action');
+    const replaced = await collect(chat.t3Events(chunks(delta('Plain revised text')), threadId, actor));
+    assert.equal(replaced.at(-1)?.type, 'a2ui.message');
+    assert.equal(replaced.at(-1)?.payload, undefined);
+    await assert.rejects(prepared.target.send('stale after revision'), { code: 'CONFLICT' });
+    const updated = await collect(chat.t3Events(chunks(delta('a2ui revised surface')), threadId, actor));
+    const latest = updated.at(-1)?.payload as typeof prepared;
+    await latest.target.send('action');
     await assert.rejects(prepared.target.send('repeat'), { code: 'CONFLICT' });
     assert.deepEqual(sent.map(({ threadId: id, text }) => [id, text]), [
       [threadId, 'show\n\nNeo catalog'], [threadId, 'action\n\nNeo catalog'],

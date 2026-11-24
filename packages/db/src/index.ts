@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { Kysely, SqliteDialect } from 'kysely';
 import { AgentRecords, type AgentTables } from './agent-records.js';
+import { ChatRecords, type ChatTables } from './chat.js';
 import { MemoryRecords, type MemoryEntry } from './memory-records.js';
 export { MemoryRecords } from './memory-records.js';
 export type { MemoryStore, MemoryEntry, MemoryDraft, MemoryQuery, MemorySubject, MemoryTrust } from './memory-records.js';
@@ -130,7 +131,7 @@ export interface ExtensionInstall {
   integrity: string | null;
 }
 
-export interface NeoTables extends AgentTables {
+export interface NeoTables extends AgentTables, ChatTables {
   memory_entry: MemoryEntry;
   extension_state: ExtensionStateTable;
   extension_settings: ExtensionSettingsTable;
@@ -159,7 +160,6 @@ export interface DatabaseProvider {
   close(): Promise<void>;
 }
 
-import { ChatRecords } from './chat.js';
 export type { ChatRunBinding } from './chat.js';
 
 export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStore {
@@ -175,7 +175,7 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
     this.db = createNodeSqliteKysely<NeoTables>(this.sqlite);
     this.agents = new AgentRecords(this.db);
     this.memories = new MemoryRecords(this.db);
-    this.chat = new ChatRecords(this.sqlite);
+    this.chat = new ChatRecords(this.db);
   }
 
   get kysely(): Kysely<NeoTables> {
@@ -225,7 +225,7 @@ export class SqliteDatabaseProvider implements DatabaseProvider, VaultRecordStor
       .execute();
     await this.agents.migrate();
     await this.memories.migrate();
-    this.chat.migrate();
+    await this.chat.migrate();
   }
 
   async getEnabled(id: string): Promise<boolean> {

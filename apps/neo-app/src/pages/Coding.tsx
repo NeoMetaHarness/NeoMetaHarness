@@ -255,7 +255,7 @@ export default function Coding() {
     }
     if (event.kind !== 'event') return;
     const segments = replySegments(event);
-    if (segments && event.messageId) {
+    if (event.type === 'a2ui.message' && event.messageId) {
       const messageId = messageIds.current.get(event.messageId);
       if (messageId !== undefined) setMessages((previous) => previous.map((entry) =>
         entry.id === messageId ? { ...entry, segments, generation: a2uiGeneration.current } : entry));

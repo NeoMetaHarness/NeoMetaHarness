@@ -3,5 +3,6 @@
   "version": "0.1.0",
   "displayName": "Interactive agent replies",
   "kind": ["tool", "ui"],
-  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" },
+  "contributes": { "ui": { "slots": [{ "slot": "chat.assistant.body", "component": "./src/render.tsx" }] } }
 }

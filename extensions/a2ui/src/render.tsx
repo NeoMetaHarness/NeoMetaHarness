@@ -123,6 +123,13 @@ function SurfaceForm({ surface, actions, isBusy, onAction }: Pick<RendererProps,
         const path = widget.value['@path'];
         return <TextInput key={id} label={widget.label} isDisabled={disabled}
           value={String(fields[path] ?? surface.dataModel.get(path) ?? '')}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229) return;
+            event.preventDefault();
+            const form = event.currentTarget.form;
+            const button = form?.querySelector<HTMLButtonElement>('button[type=submit]:not([aria-disabled=true])');
+            if (button) form?.requestSubmit(button);
+          }}
           onChange={(value) => edit(path, value.slice(0, maxInputLength))} />;
       }
     }
