@@ -78,11 +78,14 @@ function normalized(raw: unknown): T3Event {
   return { kind: 'event', sequence: frame.sequence as number, type: event.type as string, payload: event.payload };
 }
 
+const renewed = Symbol('T3 session renewed');
+
 export class T3ControlPlane {
   private runtime?: Runtime;
   private scope?: Scope.Closeable;
   private client?: any;
-  private readonly subscriptions = new Set<AbortController>();
+  /** Streams on the serving connection. A renewal moves them to the next connection. */
+  private subscriptions = new Set<AbortController>();
   private readonly workflowTerminals = new Map<string, { threadId: string; terminalId: string }>();
   private readonly workflowCleanups = new Set<() => Promise<void>>();
 
@@ -105,12 +108,45 @@ export class T3ControlPlane {
 
   workflowCommand(command: Record<string, unknown>) { return this.dispatch(command); }
 
-  async *terminalOutput(input: { threadId: string; terminalId: string }, signal?: AbortSignal): AsyncGenerator<any> {
+  /** T3 replays the terminal history as a snapshot on each attach, so a renewed stream stays complete. */
+  terminalOutput(input: { threadId: string; terminalId: string }, signal?: AbortSignal): AsyncGenerator<any> {
+    return this.follow((client) => client['terminal.observe'](input), signal);
+  }
+
+  /**
+   * Iterates one T3 stream and resubscribes on the next connection after a session renewal.
+   * A real disconnect (or the caller's signal) ends it, as before.
+   */
+  private async *follow(open: (client: any, resumed: boolean) => any, signal?: AbortSignal): AsyncGenerator<unknown> {
     if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
-    const iterable = Stream.toAsyncIterable(this.client['terminal.observe'](input));
-    for await (const item of iterable) {
-      if (signal?.aborted) return;
-      yield item;
+    for (let resumed = false; ; resumed = true) {
+      const client = this.client;
+      if (!client || signal?.aborted) return;
+      const abort = new AbortController();
+      const streams = this.subscriptions;
+      streams.add(abort);
+      const stop = () => abort.abort();
+      signal?.addEventListener('abort', stop);
+      const aborted = new Promise<'aborted'>((done) => abort.signal.addEventListener('abort', () => done('aborted'), { once: true }));
+      const iterator = Stream.toAsyncIterable(open(client, resumed))[Symbol.asyncIterator]();
+      try {
+        for (;;) {
+          const pending = iterator.next();
+          pending.catch(() => { /* superseded by a renewal or a disconnect */ });
+          const next = await Promise.race([pending, aborted]);
+          if (next === 'aborted') break;
+          if (next.done) return;
+          yield next.value;
+          if (abort.signal.aborted) break;
+        }
+      } catch (error) {
+        if (abort.signal.reason !== renewed) throw error;
+      } finally {
+        streams.delete(abort);
+        signal?.removeEventListener('abort', stop);
+        void iterator.return?.()?.catch(() => {});
+      }
+      if (abort.signal.reason !== renewed) return;
     }
   }
 
@@ -157,7 +193,10 @@ export class T3ControlPlane {
       signal?.throwIfAborted();
       if (closed) throw new Error('T3 closed its connection');
       // Validate the new socket before handing off, so failed renewal leaves the old socket serving.
-      const previous = this.dropConnection();
+      // Live streams move to the new connection instead of ending.
+      const moving = this.subscriptions;
+      this.subscriptions = new Set();
+      const previous = this.dropConnection(moving);
       this.scope = scope;
       this.runtime = runtime;
       this.client = client;
@@ -253,30 +292,28 @@ export class T3ControlPlane {
   }
 
   async *subscribeThread(threadId: string, signal?: AbortSignal): AsyncGenerator<T3Event> {
-    if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
-    const abort = new AbortController();
-    this.subscriptions.add(abort);
-    const stop = () => abort.abort();
-    signal?.addEventListener('abort', stop);
-    try {
-      const stream = this.client['orchestration.subscribeThread']({ threadId });
-      const iterable = Stream.toAsyncIterable(stream);
-      for await (const item of iterable) {
-        if (abort.signal.aborted) return;
-        yield normalized(item);
-      }
-    } finally {
-      stop();
-      signal?.removeEventListener('abort', stop);
-      this.subscriptions.delete(abort);
+    // After a renewal, resume from the last delivered sequence (T3 v0.1.9 ws.ts:1010-1037).
+    // T3 replays from there, or sends a fresh snapshot when it cannot. Overlap is dropped by sequence.
+    let after: number | undefined;
+    const open = (client: any, resumed: boolean) => client['orchestration.subscribeThread'](
+      resumed && after !== undefined ? { threadId, afterSequence: after } : { threadId });
+    for await (const item of this.follow(open, signal)) {
+      const event = normalized(item);
+      if (event.kind !== 'snapshot' && event.sequence !== undefined && after !== undefined && event.sequence <= after) continue;
+      if (typeof event.sequence === 'number') after = event.sequence;
+      yield event;
     }
   }
 
-  private async dropConnection(): Promise<void> {
+  private async dropConnection(renewing?: Set<AbortController>): Promise<void> {
     const { runtime, scope } = this;
     this.client = this.runtime = this.scope = undefined;
-    for (const controller of this.subscriptions) controller.abort();
-    this.subscriptions.clear();
+    if (renewing) {
+      for (const controller of renewing) controller.abort(renewed);
+    } else {
+      for (const controller of this.subscriptions) controller.abort();
+      this.subscriptions.clear();
+    }
     try {
       if (runtime && scope) await runtime.runPromise(Scope.close(scope, Exit.void));
     } finally {
