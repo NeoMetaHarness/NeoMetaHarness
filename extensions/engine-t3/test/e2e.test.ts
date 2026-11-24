@@ -21,6 +21,7 @@ import { installedT3 } from '../src/install.js';
 import { T3ControlPlane } from '../src/client.js';
 import { isolatedT3Environment } from '../src/runtime.js';
 import { extensionIntegrity } from '@neometaharness/kernel';
+import { unsealFixtureTree } from '../../../packages/kernel/test/upgrade-fixtures.js';
 import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
 import { coalesceText } from '../../../apps/gateway/src/coalesce.js';
 
@@ -653,6 +654,8 @@ async function realInstall() {
     step('gateway'); await stop(app?.child, true);
     step('other-gateway'); await stop(other?.child, true);
     step('stale-server'); await stop(stale);
+    // The kernel seals the upgraded generation read-only (managed-runtime.ts sealGeneration); fs.rm retries it forever.
+    step('unseal'); await unsealFixtureTree(join(temp, 'extensions'));
     step('temp'); await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     step('done');
   }
