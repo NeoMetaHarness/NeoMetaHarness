@@ -76,12 +76,16 @@ const MARKER = '.neo-engine.json';
 /**
  * upstream.lock.json of the repository or unpacked runtime the Gateway serves (the injected runtimeRoot),
  * else of `fallbackRoot` (an extension's own source tree). An upgraded generation is copied into extension
- * storage, so only runtimeRoot finds the lock there. Isolated tests (NODE_ENV=test) may point at a fixture lock
- * whose pin matches a local fixture tarball; production always verifies against the shipped lock.
+ * storage, so only runtimeRoot finds the lock there. A runtimeRoot without a lock (an extensions folder copied
+ * on its own, as some deployments and tests do) falls back to the extension's own tree. Isolated tests
+ * (NODE_ENV=test) may point at a fixture lock whose pin matches a local fixture tarball; production always
+ * verifies against the shipped lock.
  */
 export function upstreamLockFile(runtimeRoot: string | undefined, fallbackRoot: string): string {
   const fixture = process.env.NODE_ENV === 'test' ? process.env.NMH_TEST_UPSTREAM_LOCK : undefined;
-  return fixture || join(runtimeRoot ?? fallbackRoot, 'upstream.lock.json');
+  if (fixture) return fixture;
+  const fromRuntime = runtimeRoot ? join(runtimeRoot, 'upstream.lock.json') : undefined;
+  return fromRuntime && existsSync(fromRuntime) ? fromRuntime : join(fallbackRoot, 'upstream.lock.json');
 }
 
 export function readEnginePin(lockFile: string, name: string): EnginePin {

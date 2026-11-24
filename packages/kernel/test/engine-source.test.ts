@@ -246,7 +246,12 @@ try {
     try {
       process.env.NMH_TEST_UPSTREAM_LOCK = join(tmpdir(), 'fixture.lock.json');
       process.env.NODE_ENV = 'production';
-      assert.equal(upstreamLockFile(join(tmpdir(), 'runtime'), join(tmpdir(), 'own')), join(tmpdir(), 'runtime', 'upstream.lock.json'));
+      const runtimeWithLock = join(root, 'lock-runtime');
+      await mkdir(runtimeWithLock, { recursive: true });
+      await writeFile(join(runtimeWithLock, 'upstream.lock.json'), '{}');
+      assert.equal(upstreamLockFile(runtimeWithLock, join(tmpdir(), 'own')), join(runtimeWithLock, 'upstream.lock.json'));
+      // A runtime root without a lock (extensions copied on their own) falls back to the extension's tree.
+      assert.equal(upstreamLockFile(join(root, 'lockless-runtime'), join(tmpdir(), 'own')), join(tmpdir(), 'own', 'upstream.lock.json'));
       assert.equal(upstreamLockFile(undefined, join(tmpdir(), 'own')), join(tmpdir(), 'own', 'upstream.lock.json'));
       process.env.NODE_ENV = 'test';
       assert.equal(upstreamLockFile(join(tmpdir(), 'runtime'), join(tmpdir(), 'own')), join(tmpdir(), 'fixture.lock.json'));
