@@ -1277,7 +1277,11 @@ mod tests {
         let manual_cmd = &lib_rs[lib_rs.find("async fn check_for_updates(").unwrap()..];
         let manual_cmd = &manual_cmd[..manual_cmd.find("\n}\n").unwrap()];
         assert!(manual_cmd.contains("run_update_check(&app).await") && manual_cmd.contains("Result<(), String>"));
-        assert!(lib_rs.contains(concat!("generate_handler![check_for_updates, ", "update_state, install_update]")));
+        let (_, handlers) = lib_rs.split_once(".invoke_handler(tauri::generate_handler![").unwrap();
+        let (handlers, _) = handlers.split_once("])").unwrap();
+        for command in ["check_for_updates", "update_state", "install_update"] {
+            assert!(handlers.split(',').any(|handler| handler.trim() == command));
+        }
     }
 
     #[test]
