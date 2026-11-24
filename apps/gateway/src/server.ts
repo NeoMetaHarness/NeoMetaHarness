@@ -16,6 +16,7 @@ import {
   type T3Event,
   type T3InstallStatus,
   type HermesEvent,
+  type A2uiActionResult,
   type DshEvent,
   type VaultOperation,
   type InboxItem,
@@ -1317,6 +1318,18 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         shutdown: os.x['engine-dsh'].shutdown.handler(async ({ input, context }) => {
           authorize('x.engine-dsh.shutdown', context);
           return invokeDsh('shutdown', dshScoped(input, context)) as Promise<{ stopped: boolean }>;
+        }),
+      },
+      a2ui: {
+        action: os.x.a2ui.action.handler(async ({ input, context }) => {
+          authorize('x.a2ui.action', context);
+          const workspaceId = settingsWorkspace(context);
+          if (!workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required.' });
+          const path = '/x/a2ui/action';
+          if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Interactive replies are disabled.' });
+          return await kernel.invokeRoute(path, 'RPC', {
+            actor: { userId: context.user!.id, workspaceId }, input,
+          }) as A2uiActionResult;
         }),
       },
       'coding-workflow': codingWorkflowRouter(kernel),

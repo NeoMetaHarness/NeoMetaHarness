@@ -304,9 +304,18 @@ importers:
       '@a2ui/web_core':
         specifier: file:vendor/a2ui-web_core-0.16.0.tgz
         version: file:extensions/a2ui/vendor/a2ui-web_core-0.16.0.tgz
+      '@neometaharness/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@neometaharness/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
       '@neometaharness/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@orpc/server':
+        specifier: 1.16.2
+        version: 1.16.2(@opentelemetry/api@1.10.0)(ws@8.23.0)
       react:
         specifier: ^19.2.0
         version: 19.3.1
@@ -11208,6 +11217,25 @@ snapshots:
       cookie: 1.1.1
     optionalDependencies:
       ws: 8.18.3
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - fastify
+
+  '@orpc/server@1.16.2(@opentelemetry/api@1.10.0)(ws@8.23.0)':
+    dependencies:
+      '@orpc/client': 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/contract': 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/interop': 1.16.2
+      '@orpc/shared': 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/standard-server': 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/standard-server-aws-lambda': 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/standard-server-fastify': 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/standard-server-fetch': 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/standard-server-node': 1.16.2(@opentelemetry/api@1.10.0)
+      '@orpc/standard-server-peer': 1.16.2(@opentelemetry/api@1.10.0)
+      cookie: 1.1.1
+    optionalDependencies:
+      ws: 8.23.0
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - fastify

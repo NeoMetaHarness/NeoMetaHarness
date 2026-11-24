@@ -10,7 +10,10 @@
   "dependencies": {
     "@a2ui/markdown-it": "file:vendor/a2ui-markdown-it-0.2.3.tgz",
     "@a2ui/web_core": "file:vendor/a2ui-web_core-0.16.0.tgz",
+    "@neometaharness/contracts": "workspace:*",
+    "@neometaharness/kernel": "workspace:*",
     "@neometaharness/ui": "workspace:*",
+    "@orpc/server": "1.16.2",
     "react": "^19.2.0",
     "zod": "3.25.76"
   },

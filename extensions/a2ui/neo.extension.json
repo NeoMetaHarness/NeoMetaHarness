@@ -1,0 +1,7 @@
+{
+  "id": "a2ui",
+  "version": "0.1.0",
+  "displayName": "Interactive agent replies",
+  "kind": ["tool", "ui"],
+  "runtime": { "type": "cordis", "entry": "./src/index.ts" }
+}

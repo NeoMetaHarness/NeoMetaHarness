@@ -96,6 +96,7 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
   'system.backup': 'deployment-owner',
   'system.restore': 'deployment-owner',
   'x.metrics.summary': 'admin',
+  'x.a2ui.action': 'member',
   'x.coding-workflow.register': 'admin',
   'x.coding-workflow.switch': 'member',
   'x.coding-workflow.worktree': 'member',
@@ -278,6 +279,8 @@ export const CONTRACT_POLICY: Record<string, PolicyLevel> = {
 };
 
 export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
+  '/x/a2ui/action': 'internal',
+  '/x/a2ui/segments': 'internal',
   '/x/engine-t3/install/start': 'internal',
   '/x/engine-t3/runtime/start': 'internal',
   '/internal/memory/context': 'internal',

@@ -3,7 +3,7 @@
   "source": "extensions/*/neo.extension.json",
   "generated_by": "scripts/capabilities.mjs",
   "note": "Generated from the extension manifests; do not edit by hand. Lists id, version, name, kind, runtime type and dependsOn only (settings and contributes stay in the manifests). Kinds do not imply enabled, healthy or released status; readiness is tracked only in machine/readiness.json.",
-  "extension_count": 28,
+  "extension_count": 29,
   "kinds": {
     "computer": [
       "computer-boat",
@@ -41,6 +41,7 @@
       "backup"
     ],
     "tool": [
+      "a2ui",
       "apps-composio",
       "computers-mcp",
       "metrics",
@@ -48,9 +49,23 @@
       "models-router-panda",
       "voice-xai",
       "x-search"
+    ],
+    "ui": [
+      "a2ui"
     ]
   },
   "extensions": [
+    {
+      "id": "a2ui",
+      "version": "0.1.0",
+      "display_name": "Interactive agent replies",
+      "kind": [
+        "tool",
+        "ui"
+      ],
+      "runtime_type": "cordis",
+      "manifest": "extensions/a2ui/neo.extension.json"
+    },
     {
       "id": "apps-composio",
       "version": "0.1.0",
