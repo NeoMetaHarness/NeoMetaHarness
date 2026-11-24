@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "tsx test/e2e.test.ts",
+    "test:install": "tsx test/install.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -30,7 +30,7 @@ export async function isolatedT3Environment(root: string, original = process.env
     HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
     APPDATA: join(root, 'appdata'), LOCALAPPDATA: join(root, 'localappdata'),
     TEMP: join(root, 'tmp'), TMP: join(root, 'tmp'), TMPDIR: join(root, 'tmp'),
-    XDG_CONFIG_HOME: join(root, 'config'), XDG_CACHE_HOME: join(root, 'cache'), XDG_DATA_HOME: join(root, 'data'),
+    XDG_STATE_HOME: join(root, 'state'), XDG_CONFIG_HOME: join(root, 'config'), XDG_CACHE_HOME: join(root, 'cache'), XDG_DATA_HOME: join(root, 'data'),
     T3CODE_HOME: join(root, 'state'),
   };
   // Allow TLS configuration for upstream provider requests, without inheriting the owner's T3 session or tokens.
@@ -54,13 +54,20 @@ export class T3LocalRuntime {
   constructor(private readonly client: T3ControlPlane, private readonly executable: string,
     private readonly enginesDir: string, private readonly testCommand?: Command) {}
 
+  get pid(): number | undefined { return this.child?.pid; }
+
+  get pending(): boolean { return !!this.starting; }
+
   start(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('T3 extension is disabled'));
     if (this.client.connected) return Promise.resolve();
     if (!this.starting) {
       this.reason = 'Starting the local T3 server…';
       this.starting = this.launch().catch((error: unknown) => {
-        if (!this.disposed) this.reason = `Couldn't start the local T3 server. ${error instanceof Error ? error.message : String(error)}`;
+        if (!this.disposed) {
+          console.error('T3 local startup failed', error);
+          this.reason = "Couldn't start the local T3 server. Check the Gateway logs, then choose Start to retry.";
+        }
         throw error;
       }).finally(() => { this.starting = undefined; });
     }
@@ -68,6 +75,7 @@ export class T3LocalRuntime {
   }
 
   private async launch(): Promise<void> {
+    if (this.child) await this.terminate(this.child);
     const root = join(this.enginesDir, 't3-home');
     const env = await isolatedT3Environment(root);
     const base = env.T3CODE_HOME!;
@@ -90,7 +98,7 @@ export class T3LocalRuntime {
       this.child = undefined;
       if (!this.disposed) {
         this.reason = 'The local T3 server exited. Choose Start to try again.';
-        void this.client.disconnect().catch(() => {});
+        void this.client.disconnect(false).catch(() => {});
       }
     });
     const closeOnExit = () => { if (child.exitCode === null) child.kill(); };
@@ -106,13 +114,16 @@ export class T3LocalRuntime {
       if (token.length < 12) throw new Error('T3 did not issue a scoped session');
       const origin = `http://127.0.0.1:${port}`;
       let ready = false;
-      for (let attempt = 0; attempt < 120 && !this.abort.signal.aborted; attempt++) {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline && !this.abort.signal.aborted) {
         if (this.spawnError) throw this.spawnError;
         if (child.exitCode !== null || child.signalCode !== null) break;
         try {
           const response = await fetch(`${origin}/api/auth/websocket-ticket`, {
-            method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(1800),
+            method: 'POST', headers: { Authorization: `Bearer ${token}` }, redirect: 'error',
+            signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(1800)]),
           });
+          await response.body?.cancel();
           if (response.ok) { ready = true; break; }
           if (response.status !== 503 && response.status !== 502) {
             throw new Error(`T3 refused its scoped session (HTTP ${response.status})`);
@@ -124,7 +135,9 @@ export class T3LocalRuntime {
       }
       if (!ready) throw new Error(`T3 server did not become ready. ${this.output.slice(-250)}`);
       if (this.abort.signal.aborted) return;
-      await this.client.connect(origin, token);
+      await this.client.connect(origin, token, this.abort.signal, () => {
+        this.reason = 'The local T3 server disconnected. Choose Start to try again.';
+      });
       if (this.abort.signal.aborted) await this.client.disconnect();
       else this.reason = '';
     } catch (error) {
@@ -151,8 +164,8 @@ export class T3LocalRuntime {
   async stop(): Promise<void> {
     this.disposed = true;
     this.abort.abort();
+    await this.client.disconnect();
     if (this.child) await this.terminate(this.child);
     await this.starting?.catch(() => {});
-    await this.client.disconnect();
   }
 }

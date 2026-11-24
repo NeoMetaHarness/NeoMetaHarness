@@ -174,7 +174,7 @@ export async function retrying<T>(work: () => Promise<T>, signal?: AbortSignal, 
 }
 
 /** GET with the proxy settings (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) applied; redirects stay on HTTPS. */
-async function get(url: URL, signal: AbortSignal | undefined, proxyEnv: NodeJS.ProcessEnv, redirects = 5): Promise<IncomingMessage> {
+export async function downloadEngineArchive(url: URL, signal: AbortSignal | undefined, proxyEnv = process.env, redirects = 5): Promise<IncomingMessage> {
   const client = url.protocol === 'https:' ? https : http;
   // Node 22.21+ applies HTTP(S)_PROXY / NO_PROXY for an agent given proxyEnv; older Nodes ignore the option.
   const agent = new client.Agent({ proxyEnv } as http.AgentOptions);
@@ -189,7 +189,7 @@ async function get(url: URL, signal: AbortSignal | undefined, proxyEnv: NodeJS.P
     if (redirects <= 0 || (next.protocol !== 'https:' && next.origin !== url.origin)) {
       throw new EngineInstallError('network', `Refused redirect of ${url.href} to ${next.href}`);
     }
-    return get(next, signal, proxyEnv, redirects - 1);
+    return downloadEngineArchive(next, signal, proxyEnv, redirects - 1);
   }
   return response;
 }
@@ -220,7 +220,7 @@ async function install(options: EngineInstallOptions, target: string): Promise<E
 
     // 1. Download, hashing as it streams to disk.
     let response: IncomingMessage;
-    try { response = await get(url, signal, options.proxyEnv ?? process.env); }
+    try { response = await downloadEngineArchive(url, signal, options.proxyEnv ?? process.env); }
     catch (error) {
       if (signal?.aborted) throw cancelled();
       if (error instanceof EngineInstallError) throw error;

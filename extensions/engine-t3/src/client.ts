@@ -103,7 +103,7 @@ export class T3ControlPlane {
     }
   }
 
-  async connect(origin: string, scopedSession: string): Promise<void> {
+  async connect(origin: string, scopedSession: string, signal?: AbortSignal, onClose?: () => void): Promise<void> {
     if (this.client) throw new Error('T3 is already connected');
     const base = new URL(origin);
     if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.pathname !== '/' || base.search || base.hash) {
@@ -111,7 +111,8 @@ export class T3ControlPlane {
     }
     const response = await fetch(new URL('/api/auth/websocket-ticket', base), {
       method: 'POST', headers: { Authorization: `Bearer ${scopedSession}` },
-      signal: AbortSignal.timeout(15_000),
+      redirect: 'error',
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
     });
     if (!response.ok) throw new Error(`T3 socket ticket failed (${response.status})`);
     const result: unknown = await response.json();
@@ -122,7 +123,20 @@ export class T3ControlPlane {
     url.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('orchestrationProtocol', '2');
     url.searchParams.set('wsTicket', (result as { ticket: string }).ticket);
-    const socketLayer = Socket.layerWebSocket(url.toString()).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal));
+    let closed = false;
+    const socketLayer = Socket.layerWebSocket(url.toString()).pipe(Layer.provide(
+      Layer.succeed(Socket.WebSocketConstructor, (address) => {
+        const socket = new WebSocket(address);
+        socket.addEventListener('close', () => {
+          closed = true;
+          if (this.runtime === runtime) {
+            onClose?.();
+            void this.disconnect(false).catch(() => {});
+          }
+        }, { once: true });
+        return socket;
+      }),
+    ));
     const protocolLayer = RpcClient.layerProtocolSocket().pipe(
       Layer.provide(socketLayer), Layer.provide(RpcSerialization.layerJson),
     );
@@ -132,6 +146,9 @@ export class T3ControlPlane {
       const client = await runtime.runPromise(
         RpcClient.make(rpcGroup).pipe(Effect.provideService(Scope.Scope, scope)),
       );
+      await runtime.runPromise(client['server.getConfig']({}).pipe(Effect.timeout('10 seconds')), { signal });
+      signal?.throwIfAborted();
+      if (closed) throw new Error('T3 closed its connection');
       this.scope = scope;
       this.runtime = runtime;
       this.client = client;
@@ -245,20 +262,26 @@ export class T3ControlPlane {
     }
   }
 
-  async disconnect(): Promise<void> {
-    for (const cleanup of this.workflowCleanups) await cleanup().catch(() => {});
+  async disconnect(graceful = true): Promise<void> {
+    const cleanups = [...this.workflowCleanups];
     this.workflowCleanups.clear();
-    for (const terminal of this.workflowTerminals.values()) {
-      await this.workflowRequest('terminal.close', terminal).catch(() => {});
+    if (graceful) {
+      for (const cleanup of cleanups) await cleanup().catch(() => {});
     }
+    const { client, runtime, scope } = this;
+    this.client = this.runtime = this.scope = undefined;
+    const terminals = [...this.workflowTerminals.values()];
     this.workflowTerminals.clear();
     for (const controller of this.subscriptions) controller.abort();
     this.subscriptions.clear();
-    this.client = undefined;
-    const runtime = this.runtime;
-    const scope = this.scope;
-    this.scope = undefined;
-    this.runtime = undefined;
+    if (!graceful) {
+      for (const cleanup of cleanups) await cleanup().catch(() => {});
+    }
+    if (graceful && runtime && client && terminals.length > 0) {
+      await Promise.all(terminals.map((terminal) => runtime.runPromise(
+        client['terminal.close'](terminal).pipe(Effect.timeout('2 seconds')),
+      ).catch(() => {})));
+    }
     if (runtime && scope) await runtime.runPromise(Scope.close(scope, Exit.void));
     await runtime?.dispose();
   }
