@@ -7,7 +7,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { T3Installer, installedT3 } from '../src/install.js';
-import { isolatedT3Environment, T3LocalRuntime } from '../src/runtime.js';
+import { isolatedT3Environment, T3LocalRuntime, T3_SESSION_SCOPES } from '../src/runtime.js';
 import type { T3ControlPlane } from '../src/client.js';
 
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
@@ -151,7 +151,7 @@ if (args[0] === 'auth') {
     process.exit(0);
   }
   if (fs.existsSync(path.join(base, 'issue-broken'))) { process.stdout.write('not json\\n'); process.exit(0); }
-  fs.writeFileSync(path.join(base, 'auth.json'), JSON.stringify({ scopes: args.filter((a) => /^(orchestration|providers|terminal):/.test(a)), home: process.env.HOME }));
+  fs.writeFileSync(path.join(base, 'auth.json'), JSON.stringify({ scopes: args.filter((a) => /^(orchestration|providers|terminal|source-control):/.test(a)), home: process.env.HOME }));
   const crypto = require('node:crypto');
   process.stdout.write(JSON.stringify({ sessionId: crypto.randomUUID(), token: crypto.randomUUID() }) + '\\n');
   process.exit(0);
@@ -210,7 +210,7 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   const issued = JSON.parse(readFileSync(join(state, 'auth.json'), 'utf8')) as { scopes: string[]; home: string };
   assert.equal(origin, 'http://127.0.0.1:' + launched.port);
   assert.equal(issued.home, launched.home);
-  assert.deepEqual(issued.scopes, ['orchestration:read', 'orchestration:operate', 'providers:manage', 'terminal:read', 'terminal:operate']);
+  assert.deepEqual(issued.scopes, [...T3_SESSION_SCOPES]);
   assert.ok(launched.home.includes('t3-home'));
   const actualChildHomes = JSON.parse(await readFile(join(state, 'child-env.json'), 'utf8'));
   for (const [key, folders] of Object.entries(providerHomes)) {

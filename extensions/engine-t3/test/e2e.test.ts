@@ -19,7 +19,7 @@ import { build, stop as stopEsbuild } from 'esbuild';
 import { system32 } from '../src/system-tools.js';
 import { installedT3 } from '../src/install.js';
 import { T3ControlPlane } from '../src/client.js';
-import { isolatedT3Environment } from '../src/runtime.js';
+import { isolatedT3Environment, T3_SESSION_SCOPES } from '../src/runtime.js';
 import { extensionIntegrity } from '@neometaharness/kernel';
 import { unsealFixtureTree } from '../../../packages/kernel/test/upgrade-fixtures.js';
 import { requireUpstreamCache } from '../../../tests/upstream-cache.mjs';
@@ -203,9 +203,17 @@ async function main() {
     server = t3(['serve', '--mode', 'desktop', '--host', '127.0.0.1', '--port', String(isolatedPort),
       '--base-dir', state, '--no-browser'], environment, temp);
     await waitForServer(url, server);
+    // The same scopes the local runtime requests, so this run proves they cover coding-workflow's worktree.
     const session = await capture(t3(['auth', 'session', 'issue', '--base-dir', state,
-      '--scope', 'orchestration:read', '--scope', 'orchestration:operate',
-      '--scope', 'providers:manage', '--ttl', '15m', '--label', 'nmh-isolated-test', '--token-only'], environment, temp));
+      ...T3_SESSION_SCOPES.flatMap((scope) => ['--scope', scope]),
+      '--ttl', '15m', '--label', 'nmh-isolated-test', '--token-only'], environment, temp));
+    // A committed scratch repository, so T3 can create a worktree from HEAD.
+    const workspace = join(temp, 'workspace');
+    await mkdir(workspace, { recursive: true });
+    const git = (...args: string[]) => execFileSync('git', ['-C', workspace, '-c', 'user.name=Neo Test',
+      '-c', 'user.email=neo-test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { stdio: 'ignore' });
+    git('init', '-q');
+    git('commit', '-q', '--allow-empty', '-m', 'scratch');
     assert.ok(session.length > 16, 'isolated session token was not issued');
     const projectId = randomUUID();
     const providerId = 'nmhFakeAcp';
@@ -213,7 +221,7 @@ async function main() {
       cwd: here, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
       env: { ...process.env, T3_TEST_URL: url, T3_TEST_SESSION: session,
         T3_TEST_PROVIDER: providerId, T3_TEST_PROJECT: projectId,
-        T3_TEST_WORKSPACE: join(temp, 'workspace'), T3_TEST_FAKE_ACP: join(spike, 'fake-acp.mjs') },
+        T3_TEST_WORKSPACE: workspace, T3_TEST_FAKE_ACP: join(spike, 'fake-acp.mjs') },
     });
     const setupOutput = await within(capture(setup), 20000, 'T3 pinned setup');
     assert.match(setupOutput, /T3_WIRE_SCHEMAS PASS/);
@@ -288,6 +296,15 @@ async function main() {
       'all projected gateway events must be strictly ordered');
     assert.ok(events.some((event) => event.kind === 'text.delta' && event.coalescedCount! >= 1));
 
+    // vcs.createWorktree needs source-control:write (T3 v0.1.9 contracts/clientRpcPermissions.ts:58).
+    assert.equal((await http.extensions.enable({ id: 'coding-workflow' })).status, 'running', app.error);
+    const worktreeThread = randomUUID();
+    await http.x['engine-t3'].create({ threadId: worktreeThread, projectId, title: 'Worktree scope', providerId, model: 'default' });
+    const worktree = await http.x['coding-workflow'].worktree({ threadId: worktreeThread, branch: 'neo-scope-check' });
+    assert.equal(worktree.branch, 'neo-scope-check');
+    assert.ok(existsSync(worktree.path), 'T3 created the worktree');
+    await http.extensions.disable({ id: 'coding-workflow' });
+
     await http.extensions.disable({ id: 'engine-t3' });
     let socketClosed = false;
     for (let attempt = 0; attempt < 30; attempt++) {
@@ -300,7 +317,7 @@ async function main() {
     assert.equal(disabled.status, 404, 'disabled engine route must disappear');
     assert.equal((await http.extensions.list()).find((entry) => entry.id === 'engine-t3')?.status, 'disabled');
     assert.deepEqual(await (await fetch(base + '/x/sample-ts/hello', { headers: { authorization: `Bearer ${token}` } })).json(), { message: 'Hello from TypeScript' });
-    console.log(`T3_GATEWAY_E2E PASS ordered=${sequences.length} chunks=${text.length} approvals=declined settled=true socket=closed disable=404 sample=healthy`);
+    console.log(`T3_GATEWAY_E2E PASS ordered=${sequences.length} chunks=${text.length} approvals=declined settled=true socket=closed worktree=created disable=404 sample=healthy`);
   } finally {
     socket?.close();
     await stop(app?.child, true);

@@ -170,6 +170,14 @@ export async function isolatedT3Environment(root: string, original = process.env
   return environment;
 }
 
+/**
+ * Scopes of the Gateway's local T3 session (T3 v0.1.9 auth/RpcAuthorization.ts, contracts/clientRpcPermissions.ts).
+ * Beyond orchestration and providers, coding-workflow needs the read-only terminal (terminal:read/operate,
+ * RpcAuthorization.ts:185-191) and worktree creation (vcs.createWorktree: source-control:write, clientRpcPermissions.ts:58).
+ */
+export const T3_SESSION_SCOPES = ['orchestration:read', 'orchestration:operate', 'providers:manage',
+  'terminal:read', 'terminal:operate', 'source-control:write'] as const;
+
 type TestOptions = { executable?: string; prefix?: string[]; sessionTtlMs?: number };
 const exitedReason = 'The local T3 server exited. Choose Start to try again.';
 
@@ -247,9 +255,7 @@ export class T3LocalRuntime {
     const origin = await this.waitForChild(server, base);
     const session = ([action, ...args]: string[]) => execute(command, [...prefix, 'auth', 'session', action, '--base-dir', base, ...args],
       { cwd: this.root, env, windowsHide: true, timeout: 30_000, signal: this.abort.signal, maxBuffer: 16_384 });
-    // coding-workflow's read-only terminal needs the terminal scopes (T3 v0.1.9 auth/RpcAuthorization.ts:185-191).
-    const { stdout } = await session(['issue', '--scope', 'orchestration:read', '--scope', 'orchestration:operate',
-      '--scope', 'providers:manage', '--scope', 'terminal:read', '--scope', 'terminal:operate',
+    const { stdout } = await session(['issue', ...T3_SESSION_SCOPES.flatMap((scope) => ['--scope', scope]),
       '--ttl', String(this.ttlMs) + 'ms', '--label', 'neo-gateway', '--json']);
     let issued: { sessionId?: unknown; token?: unknown } = {};
     try { issued = JSON.parse(stdout); } catch { /* reported below */ }
