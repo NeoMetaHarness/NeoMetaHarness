@@ -101,8 +101,9 @@ export const t3Contract = {
   subscription: {
     status: oc.output(z.object({ providers: z.array(z.object({
       instanceId: z.string(), provider: z.enum(['codex', 'claude']), status: z.enum(['authenticated', 'unauthenticated', 'unknown']),
-      signedIn: z.boolean(), canStart: z.boolean(), accountLabel: z.string().nullable(), guidance: z.string(),
+      signedIn: z.boolean(), canStart: z.boolean(), canLogout: z.boolean(), accountLabel: z.string().nullable(), guidance: z.string(),
     })) })),
+    logout: oc.input(t3SubscriptionInput).output(t3SubscriptionFlowSchema),
     start: oc.input(t3SubscriptionInput).output(t3SubscriptionFlowSchema),
     poll: oc.input(t3SubscriptionInput).output(t3SubscriptionFlowSchema),
     cancel: oc.input(t3SubscriptionInput.extend({ flowId: z.string().trim().min(1).max(256) })).output(t3SubscriptionFlowSchema),
@@ -231,6 +232,8 @@ const hermesSubscriptionStatus = z.object({
 
 export const hermesContract = {
   subscription: {
+    status: oc.input(z.object({ profile: hermesSubscriptionProfile })).output(z.object({ signedIn: z.boolean().nullable(), canLogout: z.boolean() })),
+    logout: oc.input(z.object({ profile: hermesSubscriptionProfile })).output(z.object({ signedIn: z.boolean().nullable(), canLogout: z.boolean() })),
     start: oc.input(z.object({ profile: hermesSubscriptionProfile })).output(z.object({
       sessionId: z.string(), userCode: z.string(), verificationUrl: z.string(),
       expiresIn: z.number().positive(), pollInterval: z.number().positive(),

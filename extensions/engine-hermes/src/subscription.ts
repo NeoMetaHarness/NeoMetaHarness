@@ -65,6 +65,22 @@ export class HermesSubscription {
       ...(status === 'approved' ? { accountLabel: 'ChatGPT / Codex' } : {}) };
   }
 
+  async status(profile: string) {
+    const { providers } = await this.call('/api/providers/oauth' + this.query(profile));
+    const provider = Array.isArray(providers) ? providers.find((item) => item?.id === 'openai-codex') : undefined;
+    const loggedIn = provider?.status?.logged_in;
+    return { signedIn: typeof loggedIn === 'boolean' ? loggedIn : null, canLogout: loggedIn === true && provider?.disconnectable === true };
+  }
+
+  async logout(profile: string) {
+    if (!(await this.status(profile)).canLogout) throw new Error('Hermes does not expose sign-out for this profile');
+    const reply = await this.call(providerPath + this.query(profile), 'DELETE');
+    if (reply.ok !== true) throw new Error('Hermes sign-out failed');
+    const status = await this.status(profile);
+    if (status.signedIn !== false) throw new Error('Hermes sign-out could not be verified');
+    return status;
+  }
+
   private async providerSignedIn(profile: string): Promise<boolean | undefined> {
     const { providers } = await this.call('/api/providers/oauth' + this.query(profile));
     const provider = Array.isArray(providers) ? providers.find((item) => item?.id === 'openai-codex') : undefined;

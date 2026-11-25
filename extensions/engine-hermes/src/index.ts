@@ -83,6 +83,8 @@ export default defineExtension({
     });
     ctx.health(() => ({ ok: service.connected, pid: service.pid }));
 
+    ctx.route('subscription/status', ({ body }) => service.subscription.status((body as { profile: string }).profile));
+    ctx.route('subscription/logout', ({ body }) => service.subscription.logout((body as { profile: string }).profile));
     ctx.route('subscription/start', ({ body }) => service.subscription.start((body as { profile: string }).profile));
     ctx.route('subscription/poll', ({ body }) => {
       const { profile, sessionId } = body as { profile: string; sessionId: string };

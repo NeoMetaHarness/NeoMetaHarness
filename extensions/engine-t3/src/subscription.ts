@@ -1,4 +1,4 @@
-type AuthRpc = (method: 'server.getConfig' | 'provider.auth.start' | 'provider.auth.cancel', input: object) => Promise<unknown>;
+type AuthRpc = (method: 'server.getConfig' | 'provider.auth.start' | 'provider.auth.cancel' | 'provider.auth.logout', input: object) => Promise<unknown>;
 type AuthSnapshot = (instanceId: string) => Promise<unknown>;
 
 type ProviderSnapshot = {
@@ -25,7 +25,7 @@ function metadata(provider: ProviderSnapshot) {
     ? (canStart ? 'Sign in with ChatGPT through T3.' : 'Configure a managed Codex provider in T3 to sign in with ChatGPT.')
     : (signedIn ? 'Claude sign-in detected by T3.' : 'Sign in to Claude Code in the isolated T3 environment using claude auth login, then refresh.');
   return { instanceId: provider.instanceId, provider: isCodex ? 'codex' as const : 'claude' as const,
-    status, signedIn, canStart, accountLabel: signedIn ? (isCodex ? 'ChatGPT / Codex' : 'Claude') : null, guidance };
+    status, signedIn, canStart, canLogout: canStart && signedIn, accountLabel: signedIn ? (isCodex ? 'ChatGPT / Codex' : 'Claude') : null, guidance };
 }
 
 function projectFlow(raw: unknown, instanceId: string) {
@@ -63,7 +63,7 @@ export class T3Subscription {
     return { providers: (await this.providers()).map((provider) => {
       const result = metadata(provider);
       if (local || result.provider !== 'codex') return result;
-      return { ...result, canStart: false, guidance: 'ChatGPT sign-in requires the isolated local T3 server.' };
+      return { ...result, canStart: false, canLogout: false, guidance: 'ChatGPT sign-in requires the isolated local T3 server.' };
     }) };
   }
 
@@ -83,6 +83,15 @@ export class T3Subscription {
     await this.codex(instanceId);
     try { return projectFlow(await this.snapshot(instanceId), instanceId); }
     catch { throw new Error('T3 could not read ChatGPT sign-in status.'); }
+  }
+
+  async logout(instanceId: string) {
+    await this.codex(instanceId);
+    try {
+      const result = projectFlow(await this.request('provider.auth.logout', { instanceId }), instanceId);
+      if (result.phase !== 'idle') throw new Error('Unexpected sign-out state');
+      return result;
+    } catch { throw new Error('T3 could not sign out of ChatGPT.'); }
   }
 
   async cancel(instanceId: string, flowId: string) {

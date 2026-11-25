@@ -1398,6 +1398,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             authorize('x.engine-t3.subscription.status', context);
             return invokeT3('subscription/status', {}) as Promise<any>;
           }),
+          logout: os.x['engine-t3'].subscription.logout.handler(async ({ input, context }) => {
+            authorize('x.engine-t3.subscription.logout', context);
+            return invokeT3('subscription/logout', input) as Promise<any>;
+          }),
           start: os.x['engine-t3'].subscription.start.handler(async ({ input, context }) => {
             authorize('x.engine-t3.subscription.start', context);
             return invokeT3('subscription/start', input) as Promise<any>;
@@ -1443,6 +1447,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
       },
       'engine-hermes': {
         subscription: {
+          status: os.x['engine-hermes'].subscription.status.handler(async ({ input, context }) => {
+            authorize('x.engine-hermes.subscription.status', context);
+            return invokeHermes('subscription/status', input) as Promise<any>;
+          }),
+          logout: os.x['engine-hermes'].subscription.logout.handler(async ({ input, context }) => {
+            authorize('x.engine-hermes.subscription.logout', context);
+            return invokeHermes('subscription/logout', input) as Promise<any>;
+          }),
           start: os.x['engine-hermes'].subscription.start.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.subscription.start', context);
             return invokeHermes('subscription/start', input) as Promise<any>;
