@@ -74,9 +74,9 @@ async function openWebview(port) {
   return {
     evaluate,
     field,
-    wait: async (expression, label) => {
+    wait: async (expression, label, attempts) => {
       try {
-        return await eventually(() => evaluate(expression), label);
+        return await eventually(() => evaluate(expression), label, attempts);
       } catch (error) {
         const alert = await evaluate('document.querySelector("[role=alert]")?.textContent ?? ""');
         throw new Error(`${error.message}. UI error: ${alert}`);
@@ -184,7 +184,7 @@ try {
   assert.equal((await rpc.x.models.roles.get()).default.model, 'scripted-model');
 
   await view.field('[data-testid=onboarding-bot-name]', 'first_helper');
-  await view.wait('(() => { const b = document.querySelector("[data-testid=onboarding-bot-create]"); return b && !b.disabled && b.getAttribute("aria-disabled") !== "true"; })()', 'Hermes ready to create bot');
+  await view.wait('(() => { const b = document.querySelector("[data-testid=onboarding-bot-create]"); return b && !b.disabled && b.getAttribute("aria-disabled") !== "true"; })()', 'Hermes ready to create bot', 650);
   await view.evaluate('document.querySelector("[data-testid=onboarding-bot-create]").click()');
   await view.wait('!!document.querySelector("[data-testid=onboarding-created-bot]")', 'bot created');
   assert.equal(await view.evaluate('document.querySelector("[data-testid=onboarding-created-bot]").textContent'), 'first_helper');

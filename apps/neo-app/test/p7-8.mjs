@@ -160,8 +160,10 @@ const model = createServer((request, response) => {
   if (request.method === 'POST' && request.url === '/v1/chat/completions') {
     const chunks = [];
     request.on('data', (chunk) => chunks.push(chunk));
-    request.on('end', () => {
+    request.on('end', async () => {
       const body = JSON.parse(Buffer.concat(chunks).toString());
+      // Keep the scripted reply pending long enough to observe the operation timer.
+      await sleep(1500);
       if (!body.stream) {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: 'Hello from your first bot.' }, finish_reason: 'stop' }] }));
@@ -226,15 +228,17 @@ try {
     return { owner: document.querySelector('[data-testid=onboarding-owner]')?.textContent,
       workspace: document.querySelector('[data-testid=onboarding-workspace]')?.textContent,
       progress: document.querySelector('[data-testid=onboarding-progress]')?.textContent,
-      stepTimer: document.querySelector('[data-testid=onboarding-step-timer]')?.textContent,
-      totalTimer: document.querySelector('[data-testid=onboarding-total-timer]')?.textContent,
+      operationTimer: !!document.querySelector('[data-testid=onboarding-operation-timer]'),
+      stepTimer: !!document.querySelector('[data-testid=onboarding-step-timer]'),
+      totalTimer: !!document.querySelector('[data-testid=onboarding-total-timer]'),
       timeOrigin: performance.timeOrigin };
   })()`);
   assert.equal(initial.owner, 'Desktop Owner');
   assert.equal(initial.workspace, 'Default Workspace');
   assert.match(initial.progress, /Step 1 of 5/);
-  assert.equal(initial.stepTimer, undefined, "no idle step timer");
-  assert.equal(initial.totalTimer, undefined, "no idle total timer");
+  assert.equal(initial.operationTimer, false, 'no idle operation timer');
+  assert.equal(initial.stepTimer, false, 'no idle step timer');
+  assert.equal(initial.totalTimer, false, 'no idle total timer');
   assert.equal((await rpc.onboarding.get()).workspaceName, initial.workspace);
   markStep('startup_workspace_owner');
 
@@ -311,7 +315,7 @@ try {
     markStep('hermes_install', 900_000);
   }
 
-  await view.wait('(() => { const b = document.querySelector("[data-testid=onboarding-bot-create]"); return b && !b.disabled && b.getAttribute("aria-disabled") !== "true"; })()', 'Hermes ready to create bot');
+  await view.wait('(() => { const b = document.querySelector("[data-testid=onboarding-bot-create]"); return b && !b.disabled && b.getAttribute("aria-disabled") !== "true"; })()', 'Hermes ready to create bot', 650);
   await view.evaluate('document.querySelector("[data-testid=onboarding-bot-create]").click()');
   await view.wait('!!document.querySelector("[data-testid=onboarding-created-bot]")', 'first bot created');
   assert.equal(await view.evaluate('document.querySelector("[data-testid=onboarding-created-bot]").textContent'), 'first-bot');
@@ -327,8 +331,12 @@ try {
   await view.wait('!!document.querySelector("[data-testid=onboarding-chat-message]")', 'chat stage without optional channel');
   markStep('optional_channel');
   await view.evaluate('document.querySelector("[data-testid=onboarding-chat-send]").click()');
+  await view.wait('!!document.querySelector("[data-testid=onboarding-operation-timer] time")', 'reply operation timer appears');
+  assert.match(await view.evaluate('document.querySelector("[data-testid=onboarding-operation-timer] time").dateTime'), /^PT\d+S$/);
+  await view.wait('Number(document.querySelector("[data-testid=onboarding-operation-timer] time")?.dateTime.match(/^PT(\\d+)S$/)?.[1]) >= 1', 'reply operation timer advances');
   await view.wait('document.querySelector("[data-testid=onboarding-chat-reply]")?.textContent?.includes("Hello from your first bot.")', 'first scripted model reply');
   await view.wait('!!document.querySelector("[data-testid=onboarding-finish]")', 'first chat completed');
+  assert.equal(await view.evaluate('!!document.querySelector("[data-testid=onboarding-operation-timer]")'), false, 'operation timer stops after the reply');
   assert.equal(await view.evaluate('window.__p78PageInstance'), 'kept-through-setup', 'onboarding reload detected');
   assert.equal(await view.evaluate('performance.timeOrigin'), initial.timeOrigin, 'onboarding page navigation detected');
   assert.match(await view.evaluate('document.querySelector("[data-testid=onboarding-progress]").textContent'), /Step 5 of 5/);

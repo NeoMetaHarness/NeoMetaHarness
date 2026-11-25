@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { createORPCClient } from '@orpc/client';
+import { createORPCClient, ORPCError } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
@@ -24,7 +24,31 @@ const labels: Record<Stage, string> = {
   owner: 'Workspace & owner', model: 'Model', bot: 'Bot', channel: 'Channel', chat: 'First reply',
 };
 type Checkpoint = { stage: Stage; bot: string };
-const replies = new Map<string, { message: string; reply: string }>();
+const replies = new Map<string, { message: string; reply: string; modelKey: string; bot: string }>();
+const HERMES_CHECK_TIMEOUT = 60_000;
+
+function modelKey(selection: { providerId: string; model: string } | null | undefined) {
+  return selection ? JSON.stringify([selection.providerId, selection.model]) : '';
+}
+
+async function checkHermes(signal: AbortSignal) {
+  // The install route is published by the active extension. Avoid restarting or
+  // synchronizing agents when it is already available.
+  try {
+    return await api.x['engine-hermes'].install.status(undefined, { signal });
+  } catch (reason) {
+    if (!(reason instanceof ORPCError) || reason.code !== 'NOT_FOUND') throw reason;
+  }
+  const enabled = await api.extensions.enable({ id: 'engine-hermes' }, { signal });
+  if (enabled.status !== 'running') throw new Error(enabled.reason || 'Hermes engine unavailable');
+  return api.x['engine-hermes'].install.status(undefined, { signal });
+}
+
+function hermesFailure(reason: unknown, deadline: AbortSignal) {
+  return deadline.aborted
+    ? 'Hermes did not respond within 60 seconds. Retry the readiness check.'
+    : `Cannot check Hermes: ${String(reason)}. Retry the readiness check.`;
+}
 
 function readCheckpoint(key: string): Checkpoint | undefined {
   try {
@@ -67,7 +91,6 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
   const [loadError, setLoadError] = useState('');
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [hermesError, setHermesError] = useState('');
-  const [hermesAttempt, setHermesAttempt] = useState(0);
   const checkpointKey = useRef('');
   const cardRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -89,24 +112,33 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
       const checkpoint = status.completed ? undefined : readCheckpoint(key);
       let next = checkpoint?.stage ?? 'owner';
       let bot = checkpoint?.bot ?? '';
+      let readiness: typeof hermes = 'checking';
+      let readinessError = '';
       // Validate saved steps against the current Gateway evidence.
       if (stages.indexOf(next) >= stages.indexOf('bot') && !roles.default) {
         next = 'model';
         bot = '';
       }
       if (next === 'channel' || next === 'chat') {
-        const engine = await api.extensions.enable({ id: 'engine-hermes' });
-        if (engine.status !== 'running') throw new Error(engine.reason || 'Hermes is unavailable');
-        const install = await api.x['engine-hermes'].install.status();
-        if (install.state !== 'ready') {
-          next = 'bot';
-          bot = '';
-        } else {
-          const existing = await api.x['engine-hermes'].profiles.list();
-          if (!existing.profiles.some((profile) => profile.name === bot)) {
+        const deadline = AbortSignal.timeout(HERMES_CHECK_TIMEOUT);
+        try {
+          const install = await checkHermes(deadline);
+          readiness = install.state === 'ready' ? 'ready' : 'missing';
+          if (readiness !== 'ready') {
             next = 'bot';
             bot = '';
+          } else {
+            const existing = await api.x['engine-hermes'].profiles.list(undefined, { signal: deadline });
+            if (!existing.profiles.some((profile) => profile.name === bot)) {
+              next = 'bot';
+              bot = '';
+            }
           }
+        } catch (reason) {
+          next = 'bot';
+          bot = '';
+          readiness = 'failed';
+          readinessError = hermesFailure(reason, deadline);
         }
       }
       if (!mounted) return;
@@ -120,12 +152,18 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
       setAddProvider(available.length === 0);
       setStage(next);
       setCreatedBot(bot);
-      if (bot) setBotName(bot);
+      if (checkpoint?.bot) setBotName(checkpoint.bot);
+      setHermes(readiness);
+      setHermesError(readinessError);
       const previousReply = next === 'chat' ? replies.get(key) : undefined;
-      if (previousReply) {
+      setReply('');
+      setChatReady(false);
+      if (previousReply && previousReply.modelKey === modelKey(roles.default) && previousReply.bot === bot) {
         setMessage(previousReply.message);
         setReply(previousReply.reply);
         setChatReady(true);
+      } else {
+        replies.delete(key);
       }
       writeCheckpoint(key, { stage: next, bot });
     })().catch((reason) => {
@@ -184,19 +222,19 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
 
   // P7-16: installed apps ship without Hermes. The bot step offers the install instead of an error.
   useEffect(() => {
-    if (stage !== 'bot' || loading || loadError) return;
+    if (stage !== 'bot' || loading || loadError || hermes !== 'checking') return;
     let mounted = true;
-    setHermes('checking');
+    const controller = new AbortController();
+    const deadline = AbortSignal.timeout(HERMES_CHECK_TIMEOUT);
+    const signal = AbortSignal.any([controller.signal, deadline]);
     setHermesError('');
-    void api.extensions.enable({ id: 'engine-hermes' })
-      .then(async (enabled) => {
-        if (enabled.status !== 'running') throw new Error(enabled.reason || 'Hermes engine unavailable');
-        const install = await api.x['engine-hermes'].install.status();
+    void checkHermes(signal)
+      .then((install) => {
         if (mounted) setHermes(install.state === 'ready' ? 'ready' : 'missing');
       })
-      .catch((reason) => { if (mounted) { setHermes('failed'); setHermesError(String(reason)); } });
-    return () => { mounted = false; };
-  }, [stage, hermesAttempt, loading, loadError]);
+      .catch((reason) => { if (mounted) { setHermes('failed'); setHermesError(hermesFailure(reason, deadline)); } });
+    return () => { mounted = false; controller.abort(); };
+  }, [stage, hermes, loading, loadError]);
 
   async function createBot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -204,9 +242,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
     setBusy(true);
     setError('');
     try {
-      const enabled = await api.extensions.enable({ id: 'engine-hermes' });
-      if (enabled.status !== 'running') throw new Error(enabled.reason || 'Hermes engine unavailable');
-      if ((await api.x['engine-hermes'].install.status()).state !== 'ready') {
+      if ((await checkHermes(AbortSignal.timeout(HERMES_CHECK_TIMEOUT))).state !== 'ready') {
         setHermes('missing');
         setError('Hermes is not installed yet. Install it above, then create your bot.');
         return;
@@ -217,7 +253,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         ?? await api.x['engine-hermes'].profiles.create({ name: botName.trim() });
       setCreatedBot(created.name);
       advance('channel', created.name);
-    } catch (reason) { setError(`Cannot create bot: ${String(reason)}`); setHermes('checking'); setHermesAttempt((value) => value + 1); }
+    } catch (reason) { setError(`Cannot create bot: ${String(reason)}`); setHermes('checking'); }
     finally { setBusy(false); }
   }
 
@@ -231,6 +267,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
     setError('');
     let text = '';
     try {
+      const selection = modelKey((await api.x.models.roles.get()).default);
       const started = await api.x['engine-hermes'].runs.start({ profile: createdBot, input: message.trim() });
       const token = gatewayToken();
       const url = gatewayUrl().replace(/^http/, 'ws') + '/ws';
@@ -249,7 +286,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         if (event.type === 'run.completed') { completed = true; break; }
       }
       if (!completed || !text.trim()) throw new Error('Bot did not finish with a reply. Try again.');
-      replies.set(checkpointKey.current, { message, reply: text });
+      replies.set(checkpointKey.current, { message, reply: text, modelKey: selection, bot: createdBot });
       setChatReady(true);
     } catch (reason) { setError(`Cannot get first reply: ${String(reason)}`); }
     finally {
@@ -331,10 +368,10 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         </div>}
         {hermes === 'failed' && <Banner role="alert" status="error" title="Hermes is unavailable"
           description={<Text as="p">{hermesError}</Text>}
-          endContent={<Button label="Retry Hermes check" onClick={() => setHermesAttempt((value) => value + 1)}>Retry</Button>} />}
+          endContent={<Button label="Retry Hermes check" onClick={() => setHermes('checking')}>Retry</Button>} />}
         {hermes === 'missing' && <>
           <div className="neo-onboarding-status"><StatusDot variant="warning" label="Installation required" /><Text>Hermes needs to be installed.</Text></div>
-          <HermesInstall testId="onboarding-hermes-install" onReady={() => setHermesAttempt((value) => value + 1)} />
+          <HermesInstall testId="onboarding-hermes-install" onReady={() => setHermes('ready')} />
         </>}
         {hermes === 'ready' && <div className="neo-onboarding-status" role="status">
           <StatusDot variant="success" label="Ready" /><Text>Hermes is ready.</Text>
