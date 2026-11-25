@@ -84,3 +84,37 @@ test('cancellation uses the native T3 flow identifier', async () => {
   assert.equal((await service.cancel('codex', 'fake-flow')).phase, 'cancelled');
   await assert.rejects(service.cancel('claudeAgent', 'fake-flow'), /does not support/);
 });
+
+test('poll reports expired and terminal T3 states without exposing upstream diagnostics', async () => {
+  const expiresAt = '2000-01-01T00:00:00.000Z';
+  const states = [
+    { phase: 'waiting', expiresAt },
+    { phase: 'failed', expiresAt: null, message: 'Sign-in expired. fake-private-token' },
+    { phase: 'cancelled', expiresAt: null },
+    { phase: 'failed', expiresAt: null, message: 'Provider error: fake-private-token' },
+  ] as const;
+  let index = 0;
+  const service = new T3Subscription(async () => ({ providers: [codex] }), async () => ({
+    instanceId: 'codex', flowId: 'fake-flow', ...states[index++],
+  }));
+  for (const state of states) {
+    const result = await service.poll('codex');
+    assert.equal(result.phase, state.phase);
+    assert.equal(result.expiresAt, state.expiresAt);
+    assert.equal(result.verificationUrl, null);
+    assert.equal(result.userCode, null);
+    assert.doesNotMatch(JSON.stringify(result), /fake-private-token|message/);
+  }
+});
+
+test('disconnected T3 reports failure without returning provider state or diagnostics', async () => {
+  const service = new T3Subscription(async () => { throw new Error('T3 is disconnected'); },
+    async () => { throw new Error('unexpected subscription'); });
+  await assert.rejects(service.status(), /T3 is disconnected/);
+  await assert.rejects(service.start('codex'), /T3 is disconnected/);
+  await assert.rejects(service.poll('codex'), /T3 is disconnected/);
+  await assert.rejects(service.cancel('codex', 'fake-flow'), /T3 is disconnected/);
+  const disconnectedDuringPoll = new T3Subscription(async () => ({ providers: [codex] }),
+    async () => { throw new Error('T3 disconnected: fake-private-token'); });
+  await assert.rejects(disconnectedDuringPoll.poll('codex'), { message: 'T3 could not read ChatGPT sign-in status.' });
+});
