@@ -280,7 +280,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
       <div role="status" className="neo-onboarding-status"><Spinner label="Loading setup" /> <Text>Loading setup...</Text></div>
       <Skeleton height={24} width="65%" />
       <Skeleton height={48} />
-    </Card> : loadError ? <Banner status="error" title="Cannot load workspace setup"
+    </Card> : loadError ? <Banner role="alert" status="error" title="Cannot load workspace setup"
       description={<Text as="p">Check your Gateway connection and try again. {loadError}</Text>}
       endContent={<Button label="Retry setup" onClick={() => setLoadAttempt((value) => value + 1)}>Retry</Button>} /> : <>
       <div className="neo-onboarding-progress">
@@ -329,7 +329,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         {hermes === 'checking' && <div role="status" className="neo-onboarding-status">
           <Spinner label="Checking Hermes" /><Text>Checking Hermes...</Text>
         </div>}
-        {hermes === 'failed' && <Banner status="error" title="Hermes is unavailable"
+        {hermes === 'failed' && <Banner role="alert" status="error" title="Hermes is unavailable"
           description={<Text as="p">{hermesError}</Text>}
           endContent={<Button label="Retry Hermes check" onClick={() => setHermesAttempt((value) => value + 1)}>Retry</Button>} />}
         {hermes === 'missing' && <>
@@ -341,7 +341,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         </div>}
         <form className="neo-onboarding-form" onSubmit={(event) => void createBot(event)}>
           <TextInput label="Bot name" data-testid="onboarding-bot-name" value={botName} onChange={setBotName} isRequired isDisabled={busy} width="100%" />
-          {error && <Banner status="error" title="Could not create your bot" description={error} />}
+          {error && <Banner role="alert" status="error" title="Could not create your bot" description={error} />}
           <div className="neo-onboarding-actions">
             <Button label="Create first bot" data-testid="onboarding-bot-create" type="submit" isDisabled={!botName.trim() || busy || hermes !== 'ready'}>{busy ? 'Creating bot...' : 'Create bot'}</Button>
             {busy && <div role="status" className="neo-onboarding-status"><Spinner label="Creating bot" /><Timer /></div>}
@@ -367,13 +367,13 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         {reply && <div className="neo-onboarding-reply" data-testid="onboarding-chat-reply" aria-live="polite">
           <Text>{createdBot}</Text><ChatMessageBubble variant="filled" width="100%">{reply}</ChatMessageBubble>
         </div>}
-        {error && <Banner status="error" title="Setup needs attention" description={error} />}
+        {error && <Banner role="alert" status="error" title="Setup needs attention" description={error} />}
         {chatReady && <>
           <Banner status="success" title="Your bot replied successfully" description="Your workspace is ready to use." />
           <div className="neo-onboarding-actions"><Button label="Finish setup" data-testid="onboarding-finish" onClick={() => void finish()} isDisabled={busy}>{busy ? 'Finishing...' : 'Finish setup'}</Button></div>
         </>}
       </>}
-      {stage === 'model' && error && <Banner status="error" title="Cannot save setup options" description={error} />}
+      {stage === 'model' && error && <Banner role="alert" status="error" title="Cannot save setup options" description={error} />}
       </div>
       </Card>
     </>}
