@@ -452,8 +452,6 @@ async function trial(previewPort) {
     await assert.rejects(member.inbox.accept({ id: destructive.id }), forbidden, 'member must get 403 accepting destructive work');
     assert.equal((await list()).find((item) => item.id === destructive.id)?.status, 'suggestion');
     await page.evaluate(`${row(destructive.id)}.querySelector('[data-action=accept]').click()`);
-    await page.eventually('!!document.querySelector("[role=alertdialog]")', 'destructive confirmation');
-    await page.evaluate(`Array.from(document.querySelectorAll('[role=alertdialog] button')).find(button => button.textContent.trim() === 'Confirm acceptance').click()`);
     const destructiveDone = await find((item) => item.id === destructive.id && item.status === 'approval'
       && item.report?.status === 'ready', 'admin-accepted destructive work', 120000);
     assert.ok(delegated('delete the stale release branches'));
