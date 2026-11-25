@@ -1393,6 +1393,20 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           chatUi.retireT3(input.threadId);
           return invokeT3('rollback', input) as Promise<{ sequence: number }>;
         }),
+        subscription: {
+          status: os.x['engine-t3'].subscription.status.handler(async ({ context }) => {
+            authorize('x.engine-t3.subscription.status', context);
+            return invokeT3('subscription/status', {}) as Promise<any>;
+          }),
+          start: os.x['engine-t3'].subscription.start.handler(async ({ input, context }) => {
+            authorize('x.engine-t3.subscription.start', context);
+            return invokeT3('subscription/start', input) as Promise<any>;
+          }),
+          poll: os.x['engine-t3'].subscription.poll.handler(async ({ input, context }) => {
+            authorize('x.engine-t3.subscription.poll', context);
+            return invokeT3('subscription/poll', input) as Promise<any>;
+          }),
+        },
         providers: {
           list: os.x['engine-t3'].providers.list.handler(async ({ context }) => {
             authorize('x.engine-t3.providers.list', context);

@@ -19,6 +19,9 @@ export function destructiveToolApproval(tool: string, detail: string): boolean {
 const DEPLOYMENT_PROCEDURE_DESKTOP_POLICY: Readonly<Record<string, PolicyLevel>> = {
   'x.engine-t3.install.start': 'admin',
   'x.engine-t3.runtime.start': 'admin',
+  'x.engine-t3.subscription.status': 'admin',
+  'x.engine-t3.subscription.start': 'admin',
+  'x.engine-t3.subscription.poll': 'admin',
   // Hermes runtime, profiles, and dashboard
   'x.engine-hermes.install.status': 'viewer',
   'x.engine-hermes.install.start': 'admin',

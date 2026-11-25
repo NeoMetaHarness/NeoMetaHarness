@@ -87,12 +87,25 @@ export const t3InstallStatusSchema = z.object({
 });
 export type T3InstallStatus = z.infer<typeof t3InstallStatusSchema>;
 
+const t3SubscriptionFlowSchema = z.object({
+  instanceId: z.string(), phase: z.enum(['idle', 'starting', 'waiting', 'verifying', 'succeeded', 'failed', 'cancelled']),
+  flowId: z.string().nullable(), expiresAt: z.string().nullable(), verificationUrl: z.string().nullable(), userCode: z.string().nullable(),
+});
+const t3SubscriptionInput = z.object({ instanceId: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/) });
 export const t3Contract = {
   install: {
     status: oc.output(t3InstallStatusSchema),
     start: oc.output(t3InstallStatusSchema),
   },
   runtime: { start: oc.output(t3InstallStatusSchema) },
+  subscription: {
+    status: oc.output(z.object({ providers: z.array(z.object({
+      instanceId: z.string(), provider: z.enum(['codex', 'claude']), status: z.enum(['authenticated', 'unauthenticated', 'unknown']),
+      signedIn: z.boolean(), canStart: z.boolean(), accountLabel: z.string().nullable(), guidance: z.string(),
+    })) })),
+    start: oc.input(t3SubscriptionInput).output(t3SubscriptionFlowSchema),
+    poll: oc.input(t3SubscriptionInput).output(t3SubscriptionFlowSchema),
+  },
   providers: {
     list: oc.output(z.object({ providers: z.array(z.object({
       id: z.string(), name: z.string(), status: z.string(),

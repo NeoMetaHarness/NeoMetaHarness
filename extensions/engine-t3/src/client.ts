@@ -8,12 +8,14 @@ import * as Scope from 'effect/Scope';
 import * as Exit from 'effect/Exit';
 import { Socket } from 'effect/socket';
 import { Rpc, RpcClient, RpcGroup, RpcSerialization } from 'effect/rpc';
+import { T3Subscription } from './subscription.js';
 
 // Small wire projection for the pinned public T3 orchestration RPC seams. The actual
 // pinned T3 schemas are checked in test/contracts.entry.ts, not loaded here.
 const rpcGroup = RpcGroup.make(
-  ...['server.updateSettings', 'vcs.createWorktree', 'terminal.open', 'terminal.close', 'terminal.write'].map((name) =>
+  ...['server.updateSettings', 'vcs.createWorktree', 'terminal.open', 'terminal.close', 'terminal.write', 'provider.auth.start'].map((name) =>
     Rpc.make(name, { payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown })),
+  Rpc.make('provider.auth.subscribe', { payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown, stream: true }),
   Rpc.make('terminal.observe', {
     payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown, stream: true,
   }),
@@ -88,6 +90,16 @@ export class T3ControlPlane {
   private subscriptions = new Set<AbortController>();
   private readonly workflowTerminals = new Map<string, { threadId: string; terminalId: string }>();
   private readonly workflowCleanups = new Set<() => Promise<void>>();
+  readonly subscription = new T3Subscription(async (method, input) => {
+    if (!this.client || !this.runtime) throw new Error('T3 is disconnected');
+    try { return await this.runtime.runPromise(this.client[method](input)); }
+    catch { throw new Error('T3 provider authentication request failed.'); }
+  }, async (instanceId) => {
+    for await (const state of this.follow((client) => client['provider.auth.subscribe']({ instanceId }), AbortSignal.timeout(15_000))) {
+      return state;
+    }
+    throw new Error('T3 provider authentication state unavailable.');
+  });
 
   onWorkflowDisconnect(cleanup: () => Promise<void>) {
     this.workflowCleanups.add(cleanup);
