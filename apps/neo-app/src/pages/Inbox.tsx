@@ -41,6 +41,7 @@ function InboxControls({ item, onResult, onError }: {
 }) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  const reasonField = useRef<HTMLTextAreaElement>(null);
   const upstream = item.source === 'neo/upstream';
   const run = async (label: string, call: () => Promise<InboxItem>) => {
     setBusy(true);
@@ -51,7 +52,7 @@ function InboxControls({ item, onResult, onError }: {
   };
   const accept = () => void run('accept suggestion', () => http.inbox.accept({ id: item.id }));
   const decide = (decision: 'approve' | 'deny') => {
-    if (!draft.trim()) return;
+    if (!draft.trim()) { reasonField.current?.reportValidity(); return; }
     void run(decision, () => http.inbox.approval.decide({ id: item.id, decision, reason: draft.trim() }));
   };
   return <>
@@ -71,17 +72,17 @@ function InboxControls({ item, onResult, onError }: {
       if (!busy && draft.trim()) void run('reply', () => http.inbox.reply({ id: item.id, answer: draft.trim() }));
     }}>
       <TextArea label={item.question} value={draft} onChange={setDraft} isRequired isDisabled={busy}
-        ref={el => { if (el) { el.name = 'answer'; el.setAttribute('aria-label', 'Answer question'); } }} rows={3} />
-      <Button type="submit" label="Reply" data-action="reply" isDisabled={busy || !draft.trim()} />
+        ref={el => { if (el) { el.name = 'answer'; el.required = true; el.setAttribute('aria-label', 'Answer question'); } }} rows={3} />
+      <Button type="submit" label="Reply" data-action="reply" isDisabled={busy} />
     </form>}
     {item.status === 'approval' && <div className="inbox-response" data-testid="inbox-approval">
       <Banner status="warning" title={item.approvalDestructive ? 'Admin approval required' : 'Approval requested'} description={item.approvalReason} />
       <TextArea label="Reason" value={draft} onChange={setDraft} isRequired isDisabled={busy}
-        ref={el => { if (el) { el.name = 'reason'; el.setAttribute('aria-label', 'Approval reason'); } }} rows={3} />
+        ref={el => { reasonField.current = el; if (el) { el.name = 'reason'; el.required = true; el.setAttribute('aria-label', 'Approval reason'); } }} rows={3} />
       <div className="inbox-suggestion">
-        <Button label="Deny" data-action="deny" variant="secondary" isDisabled={busy || !draft.trim()} onClick={() => decide('deny')} />
+        <Button label="Deny" data-action="deny" variant="secondary" isDisabled={busy} onClick={() => decide('deny')} />
         <Button label="Approve" data-action="approve" variant={item.approvalDestructive ? 'destructive' : 'primary'}
-          isDisabled={busy || !draft.trim()} onClick={() => decide('approve')} />
+          isDisabled={busy} onClick={() => decide('approve')} />
       </div>
     </div>}
     {item.status === 'failed' && <Button label="Retry" data-action="retry" variant="secondary" isDisabled={busy}
@@ -337,10 +338,6 @@ export default function Inbox() {
   async function ask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!draft.trim() || !botId || busy || !enabled) return;
-    if (notify && (!notifyProfile.trim() || !/^[0-9]{6,20}$/.test(notifyNumber))) {
-      setError('Enter a WhatsApp connection and a recipient number with 6 to 20 digits.');
-      return;
-    }
     setBusy(true);
     setError('');
     try {
@@ -374,7 +371,8 @@ export default function Inbox() {
         onChange={setDraft} isDisabled={!enabled || busy} />
       <div className="inbox-controls">
         <Selector label="Agent" htmlName="inbox-agent" value={botId} onChange={setBotId}
-          options={bots.map(bot => ({ value: bot.id, label: bot.name }))} isDisabled={!enabled || busy || !bots.length} />
+          placeholder={!bots.length ? 'Create an agent first' : undefined}
+          options={bots.length ? bots.map(bot => ({ value: bot.id, label: bot.name })) : [{ value: '', label: 'Create an agent first' }]} isDisabled={!enabled || busy} />
         <div className="inbox-mode-control">
           <SegmentedControl label="Mode" value={mode} onChange={value => setMode(value as 'observe' | 'act')} isDisabled={!enabled || busy}>
             <SegmentedControlItem label="Observe" value="observe" />
@@ -388,13 +386,13 @@ export default function Inbox() {
           ref={el => { if (el) el.dataset.testid = 'inbox-notify'; }} />
         {notify && <>
           <TextInput label="WhatsApp connection" value={notifyProfile} onChange={setNotifyProfile} isRequired isDisabled={!enabled || busy}
-            ref={el => { if (el) el.dataset.testid = 'inbox-notify-profile'; }} />
+            ref={el => { if (el) { el.dataset.testid = 'inbox-notify-profile'; el.required = true; } }} />
           <TextInput label="Recipient number" value={notifyNumber} onChange={setNotifyNumber} placeholder="International digits" isRequired isDisabled={!enabled || busy}
-            ref={el => { if (el) { el.dataset.testid = 'inbox-notify-number'; el.pattern = '[0-9]{6,20}'; } }} />
+            ref={el => { if (el) { el.dataset.testid = 'inbox-notify-number'; el.required = true; el.pattern = '[0-9]{6,20}'; } }} />
         </>}
       </div>
       <div className="inbox-controls">
-        <Button type="submit" label={busy ? 'Sending…' : 'Ask Neo'} isDisabled={!enabled || !botId || !draft.trim() || busy || (notify && (!notifyProfile.trim() || !/^[0-9]{6,20}$/.test(notifyNumber)))} />
+        <Button type="submit" label={busy ? 'Sending…' : 'Ask Neo'} isDisabled={!enabled || !botId || !draft.trim() || busy} />
       </div>
     </form>
     {enabled && acceptMode && <div className="inbox-accept-mode">
