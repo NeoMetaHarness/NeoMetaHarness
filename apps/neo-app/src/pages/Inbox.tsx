@@ -5,7 +5,7 @@ import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type AcceptMode, type InboxItem } from '@neometaharness/contracts';
 import { createPortal } from 'react-dom';
-import { AlertDialog, Banner, Button, TextArea, TextInput, Switch, SegmentedControl, SegmentedControlItem, Selector } from '@neometaharness/ui';
+import { Banner, Button, TextArea, TextInput, Switch, SegmentedControl, SegmentedControlItem, Selector } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import EngineInstall from './EngineInstall';
 import './inbox.css';
@@ -41,7 +41,6 @@ function InboxControls({ item, onResult, onError }: {
 }) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState<'accept' | 'approve' | null>(null);
   const upstream = item.source === 'neo/upstream';
   const run = async (label: string, call: () => Promise<InboxItem>) => {
     setBusy(true);
@@ -63,7 +62,7 @@ function InboxControls({ item, onResult, onError }: {
         : item.destructive && <Banner status="warning" title="Destructive: an admin must accept" />}
       {(!upstream || item.botId !== 'neo-system') && <Button label={upstream ? 'Approve bump' : 'Accept'}
         data-action="accept" isDisabled={busy} variant={item.destructive ? 'destructive' : 'primary'}
-        onClick={() => { if (item.destructive || upstream) setConfirm('accept'); else accept(); }} />}
+        onClick={accept} />}
       <Button label="Dismiss" data-action="dismiss" variant="secondary" isDisabled={busy}
         onClick={() => void run('dismiss suggestion', () => http.inbox.dismiss({ id: item.id }))} />
     </div>}
@@ -82,16 +81,11 @@ function InboxControls({ item, onResult, onError }: {
       <div className="inbox-suggestion">
         <Button label="Deny" data-action="deny" variant="secondary" isDisabled={busy || !draft.trim()} onClick={() => decide('deny')} />
         <Button label="Approve" data-action="approve" variant={item.approvalDestructive ? 'destructive' : 'primary'}
-          isDisabled={busy || !draft.trim()} onClick={() => { if (item.approvalDestructive) setConfirm('approve'); else decide('approve'); }} />
+          isDisabled={busy || !draft.trim()} onClick={() => decide('approve')} />
       </div>
     </div>}
     {item.status === 'failed' && <Button label="Retry" data-action="retry" variant="secondary" isDisabled={busy}
       onClick={() => void run('retry', () => http.inbox.retry({ id: item.id }))} />}
-    <AlertDialog isOpen={confirm !== null} onOpenChange={open => { if (!open) setConfirm(null); }}
-      title={confirm === 'approve' ? 'Approve this action?' : 'Accept this suggestion?'}
-      description={item.approvalDestructive || item.destructive ? 'This work is marked destructive and requires an admin decision.' : 'This will authorize the proposed upstream upgrade.'}
-      actionLabel={confirm === 'approve' ? 'Confirm approval' : 'Confirm acceptance'}
-      onAction={() => { const action = confirm; setConfirm(null); if (action === 'approve') decide('approve'); if (action === 'accept') accept(); }} />
   </>;
 }
 
