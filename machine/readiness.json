@@ -630,8 +630,9 @@
       "title": "Subscription sign-in in onboarding and Model Hub",
       "status": "in_progress",
       "owner": "helper (sol-web 89fc391a)",
-      "evidence": "Owner report 2026-11-23: the onboarding model step offers only an OpenAI-compatible API, but PRD APP-4 and CM-2 (P0) call for subscription sign-ins. Depends on P7-16.",
-      "remaining": "Build the approved design (2026-11-25 owner decisions: ChatGPT/Codex sign-in per engine on Hermes and T3, Claude detect-and-guide, Local AI presets, plan docs updated); then PM review."
+      "evidence": "Owner report 2026-11-23: the onboarding model step offers only an OpenAI-compatible API, but PRD APP-4 and CM-2 (P0) call for subscription sign-ins. Depends on P7-16. Backend parts (a)-(c) merged 2026-11-26 (ca1c38b..31b3e61 equivalents): subscription model providers in contracts with bounded status enums; Hermes device-code and T3 sign-in exposed through the Gateway via engine extensions (engines unmodified); authorization URLs redact id_token_hint/login_hint; Hermes projection requires an approved sign-in for the exact profile; cancellation distinguishes an existing login; T3 cancel wired; expiry/cancel/failure/disconnect tests. Three outside review rounds plus PM verification.",
+      "verified_by_pm": "2026-11-26 combined review with onboarding and area D in pm4: models, engine-hermes, engine-t3 tests, gateway, toggle, check incl. perf budgets, secret scan OK; full regression 71 ok / 1 fail p6-6 (stale area D test step, fixed; p6-6 2/2 OK).",
+      "remaining": "(d) onboarding model step and Model Hub UI for sign-in, Claude detect-and-guide and Local AI presets (Ollama http://127.0.0.1:11434/v1, LM Studio http://127.0.0.1:1234/v1); (e) docs: roadmap, architecture vault paragraph, PRD CM-2/APP-4, ADR 0005; then PM review."
     },
     "P7-18": {
       "title": "Premium UI/UX on Astryx with light and dark themes",
