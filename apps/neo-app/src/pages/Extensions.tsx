@@ -124,7 +124,7 @@ export default function Extensions() {
       </div>
       <span role="status" className="connection" aria-label="Gateway event connection">{connection}</span>
     </header>
-    {error && <Banner status="error" title="Extensions could not be updated" description={error} />}
+    {error && <Banner role="alert" status="error" title="Extensions could not be updated" description={error} />}
     {loading ? <div className="extensions-list" role="status" aria-label="Loading extensions">{[0, 1, 2].map((index) => <Skeleton key={index} height={88} width="100%" />)}</div> :
       <div className="extensions-list" aria-label="Installed extensions">
         {rows.length === 0 && <EmptyState title="No extensions installed" description="Available extensions will appear here." />}

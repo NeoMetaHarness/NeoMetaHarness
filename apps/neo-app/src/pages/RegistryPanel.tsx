@@ -77,7 +77,7 @@ export default function RegistryPanel({ profile, profiles }: { profile: string; 
       <Button label="Refresh registry" size="sm" variant="secondary" isDisabled={busy}
         onClick={() => void action(async () => { await refresh(); })}>Refresh</Button></div>
     <p>Versioned local skills. Assign a reviewed skill to another bot or a DSH session.</p>
-    {error && <Banner status="error" title={error} />}
+    {error && <Banner role="alert" status="error" title={error} />}
     {notice && <Banner status="success" title={notice} />}
     <Button label="Sync skills from bot" data-testid="registry-sync" isDisabled={busy}
       onClick={() => void action(async () => {

@@ -292,7 +292,7 @@ export default function Agents() {
       <span className="connection" data-testid="agents-status">{status}</span>
       {compact && <Button label="Choose a bot" variant="secondary" onClick={() => setPickerOpen(true)}>Bots</Button>}
     </header>
-    {error && <Banner status="error" title={error} />}
+    {error && <Banner role="alert" status="error" title={error} />}
     <div className="agents-workspace">
       {compact ? <Drawer label="Choose a bot" side="start" isOpen={pickerOpen} onOpenChange={setPickerOpen}>
         <ScrollableArea label="Bots" height="100%" padding={3}>

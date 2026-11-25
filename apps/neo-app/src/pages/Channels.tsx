@@ -132,7 +132,7 @@ export default function Channels() {
           <Button label="Connect" data-testid="channels-connect" type="submit" isDisabled={busy || !token.trim()}>Connect</Button>
         </form>)}
       {notice && <Banner status="success" title={notice} />}
-      {error && <Banner status="error" title={error} />}
+      {error && <Banner role="alert" status="error" title={error} />}
     </Card>
     <AlertDialog isOpen={confirmDisconnect} onOpenChange={setConfirmDisconnect} title="Disconnect Telegram?"
       description={`Disconnect Telegram from ${profile}. This bot will stop receiving messages from this channel.`}

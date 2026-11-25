@@ -177,7 +177,7 @@ export default function Computers() {
       </Button>
     </header>
     {killEngaged && <Banner status="warning" title="Agents stopped globally" description="Screen viewing remains available." />}
-    {error && <Banner status="error" title={error} />}
+    {error && <Banner role="alert" status="error" title={error} />}
     <div className="computers-layout">
       <aside className="computers-sidebar" style={{ width: sidebar.size }}>
         <ScrollableArea label="Attached computers" height="100%" padding={2}>
