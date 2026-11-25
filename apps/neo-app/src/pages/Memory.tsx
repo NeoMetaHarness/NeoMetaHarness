@@ -3,7 +3,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
-import { AlertDialog, Badge, Banner, Button, Card, Dialog, DialogHeader, EmptyState, MoreMenu, Selector, Skeleton, TextArea, TextInput, Timestamp } from '@neometaharness/ui';
+import { Badge, Banner, Button, Card, Dialog, DialogHeader, EmptyState, MoreMenu, Selector, Skeleton, TextArea, TextInput, Timestamp } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './memory.css';
 
@@ -36,6 +36,7 @@ export default function Memory() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
   const [refreshError, setRefreshError] = useState('');
   const refresh = useCallback(async (query = '') => {
     try {
@@ -87,11 +88,12 @@ export default function Memory() {
   async function remove(id: string) {
     setBusy(true);
     setError('');
+    setDeleteError('');
     try {
       await memory.delete({ id });
       setNotice('Memory deleted'); setDeleting(null);
       await refresh(search);
-    } catch (reason) { setError('Delete failed: ' + String(reason)); }
+    } catch (reason) { setDeleteError('Delete failed: ' + String(reason)); }
     finally { setBusy(false); }
   }
 
@@ -146,7 +148,7 @@ export default function Memory() {
               <p>{entry.text}</p>
               {!entry.id.startsWith('nmh:') && <MoreMenu label="Memory actions" data-testid="memory-actions-menu" isDisabled={busy} items={[
                 {label: 'Edit', onClick: () => openEditor(entry)},
-                {label: 'Delete', variant: 'destructive', onClick: () => setDeleting(entry)},
+                {label: 'Delete', variant: 'destructive', onClick: () => { setDeleteError(''); setDeleting(entry); }},
               ]} />}
             </div>
             <div className="memory-meta">
@@ -174,6 +176,16 @@ export default function Memory() {
         </div>
       </form>
     </Dialog>
-    <AlertDialog data-testid="memory-delete-dialog" isOpen={Boolean(deleting)} onOpenChange={open => { if (!open && !busy) setDeleting(null); }} title="Delete memory?" description={deleting ? 'Permanently delete this memory: ' + deleting.text.slice(0, 160) : ''} actionLabel="Delete memory" isActionLoading={busy} onAction={() => { if (deleting) void remove(deleting.id); }} />
+    <Dialog data-testid="memory-delete-dialog" role="alertdialog" aria-describedby="memory-delete-description" isOpen={Boolean(deleting)} purpose="form" width={400} onOpenChange={open => { if (!open && !busy) setDeleting(null); }}>
+      <DialogHeader title="Delete memory?" />
+      <div className="memory-editor">
+        <p id="memory-delete-description">{deleting ? 'Permanently delete this memory: ' + deleting.text.slice(0, 160) : ''}</p>
+        {deleteError && <Banner status="error" title={deleteError} role="alert" />}
+        <div className="memory-actions">
+          <Button label="Cancel" variant="secondary" data-autofocus isDisabled={busy} onClick={() => setDeleting(null)}>Cancel</Button>
+          <Button label="Delete memory" variant="destructive" isLoading={busy} isDisabled={busy} onClick={() => { if (deleting) void remove(deleting.id); }}>Delete memory</Button>
+        </div>
+      </div>
+    </Dialog>
   </section>;
 }

@@ -26,7 +26,7 @@ export default function Metrics() {
     setLoading(true);
     setError('');
     try { setSummary(await client.x.metrics.summary()); }
-    catch (reason) { setError(`Metrics unavailable. ${String(reason)}`); }
+    catch (reason) { setSummary(null); setError(`Metrics unavailable. ${String(reason)}`); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);

@@ -375,6 +375,11 @@ async function trial(previewPort) {
       await page.click(deleteItem);
       const confirm = `[...document.querySelectorAll('[role=alertdialog][open] button')].find(el => el.textContent.trim() === 'Delete memory')`;
       await page.eventually(`(() => { const button = ${confirm}; if (!button) return false; const rect = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })()`, 'delete confirmation actionable');
+      await rpc.extensions.disable({ id: 'memory-local' });
+      await page.click(confirm);
+      await page.eventually('document.querySelector("[role=alertdialog][open] [role=alert]")?.textContent?.includes("Delete failed:")', 'delete failure announced inside open dialog');
+      assert.equal((await rpc.extensions.enable({ id: 'memory-local' })).status, 'running');
+      await page.eventually(`Boolean((${confirm}) && !(${confirm}).disabled && (${confirm}).getAttribute('aria-disabled') !== 'true')`, 'delete retry enabled');
       await page.click(confirm);
       await page.eventually('!document.querySelector("[data-testid=memory-list]")?.textContent?.includes("Edited private profile memory")', 'memory delete persisted');
       assert.ok(!(await rpc.x['memory-local'].list({ workspace: 'default' })).some((item) => item.id === other.id));
