@@ -118,3 +118,21 @@ test('disconnected T3 reports failure without returning provider state or diagno
     async () => { throw new Error('T3 disconnected: fake-private-token'); });
   await assert.rejects(disconnectedDuringPoll.poll('codex'), { message: 'T3 could not read ChatGPT sign-in status.' });
 });
+
+test('native logout is available for managed signed-in Codex and honors an explicit denial', async () => {
+  let allowed = true;
+  const service = new T3Subscription(async (method, input) => {
+    if (method === 'server.getConfig') return { providers: [
+      { ...codex, auth: { status: 'authenticated', type: 'chatgpt', canLogout: allowed } },
+    ] };
+    assert.equal(method, 'provider.auth.logout');
+    assert.deepEqual(input, { instanceId: 'codex' });
+    return { instanceId: 'codex', phase: 'idle' };
+  }, async () => { throw new Error('unexpected snapshot'); });
+  assert.equal((await service.status()).providers[0]?.canLogout, true);
+  assert.equal((await service.status(false)).providers[0]?.canLogout, false);
+  assert.equal((await service.logout('codex')).phase, 'idle');
+  allowed = false;
+  assert.equal((await service.status()).providers[0]?.canLogout, false);
+  await assert.rejects(service.logout('codex'), /does not support ChatGPT sign-out/);
+});

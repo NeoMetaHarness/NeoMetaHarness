@@ -108,3 +108,19 @@ test('cancelling a session on an already signed-in profile preserves the existin
   });
   done();
 });
+
+test('native sign-out requires capability and verifies the exact profile', async () => {
+  const signedIn = { providers: [{ id: 'openai-codex', disconnectable: true, status: { logged_in: true } }] };
+  const signedOut = { providers: [{ id: 'openai-codex', disconnectable: true, status: { logged_in: false } }] };
+  const { subscription, done } = scripted([
+    ['GET', '/api/providers/oauth?profile=bot', signedIn],
+    ['GET', '/api/providers/oauth?profile=bot', signedIn],
+    ['DELETE', path + '?profile=bot', { ok: true }],
+    ['GET', '/api/providers/oauth?profile=bot', signedOut],
+    ['GET', '/api/providers/oauth?profile=bot', signedOut],
+  ]);
+  assert.deepEqual(await subscription.status('bot'), { signedIn: true, canLogout: true });
+  assert.deepEqual(await subscription.logout('bot'), { signedIn: false, canLogout: false });
+  await assert.rejects(subscription.logout('bot'), /does not expose sign-out/);
+  done();
+});

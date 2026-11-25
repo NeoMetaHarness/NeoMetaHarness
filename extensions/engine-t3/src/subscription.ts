@@ -86,7 +86,8 @@ export class T3Subscription {
   }
 
   async logout(instanceId: string) {
-    await this.codex(instanceId);
+    const provider = (await this.providers()).find((item) => item.instanceId === instanceId);
+    if (!provider || !metadata(provider).canLogout) throw new Error('T3 does not support ChatGPT sign-out for this provider.');
     try {
       const result = projectFlow(await this.request('provider.auth.logout', { instanceId }), instanceId);
       if (result.phase !== 'idle') throw new Error('Unexpected sign-out state');
