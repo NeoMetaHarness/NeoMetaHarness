@@ -4,7 +4,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type ModelProviderRecord } from '@neometaharness/contracts';
-import { Button } from '@neometaharness/ui';
+import { Banner, Button, Card, ChatMessageBubble, Heading, Skeleton, Spinner, StatusDot, Step, Stepper, Text, TextArea, TextInput, Timer } from '@neometaharness/ui';
 import { gatewayToken, gatewayUrl } from '../config';
 import HermesInstall from './EngineInstall';
 import './onboarding.css';
@@ -21,14 +21,27 @@ const api = createORPCClient<Client>(new RPCLink({
 type Stage = 'owner' | 'model' | 'bot' | 'channel' | 'chat';
 const stages: Stage[] = ['owner', 'model', 'bot', 'channel', 'chat'];
 const labels: Record<Stage, string> = {
-  owner: 'Workspace & owner', model: 'Model', bot: 'Bot', channel: 'Channel (optional)', chat: 'First reply',
+  owner: 'Workspace & owner', model: 'Model', bot: 'Bot', channel: 'Channel', chat: 'First reply',
 };
-const formatTime = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+type Checkpoint = { stage: Stage; bot: string };
+const replies = new Map<string, { message: string; reply: string }>();
 
-export default function Onboarding({ onOpen, onSkip, onCompleted }: {
+function readCheckpoint(key: string): Checkpoint | undefined {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(key) ?? 'null');
+    if (value && stages.includes(value.stage) && typeof value.bot === 'string') return value;
+  } catch { /* Session storage may be unavailable. */ }
+}
+
+function writeCheckpoint(key: string, checkpoint: Checkpoint) {
+  try { sessionStorage.setItem(key, JSON.stringify(checkpoint)); } catch { /* Navigation still works. */ }
+}
+
+export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }: {
   onOpen: (path: string) => void;
   onSkip: () => void;
   onCompleted: () => void;
+  onIncomplete: (incomplete: boolean) => void;
 }) {
   const [stage, setStage] = useState<Stage>('owner');
   const [owner, setOwner] = useState('');
@@ -44,57 +57,99 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
   const [providerKey, setProviderKey] = useState('');
   const [botName, setBotName] = useState('first-bot');
   const [createdBot, setCreatedBot] = useState('');
-  const [hermes, setHermes] = useState<'checking' | 'missing' | 'ready'>('checking');
+  const [hermes, setHermes] = useState<'checking' | 'missing' | 'failed' | 'ready'>('checking');
   const [message, setMessage] = useState('Hi! Please introduce yourself in one sentence.');
   const [reply, setReply] = useState('');
   const [chatReady, setChatReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [now, setNow] = useState(Date.now());
-  const [stepTimes, setStepTimes] = useState<Partial<Record<Stage, number>>>({});
-  const startedAt = useRef(Date.now());
-  const stepStartedAt = useRef(Date.now());
+  const [loadError, setLoadError] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [hermesError, setHermesError] = useState('');
+  const [hermesAttempt, setHermesAttempt] = useState(0);
+  const checkpointKey = useRef('');
+  const cardRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
-  useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => {
-      window.clearInterval(interval);
-      socketRef.current?.close();
-    };
-  }, []);
+  useEffect(() => () => socketRef.current?.close(), []);
 
   useEffect(() => {
     let mounted = true;
-    void api.extensions.enable({ id: 'models' }).then(() =>
-      Promise.all([api.onboarding.get(), api.x.models.providers.list(), api.x.models.roles.get()]))
-      .then(([status, available, roles]) => {
-        if (!mounted) return;
-        setOwner(status.ownerName);
-        setWorkspace(status.workspaceName);
-        setProviders(available);
-        setSelectedProvider(roles.default?.providerId ?? available[0]?.id ?? '');
-        setModel(roles.default?.model ?? 'gpt-4.1-mini');
-        setConfiguredModel(!!roles.default);
-        setAddProvider(available.length === 0);
-      })
-      .catch(async (reason) => {
-        if (!mounted) return;
-        try {
-          const status = await api.onboarding.get();
-          if (mounted) { setOwner(status.ownerName); setWorkspace(status.workspaceName); }
-        } catch { /* preserve the original error */ }
-        if (mounted) setError(`Cannot load setup options: ${String(reason)}`);
-      })
-      .finally(() => { if (mounted) setLoading(false); });
+    setLoading(true);
+    setLoadError('');
+    void (async () => {
+      const status = await api.onboarding.get();
+      if (!mounted) return;
+      onIncomplete(!status.completed);
+      const enabled = await api.extensions.enable({ id: 'models' });
+      if (enabled.status !== 'running') throw new Error(enabled.reason || 'Model Hub is unavailable');
+      const [available, roles] = await Promise.all([api.x.models.providers.list(), api.x.models.roles.get()]);
+      const key = JSON.stringify(['neo-onboarding-v1', gatewayUrl(), status.workspaceName, status.ownerName]);
+      const checkpoint = status.completed ? undefined : readCheckpoint(key);
+      let next = checkpoint?.stage ?? 'owner';
+      let bot = checkpoint?.bot ?? '';
+      // Validate saved steps against the current Gateway evidence.
+      if (stages.indexOf(next) >= stages.indexOf('bot') && !roles.default) {
+        next = 'model';
+        bot = '';
+      }
+      if (next === 'channel' || next === 'chat') {
+        const engine = await api.extensions.enable({ id: 'engine-hermes' });
+        if (engine.status !== 'running') throw new Error(engine.reason || 'Hermes is unavailable');
+        const install = await api.x['engine-hermes'].install.status();
+        if (install.state !== 'ready') {
+          next = 'bot';
+          bot = '';
+        } else {
+          const existing = await api.x['engine-hermes'].profiles.list();
+          if (!existing.profiles.some((profile) => profile.name === bot)) {
+            next = 'bot';
+            bot = '';
+          }
+        }
+      }
+      if (!mounted) return;
+      checkpointKey.current = key;
+      setOwner(status.ownerName);
+      setWorkspace(status.workspaceName);
+      setProviders(available);
+      setSelectedProvider(roles.default?.providerId ?? available[0]?.id ?? '');
+      setModel(roles.default?.model ?? 'gpt-4.1-mini');
+      setConfiguredModel(!!roles.default);
+      setAddProvider(available.length === 0);
+      setStage(next);
+      setCreatedBot(bot);
+      if (bot) setBotName(bot);
+      const previousReply = next === 'chat' ? replies.get(key) : undefined;
+      if (previousReply) {
+        setMessage(previousReply.message);
+        setReply(previousReply.reply);
+        setChatReady(true);
+      }
+      writeCheckpoint(key, { stage: next, bot });
+    })().catch((reason) => {
+      if (mounted) setLoadError(String(reason));
+    }).finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
-  }, []);
+  }, [loadAttempt, onIncomplete]);
 
-  function advance(next: Stage) {
-    setStepTimes((previous) => ({ ...previous, [stage]: Date.now() - stepStartedAt.current }));
-    stepStartedAt.current = Date.now();
+  useEffect(() => {
+    if (!loading && !loadError) {
+      const heading = cardRef.current?.querySelector<HTMLElement>('h2');
+      if (heading) { heading.tabIndex = -1; heading.focus(); }
+    }
+  }, [stage, loading, loadError]);
+
+  function advance(next: Stage, bot = createdBot) {
     setError('');
+    if (next === 'bot' || next === 'model' || next === 'owner') {
+      replies.delete(checkpointKey.current);
+      setChatReady(false);
+      setReply('');
+    }
+    if (next === 'bot') setHermes('checking');
+    writeCheckpoint(checkpointKey.current, { stage: next, bot });
     setStage(next);
   }
 
@@ -129,22 +184,23 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
 
   // P7-16: installed apps ship without Hermes. The bot step offers the install instead of an error.
   useEffect(() => {
-    if (stage !== 'bot') return;
+    if (stage !== 'bot' || loading || loadError) return;
     let mounted = true;
+    setHermes('checking');
+    setHermesError('');
     void api.extensions.enable({ id: 'engine-hermes' })
       .then(async (enabled) => {
         if (enabled.status !== 'running') throw new Error(enabled.reason || 'Hermes engine unavailable');
         const install = await api.x['engine-hermes'].install.status();
         if (mounted) setHermes(install.state === 'ready' ? 'ready' : 'missing');
       })
-      .catch((reason) => { if (mounted) { setHermes('ready'); setError(`Cannot start Hermes: ${String(reason)}`); } });
+      .catch((reason) => { if (mounted) { setHermes('failed'); setHermesError(String(reason)); } });
     return () => { mounted = false; };
-  }, [stage]);
+  }, [stage, hermesAttempt, loading, loadError]);
 
   async function createBot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!botName.trim() || busy) return;
-    if (hermes === 'missing') { setError('Install Hermes first: it runs your bots.'); return; }
+    if (!botName.trim() || busy || hermes !== 'ready') return;
     setBusy(true);
     setError('');
     try {
@@ -160,8 +216,8 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
       const created = existing.profiles.find((profile) => profile.name === botName.trim())
         ?? await api.x['engine-hermes'].profiles.create({ name: botName.trim() });
       setCreatedBot(created.name);
-      advance('channel');
-    } catch (reason) { setError(`Cannot create bot: ${String(reason)}`); }
+      advance('channel', created.name);
+    } catch (reason) { setError(`Cannot create bot: ${String(reason)}`); setHermes('checking'); setHermesAttempt((value) => value + 1); }
     finally { setBusy(false); }
   }
 
@@ -170,6 +226,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
     if (!createdBot || !message.trim() || busy) return;
     setBusy(true);
     setChatReady(false);
+    replies.delete(checkpointKey.current);
     setReply('');
     setError('');
     let text = '';
@@ -192,6 +249,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
         if (event.type === 'run.completed') { completed = true; break; }
       }
       if (!completed || !text.trim()) throw new Error('Bot did not finish with a reply. Try again.');
+      replies.set(checkpointKey.current, { message, reply: text });
       setChatReady(true);
     } catch (reason) { setError(`Cannot get first reply: ${String(reason)}`); }
     finally {
@@ -207,6 +265,8 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
     setError('');
     try {
       await api.onboarding.complete();
+      replies.delete(checkpointKey.current);
+      try { sessionStorage.removeItem(checkpointKey.current); } catch { /* Storage is optional. */ }
       onCompleted();
     } catch (reason) { setError(`Cannot finish setup: ${String(reason)}`); }
     finally { setBusy(false); }
@@ -214,25 +274,26 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
 
   const index = stages.indexOf(stage);
   return <section className="neo-onboarding" aria-label="First-run setup" data-testid="onboarding-wizard">
-    <div className="neo-onboarding-kicker">WELCOME TO NEO META HARNESS</div>
-    <h1>Set up your workspace</h1>
-    <p className="neo-onboarding-intro">Choose a model, create a bot, and get your first reply. Channels can wait until later.</p>
-    <div className="neo-onboarding-timing" role="status" aria-live="off">
-      <span data-testid="onboarding-progress">Step {index + 1} of {stages.length}</span>
-      <span data-testid="onboarding-step-timer">This step {formatTime(now - stepStartedAt.current)}</span>
-      <span data-testid="onboarding-total-timer">Total {formatTime(now - startedAt.current)}</span>
-    </div>
-    <progress aria-label="Setup completion" value={index} max={stages.length} data-testid="onboarding-progress-bar" />
-    <nav className="neo-onboarding-progress" aria-label="Setup progress">
-      {stages.map((item, position) => <span key={item} aria-current={item === stage ? 'step' : undefined}
-        className={item === stage ? 'active' : ''}>{position + 1}. {labels[item]}
-        {stepTimes[item] !== undefined && <small> {formatTime(stepTimes[item])}</small>}</span>)}
-    </nav>
-
-    {loading ? <p role="status">Loading setup…</p> : <div className="neo-onboarding-card">
+    <Heading level={1}>Set up your workspace</Heading>
+    <Text as="p">Choose a model, create a bot, and get your first reply. Channels can wait until later.</Text>
+    {loading ? <Card padding={4} className="neo-onboarding-card">
+      <div role="status" className="neo-onboarding-status"><Spinner label="Loading setup" /> <Text>Loading setup...</Text></div>
+      <Skeleton height={24} width="65%" />
+      <Skeleton height={48} />
+    </Card> : loadError ? <Banner status="error" title="Cannot load workspace setup"
+      description={<Text as="p">Check your Gateway connection and try again. {loadError}</Text>}
+      endContent={<Button label="Retry setup" onClick={() => setLoadAttempt((value) => value + 1)}>Retry</Button>} /> : <>
+      <div className="neo-onboarding-progress">
+        <Text data-testid="onboarding-progress">Step {index + 1} of {stages.length}</Text>
+        <Stepper activeStep={index} label="Setup progress" horizontalOptions={{ minimumStepWidth: 112, collapsedVariant: 'withLabel' }}>
+          {stages.map((item, position) => <Step key={item} step={position} label={labels[item]} isOptional={item === 'channel'} />)}
+        </Stepper>
+      </div>
+      <Card padding={4} className="neo-onboarding-card">
+      <div ref={cardRef} className="neo-onboarding-content" data-stage={stage}>
       {stage === 'owner' && <>
-        <h2>Your workspace is ready</h2>
-        <p>The local workspace <strong data-testid="onboarding-workspace">{workspace || 'Default Workspace'}</strong> and owner account <strong data-testid="onboarding-owner">{owner || 'Workspace owner'}</strong> have been created.</p>
+        <Heading level={2} tabIndex={-1}>Your workspace is ready</Heading>
+        <Text as="p">The local workspace <strong data-testid="onboarding-workspace">{workspace}</strong> and owner account <strong data-testid="onboarding-owner">{owner}</strong> have been created.</Text>
         <Button label="Continue to model" data-testid="onboarding-owner-next" onClick={() => advance('model')}>Continue</Button>
       </>}
       {stage === 'model' && <>
@@ -263,35 +324,62 @@ export default function Onboarding({ onOpen, onSkip, onCompleted }: {
         </form>}
       </>}
       {stage === 'bot' && <>
-        <h2>Create your first bot</h2>
-        <p>Give your bot a name. You can add more bots later.</p>
-        {hermes === 'missing' && <HermesInstall testId="onboarding-hermes-install" onReady={() => setHermes('ready')} />}
-        {hermes === 'checking' && <p role="status">Checking Hermes…</p>}
+        <Heading level={2} tabIndex={-1}>Create your first bot</Heading>
+        <Text as="p">Give your bot a name. You can add more bots later.</Text>
+        {hermes === 'checking' && <div role="status" className="neo-onboarding-status">
+          <Spinner label="Checking Hermes" /><Text>Checking Hermes...</Text>
+        </div>}
+        {hermes === 'failed' && <Banner status="error" title="Hermes is unavailable"
+          description={<Text as="p">{hermesError}</Text>}
+          endContent={<Button label="Retry Hermes check" onClick={() => setHermesAttempt((value) => value + 1)}>Retry</Button>} />}
+        {hermes === 'missing' && <>
+          <div className="neo-onboarding-status"><StatusDot variant="warning" label="Installation required" /><Text>Hermes needs to be installed.</Text></div>
+          <HermesInstall testId="onboarding-hermes-install" onReady={() => setHermesAttempt((value) => value + 1)} />
+        </>}
+        {hermes === 'ready' && <div className="neo-onboarding-status" role="status">
+          <StatusDot variant="success" label="Ready" /><Text>Hermes is ready.</Text>
+        </div>}
         <form className="neo-onboarding-form" onSubmit={(event) => void createBot(event)}>
-          <label>Bot name<input data-testid="onboarding-bot-name" value={botName} onChange={(event) => setBotName(event.target.value)} required /></label>
-          <Button label="Create first bot" data-testid="onboarding-bot-create" type="submit" isDisabled={!botName.trim() || busy || hermes === 'missing'}>Create bot</Button>
+          <TextInput label="Bot name" data-testid="onboarding-bot-name" value={botName} onChange={setBotName} isRequired isDisabled={busy} width="100%" />
+          {error && <Banner status="error" title="Could not create your bot" description={error} />}
+          <div className="neo-onboarding-actions">
+            <Button label="Create first bot" data-testid="onboarding-bot-create" type="submit" isDisabled={!botName.trim() || busy || hermes !== 'ready'}>{busy ? 'Creating bot...' : 'Create bot'}</Button>
+            {busy && <div role="status" className="neo-onboarding-status"><Spinner label="Creating bot" /><Timer /></div>}
+          </div>
         </form>
       </>}
       {stage === 'channel' && <>
-        <h2>Connect a channel (optional)</h2>
-        <p>Your bot <strong data-testid="onboarding-created-bot">{createdBot}</strong> is ready. You can add Telegram or another channel later.</p>
+        <Heading level={2} tabIndex={-1}>Connect a channel (optional)</Heading>
+        <Text as="p">Your bot <strong data-testid="onboarding-created-bot">{createdBot}</strong> is ready. You can add Telegram or another channel later.</Text>
         <div className="neo-onboarding-actions">
-          <Button label="Configure channels" data-testid="onboarding-channels" onClick={() => onOpen('/settings/channels')}>Configure channels</Button>
           <Button label="Continue without a channel" data-testid="onboarding-channel-next" onClick={() => advance('chat')}>Continue to first chat</Button>
+          <Button variant="secondary" label="Configure channels" data-testid="onboarding-channels" onClick={() => onOpen('/settings/channels')}>Configure channels</Button>
         </div>
       </>}
       {stage === 'chat' && <>
-        <h2>Get your first reply</h2>
-        <p>Send a message to <strong>{createdBot}</strong> to confirm the model and bot are working.</p>
+        <Heading level={2} tabIndex={-1}>Get your first reply</Heading>
+        <Text as="p">Send a message to <strong>{createdBot}</strong> to confirm the model and bot are working.</Text>
         <form className="neo-onboarding-form" onSubmit={(event) => void sendMessage(event)}>
-          <label>Message<textarea data-testid="onboarding-chat-message" rows={3} value={message} onChange={(event) => setMessage(event.target.value)} required /></label>
-          <Button label="Send first message" type="submit" data-testid="onboarding-chat-send" isDisabled={!message.trim() || busy}> {busy ? 'Waiting for reply…' : 'Send message'}</Button>
+          <TextArea label="Message" data-testid="onboarding-chat-message" rows={3} value={message} onChange={(value) => { setMessage(value); setChatReady(false); setReply(''); replies.delete(checkpointKey.current); }} isRequired isDisabled={busy} width="100%" />
+          {!chatReady && <Button label="Send first message" type="submit" data-testid="onboarding-chat-send" isDisabled={!message.trim() || busy}>{busy ? 'Waiting for reply...' : 'Send message'}</Button>}
         </form>
-        {reply && <div className="neo-onboarding-reply" data-testid="onboarding-chat-reply" aria-live="polite"><strong>{createdBot}</strong><p>{reply}</p></div>}
-        {chatReady && <div className="neo-onboarding-actions"><Button label="Finish setup" data-testid="onboarding-finish" onClick={() => void finish()} isDisabled={busy}>Finish setup</Button></div>}
+        {busy && !chatReady && <div role="status" className="neo-onboarding-status" data-testid="onboarding-operation-timer"><Spinner label="Waiting for reply" /><Text>Waiting for reply</Text><Timer /></div>}
+        {reply && <div className="neo-onboarding-reply" data-testid="onboarding-chat-reply" aria-live="polite">
+          <Text>{createdBot}</Text><ChatMessageBubble variant="filled" width="100%">{reply}</ChatMessageBubble>
+        </div>}
+        {error && <Banner status="error" title="Setup needs attention" description={error} />}
+        {chatReady && <>
+          <Banner status="success" title="Your bot replied successfully" description="Your workspace is ready to use." />
+          <div className="neo-onboarding-actions"><Button label="Finish setup" data-testid="onboarding-finish" onClick={() => void finish()} isDisabled={busy}>{busy ? 'Finishing...' : 'Finish setup'}</Button></div>
+        </>}
       </>}
-      {error && <p role="alert" className="neo-onboarding-error">{error}</p>}
-    </div>}
-    <Button label="Skip setup for now" data-testid="onboarding-skip" onClick={onSkip}>Skip for now</Button>
+      {stage === 'model' && error && <Banner status="error" title="Cannot save setup options" description={error} />}
+      </div>
+      </Card>
+    </>}
+    <div className="neo-onboarding-actions">
+      {!loading && !loadError && index > 0 && <Button variant="secondary" label="Previous setup step" isDisabled={busy} onClick={() => advance(stages[index - 1]!)}>Back</Button>}
+      <Button variant="ghost" label="Skip setup for now" data-testid="onboarding-skip" isDisabled={busy} onClick={onSkip}>Skip for now</Button>
+    </div>
   </section>;
 }

@@ -233,8 +233,8 @@ try {
   assert.equal(initial.owner, 'Desktop Owner');
   assert.equal(initial.workspace, 'Default Workspace');
   assert.match(initial.progress, /Step 1 of 5/);
-  assert.match(initial.stepTimer, /This step \d+:\d+/);
-  assert.match(initial.totalTimer, /Total \d+:\d+/);
+  assert.equal(initial.stepTimer, undefined, "no idle step timer");
+  assert.equal(initial.totalTimer, undefined, "no idle total timer");
   assert.equal((await rpc.onboarding.get()).workspaceName, initial.workspace);
   markStep('startup_workspace_owner');
 
@@ -311,12 +311,18 @@ try {
     markStep('hermes_install', 900_000);
   }
 
+  await view.wait('(() => { const b = document.querySelector("[data-testid=onboarding-bot-create]"); return b && !b.disabled && b.getAttribute("aria-disabled") !== "true"; })()', 'Hermes ready to create bot');
   await view.evaluate('document.querySelector("[data-testid=onboarding-bot-create]").click()');
   await view.wait('!!document.querySelector("[data-testid=onboarding-created-bot]")', 'first bot created');
   assert.equal(await view.evaluate('document.querySelector("[data-testid=onboarding-created-bot]").textContent'), 'first-bot');
   assert.ok((await rpc.x['engine-hermes'].profiles.list()).profiles.some((profile) => profile.name === 'first-bot'));
   markStep('first_bot');
 
+  await view.evaluate('document.querySelector("[data-testid=onboarding-channels]").click()');
+  await view.wait('location.pathname === "/settings/channels" && !!document.querySelector("[data-testid=onboarding-reminder]")', 'channels and setup reminder');
+  await view.evaluate('document.querySelector("[data-testid=onboarding-reminder] button").click()');
+  await view.wait('document.querySelector("[data-testid=onboarding-created-bot]")?.textContent === "first-bot"', 'resume at channel step');
+  assert.match(await view.evaluate('document.querySelector("[data-testid=onboarding-progress]").textContent'), /Step 4 of 5/);
   await view.evaluate('document.querySelector("[data-testid=onboarding-channel-next]").click()');
   await view.wait('!!document.querySelector("[data-testid=onboarding-chat-message]")', 'chat stage without optional channel');
   markStep('optional_channel');

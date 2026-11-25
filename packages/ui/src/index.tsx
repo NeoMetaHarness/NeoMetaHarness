@@ -35,3 +35,4 @@ export { Section } from '@astryxdesign/core/Section';
 export { StatusDot } from '@astryxdesign/core/StatusDot';
 export { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
 export { TextArea } from '@astryxdesign/core/TextArea';
+export { Timer } from '@astryxdesign/core/Timer';

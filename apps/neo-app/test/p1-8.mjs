@@ -184,6 +184,7 @@ try {
   assert.equal((await rpc.x.models.roles.get()).default.model, 'scripted-model');
 
   await view.field('[data-testid=onboarding-bot-name]', 'first_helper');
+  await view.wait('(() => { const b = document.querySelector("[data-testid=onboarding-bot-create]"); return b && !b.disabled && b.getAttribute("aria-disabled") !== "true"; })()', 'Hermes ready to create bot');
   await view.evaluate('document.querySelector("[data-testid=onboarding-bot-create]").click()');
   await view.wait('!!document.querySelector("[data-testid=onboarding-created-bot]")', 'bot created');
   assert.equal(await view.evaluate('document.querySelector("[data-testid=onboarding-created-bot]").textContent'), 'first_helper');
