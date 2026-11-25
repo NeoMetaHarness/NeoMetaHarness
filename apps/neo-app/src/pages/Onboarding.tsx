@@ -61,6 +61,22 @@ function writeCheckpoint(key: string, checkpoint: Checkpoint) {
   try { sessionStorage.setItem(key, JSON.stringify(checkpoint)); } catch { /* Navigation still works. */ }
 }
 
+function SetupTiming({ startedAt, stepStartedAt }: { startedAt: number; stepStartedAt: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+  const formatTime = (start: number) => {
+    const seconds = Math.max(0, Math.floor((now - start) / 1000));
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  };
+  return <div className="neo-onboarding-status" role="status" aria-live="off">
+    <Text data-testid="onboarding-step-timer">This step {formatTime(stepStartedAt)}</Text>
+    <Text data-testid="onboarding-total-timer">Total {formatTime(startedAt)}</Text>
+  </div>;
+}
+
 export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }: {
   onOpen: (path: string) => void;
   onSkip: () => void;
@@ -94,20 +110,33 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
   const checkpointKey = useRef('');
   const cardRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const startedAt = useRef(Date.now());
+  const [stepStartedAt, setStepStartedAt] = useState(Date.now);
+  const lifetime = useRef(new AbortController());
 
-  useEffect(() => () => socketRef.current?.close(), []);
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => {
+      controller.abort();
+      socketRef.current?.close();
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
+    const controller = new AbortController();
+    const signal = controller.signal;
     setLoading(true);
     setLoadError('');
     void (async () => {
-      const status = await api.onboarding.get();
+      const status = await api.onboarding.get(undefined, { signal });
       if (!mounted) return;
       onIncomplete(!status.completed);
-      const enabled = await api.extensions.enable({ id: 'models' });
+      const enabled = await api.extensions.enable({ id: 'models' }, { signal });
       if (enabled.status !== 'running') throw new Error(enabled.reason || 'Model Hub is unavailable');
-      const [available, roles] = await Promise.all([api.x.models.providers.list(), api.x.models.roles.get()]);
+      const [available, roles] = await Promise.all([api.x.models.providers.list(undefined, { signal }), api.x.models.roles.get(undefined, { signal })]);
+      if (!mounted) return;
       const key = JSON.stringify(['neo-onboarding-v1', gatewayUrl(), status.workspaceName, status.ownerName]);
       const checkpoint = status.completed ? undefined : readCheckpoint(key);
       let next = checkpoint?.stage ?? 'owner';
@@ -121,14 +150,15 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
       }
       if (next === 'channel' || next === 'chat') {
         const deadline = AbortSignal.timeout(HERMES_CHECK_TIMEOUT);
+        const validationSignal = AbortSignal.any([signal, deadline]);
         try {
-          const install = await checkHermes(deadline);
+          const install = await checkHermes(validationSignal);
           readiness = install.state === 'ready' ? 'ready' : 'missing';
           if (readiness !== 'ready') {
             next = 'bot';
             bot = '';
           } else {
-            const existing = await api.x['engine-hermes'].profiles.list(undefined, { signal: deadline });
+            const existing = await api.x['engine-hermes'].profiles.list(undefined, { signal: validationSignal });
             if (!existing.profiles.some((profile) => profile.name === bot)) {
               next = 'bot';
               bot = '';
@@ -169,7 +199,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
     })().catch((reason) => {
       if (mounted) setLoadError(String(reason));
     }).finally(() => { if (mounted) setLoading(false); });
-    return () => { mounted = false; };
+    return () => { mounted = false; controller.abort(); };
   }, [loadAttempt, onIncomplete]);
 
   useEffect(() => {
@@ -180,6 +210,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
   }, [stage, loading, loadError]);
 
   function advance(next: Stage, bot = createdBot) {
+    setStepStartedAt(Date.now());
     setError('');
     if (next === 'bot' || next === 'model' || next === 'owner') {
       replies.delete(checkpointKey.current);
@@ -210,14 +241,16 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
   async function saveModel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedProvider || !model.trim() || busy) return;
+    const signal = lifetime.current.signal;
     setBusy(true);
     setError('');
     try {
-      await api.x.models.roles.set({ role: 'default', providerId: selectedProvider, model: model.trim() });
+      await api.x.models.roles.set({ role: 'default', providerId: selectedProvider, model: model.trim() }, { signal });
+      if (signal.aborted) return;
       setConfiguredModel(true);
       advance('bot');
-    } catch (reason) { setError(`Cannot save model: ${String(reason)}`); }
-    finally { setBusy(false); }
+    } catch (reason) { if (!signal.aborted) setError(`Cannot save model: ${String(reason)}`); }
+    finally { if (!signal.aborted) setBusy(false); }
   }
 
   // P7-16: installed apps ship without Hermes. The bot step offers the install instead of an error.
@@ -239,43 +272,53 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
   async function createBot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!botName.trim() || busy || hermes !== 'ready') return;
+    const signal = lifetime.current.signal;
     setBusy(true);
     setError('');
     try {
-      if ((await checkHermes(AbortSignal.timeout(HERMES_CHECK_TIMEOUT))).state !== 'ready') {
+      const install = await checkHermes(AbortSignal.any([signal, AbortSignal.timeout(HERMES_CHECK_TIMEOUT)]));
+      if (signal.aborted) return;
+      if (install.state !== 'ready') {
         setHermes('missing');
         setError('Hermes is not installed yet. Install it above, then create your bot.');
         return;
       }
       setHermes('ready');
-      const existing = await api.x['engine-hermes'].profiles.list();
+      const existing = await api.x['engine-hermes'].profiles.list(undefined, { signal });
+      if (signal.aborted) return;
       const created = existing.profiles.find((profile) => profile.name === botName.trim())
-        ?? await api.x['engine-hermes'].profiles.create({ name: botName.trim() });
+        ?? await api.x['engine-hermes'].profiles.create({ name: botName.trim() }, { signal });
+      if (signal.aborted) return;
       setCreatedBot(created.name);
       advance('channel', created.name);
-    } catch (reason) { setError(`Cannot create bot: ${String(reason)}`); setHermes('checking'); }
-    finally { setBusy(false); }
+    } catch (reason) { if (!signal.aborted) { setError(`Cannot create bot: ${String(reason)}`); setHermes('checking'); } }
+    finally { if (!signal.aborted) setBusy(false); }
   }
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!createdBot || !message.trim() || busy) return;
+    const signal = lifetime.current.signal;
     setBusy(true);
     setChatReady(false);
     replies.delete(checkpointKey.current);
     setReply('');
     setError('');
     let text = '';
+    let socket: WebSocket | undefined;
     try {
-      const selection = modelKey((await api.x.models.roles.get()).default);
-      const started = await api.x['engine-hermes'].runs.start({ profile: createdBot, input: message.trim() });
+      const selection = modelKey((await api.x.models.roles.get(undefined, { signal })).default);
+      if (signal.aborted) return;
+      const started = await api.x['engine-hermes'].runs.start({ profile: createdBot, input: message.trim() }, { signal });
+      if (signal.aborted) return;
       const token = gatewayToken();
       const url = gatewayUrl().replace(/^http/, 'ws') + '/ws';
-      const socket = token ? new WebSocket(url, ['bearer.' + token]) : new WebSocket(url);
+      socket = token ? new WebSocket(url, ['bearer.' + token]) : new WebSocket(url);
       socketRef.current = socket;
       const stream = createORPCClient<Client>(new WebSocketLink({ websocket: socket }));
       let completed = false;
-      for await (const event of await stream.x['engine-hermes'].runs.events({ profile: createdBot, runId: started.run_id })) {
+      for await (const event of await stream.x['engine-hermes'].runs.events({ profile: createdBot, runId: started.run_id }, { signal })) {
+        if (signal.aborted) return;
         if (event.kind === 'text.delta') {
           text += event.textDelta ?? '';
           setReply(text);
@@ -285,34 +328,38 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         }
         if (event.type === 'run.completed') { completed = true; break; }
       }
+      if (signal.aborted) return;
       if (!completed || !text.trim()) throw new Error('Bot did not finish with a reply. Try again.');
       replies.set(checkpointKey.current, { message, reply: text, modelKey: selection, bot: createdBot });
       setChatReady(true);
-    } catch (reason) { setError(`Cannot get first reply: ${String(reason)}`); }
+    } catch (reason) { if (!signal.aborted) setError(`Cannot get first reply: ${String(reason)}`); }
     finally {
-      socketRef.current?.close();
-      socketRef.current = null;
-      setBusy(false);
+      socket?.close();
+      if (socketRef.current === socket) socketRef.current = null;
+      if (!signal.aborted) setBusy(false);
     }
   }
 
   async function finish() {
     if (busy || !chatReady) return;
+    const signal = lifetime.current.signal;
     setBusy(true);
     setError('');
     try {
-      await api.onboarding.complete();
+      await api.onboarding.complete(undefined, { signal });
+      if (signal.aborted) return;
       replies.delete(checkpointKey.current);
       try { sessionStorage.removeItem(checkpointKey.current); } catch { /* Storage is optional. */ }
       onCompleted();
-    } catch (reason) { setError(`Cannot finish setup: ${String(reason)}`); }
-    finally { setBusy(false); }
+    } catch (reason) { if (!signal.aborted) setError(`Cannot finish setup: ${String(reason)}`); }
+    finally { if (!signal.aborted) setBusy(false); }
   }
 
   const index = stages.indexOf(stage);
   return <section className="neo-onboarding" aria-label="First-run setup" data-testid="onboarding-wizard">
     <Heading level={1}>Set up your workspace</Heading>
     <Text as="p">Choose a model, create a bot, and get your first reply. Channels can wait until later.</Text>
+    <SetupTiming startedAt={startedAt.current} stepStartedAt={stepStartedAt} />
     {loading ? <Card padding={4} className="neo-onboarding-card">
       <div role="status" className="neo-onboarding-status"><Spinner label="Loading setup" /> <Text>Loading setup...</Text></div>
       <Skeleton height={24} width="65%" />

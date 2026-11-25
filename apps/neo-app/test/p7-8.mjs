@@ -229,16 +229,16 @@ try {
       workspace: document.querySelector('[data-testid=onboarding-workspace]')?.textContent,
       progress: document.querySelector('[data-testid=onboarding-progress]')?.textContent,
       operationTimer: !!document.querySelector('[data-testid=onboarding-operation-timer]'),
-      stepTimer: !!document.querySelector('[data-testid=onboarding-step-timer]'),
-      totalTimer: !!document.querySelector('[data-testid=onboarding-total-timer]'),
+      stepTimer: document.querySelector('[data-testid=onboarding-step-timer]')?.textContent,
+      totalTimer: document.querySelector('[data-testid=onboarding-total-timer]')?.textContent,
       timeOrigin: performance.timeOrigin };
   })()`);
   assert.equal(initial.owner, 'Desktop Owner');
   assert.equal(initial.workspace, 'Default Workspace');
   assert.match(initial.progress, /Step 1 of 5/);
   assert.equal(initial.operationTimer, false, 'no idle operation timer');
-  assert.equal(initial.stepTimer, false, 'no idle step timer');
-  assert.equal(initial.totalTimer, false, 'no idle total timer');
+  assert.match(initial.stepTimer, /This step \d+:\d+/);
+  assert.match(initial.totalTimer, /Total \d+:\d+/);
   assert.equal((await rpc.onboarding.get()).workspaceName, initial.workspace);
   markStep('startup_workspace_owner');
 
