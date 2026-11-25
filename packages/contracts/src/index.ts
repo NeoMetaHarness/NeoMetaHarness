@@ -516,10 +516,20 @@ const modelProviderId = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/);
 const modelProfile = z.string().regex(/^(?:default|[a-z][a-z0-9_-]{0,47})$/);
 const modelRole = z.enum(['default', 'fast', 'reasoning', 'coding', 'eval']);
 const modelSelection = z.object({ providerId: modelProviderId, model: z.string().trim().min(1) });
-const modelProvider = z.object({
+const apiModelProvider = z.object({
   id: modelProviderId, kind: z.literal('openai-compatible'), name: z.string(),
   baseUrl: z.string().url(), hasKey: z.boolean(),
 });
+const subscriptionModelProvider = z.object({
+  id: modelProviderId, kind: z.literal('subscription'), name: z.string(),
+  vendor: z.enum(['openai', 'anthropic']),
+  engines: z.object({
+    hermes: z.object({ status: z.string(), profile: modelProfile.optional() }).optional(),
+    t3: z.object({ status: z.string() }).optional(),
+  }),
+  accountEmail: z.string().optional(), status: z.string(),
+});
+const modelProvider = z.discriminatedUnion('kind', [apiModelProvider, subscriptionModelProvider]);
 const modelRoles = z.object({
   default: modelSelection.optional(), fast: modelSelection.optional(),
   reasoning: modelSelection.optional(), coding: modelSelection.optional(), eval: modelSelection.optional(),
@@ -531,10 +541,10 @@ export type ModelRoleName = z.infer<typeof modelRole>;
 const modelsConfigContract = {
   providers: {
     list: oc.output(z.array(modelProvider)),
-    put: oc.input(z.object({
+    put: oc.input(z.discriminatedUnion('kind', [z.object({
       id: modelProviderId, kind: z.literal('openai-compatible'), name: z.string().optional(),
       baseUrl: z.string().url(), apiKey: z.string().optional(),
-    })).output(modelProvider),
+    }), subscriptionModelProvider.extend({ name: z.string().optional() }).strict()])).output(modelProvider),
     delete: oc.input(z.object({ id: modelProviderId })).output(z.object({ deleted: z.boolean() })),
     test: oc.input(z.object({ id: modelProviderId }))
       .output(z.object({ ok: z.boolean(), models: z.number().int(), status: z.number().int() })),

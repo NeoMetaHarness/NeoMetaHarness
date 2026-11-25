@@ -52,6 +52,15 @@ test('P1-13 server: model provider keys, roles and router settings are each work
     assert.deepEqual((await rpc(corpOwner, 'x/models/providers/list')).body.map((p: any) => p.id), ['legacy']);
     assert.deepEqual((await rpc(financeAdmin, 'x/models/providers/list')).body, []);
 
+    const subscription = { id: 'chatgpt', kind: 'subscription', vendor: 'openai',
+      engines: { hermes: { status: 'signed-out', profile: 'default' } }, status: 'signed-out' };
+    const created = await rpc(financeAdmin, 'x/models/providers/put', subscription);
+    assert.equal(created.status, 200);
+    assert.deepEqual(created.body, { ...subscription, name: 'chatgpt' });
+    assert.deepEqual((await rpc(financeAdmin, 'x/models/providers/list')).body, [created.body]);
+    assert.equal((await rpc(financeAdmin, 'x/models/providers/put', { ...subscription, apiKey: 'fake-key' })).status, 400);
+    assert.equal((await rpc(financeAdmin, 'x/models/providers/delete', { id: subscription.id })).status, 200);
+
     // Each workspace configures the same provider id with its own key and model.
     for (const [token, key, model] of [[corpOwner, 'corp-key', 'corp-model'], [financeAdmin, 'finance-key', 'finance-model']]) {
       assert.equal((await rpc(token, 'x/models/providers/put', { id: 'shared', kind: 'openai-compatible',

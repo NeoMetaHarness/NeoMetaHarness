@@ -53,6 +53,7 @@ export default function Models() {
   }
 
   function editProvider(provider: ModelProviderRecord) {
+    if (provider.kind !== 'openai-compatible') return;
     setId(provider.id);
     setName(provider.name);
     setBaseUrl(provider.baseUrl);
@@ -130,12 +131,14 @@ export default function Models() {
           isDisabled={!!busy || !id || !baseUrl}>Save provider</Button>
       </form>
       <ul className="models-list">{providers.map((provider) => <li key={provider.id}>
-        <div><strong>{provider.name}</strong><small>{provider.id} · {provider.baseUrl} · {provider.hasKey ? 'Key saved' : 'No key'}</small></div>
+        <div><strong>{provider.name}</strong><small>{provider.id} · {provider.kind === 'openai-compatible'
+          ? `${provider.baseUrl} · ${provider.hasKey ? 'Key saved' : 'No key'}`
+          : `${provider.vendor} subscription · ${provider.status}`}</small></div>
         <div className="models-actions">
-          <Button label={`Edit ${provider.id}`} variant="secondary" isDisabled={!!busy}
+          <Button label={`Edit ${provider.id}`} variant="secondary" isDisabled={!!busy || provider.kind !== 'openai-compatible'}
             onClick={() => editProvider(provider)}>Edit</Button>
           <Button label={`Test ${provider.id}`} variant="secondary" data-testid={`models-test-${provider.id}`}
-            isDisabled={!!busy} onClick={() => void perform('test', async () => {
+            isDisabled={!!busy || provider.kind !== 'openai-compatible'} onClick={() => void perform('test', async () => {
               const result = await modelApi.providers.test({ id: provider.id });
               setNotice(result.ok ? `${provider.id} connected (${result.models} models)` : `${provider.id} failed (HTTP ${result.status})`);
             })}>Test connection</Button>
