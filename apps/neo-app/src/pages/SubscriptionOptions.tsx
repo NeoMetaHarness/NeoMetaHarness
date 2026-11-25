@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ContractRouterClient } from '@orpc/contract';
 import type { neoContract, ModelProviderRecord } from '@neometaharness/contracts';
-import { Badge, Banner, Button, Card, Heading, Text } from '@neometaharness/ui';
+import { Badge, Banner, Button, Card, Heading, Selector, Text } from '@neometaharness/ui';
 import './subscription-options.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -23,9 +23,10 @@ export function LocalPresets({ onSelect, disabled }: { onSelect: (preset: typeof
   </div>;
 }
 
-function SignIn({ api, engine, instanceId, signedIn, canStart, onApproved, onRefresh }: {
+export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout = false, onApproved, onRefresh, onLogout }: {
   api: Client; engine: Engine; instanceId: string; signedIn: boolean; canStart: boolean;
   onApproved: () => Promise<void>; onRefresh: () => void;
+  canLogout?: boolean; onLogout?: () => Promise<void>;
 }) {
   const [flow, setFlow] = useState<Flow | null>(null);
   const [busy, setBusy] = useState(false);
@@ -131,6 +132,16 @@ function SignIn({ api, engine, instanceId, signedIn, canStart, onApproved, onRef
     catch { if (mounted.current && run === generation.current) setError('Could not cancel sign-in. Please retry.'); }
     finally { if (mounted.current && run === generation.current) setBusy(false); }
   }
+  async function logout() {
+    setBusy(true); setError('');
+    try {
+      if (engine === 'hermes') await hermes.logout({ profile: instanceId });
+      else await t3.logout({ instanceId });
+      setApproved(false);
+      await onLogout?.();
+    } catch { setError('Could not complete sign-out. Refresh status and retry.'); }
+    finally { setBusy(false); refreshAction.current(); }
+  }
   const connected = approved || signedIn;
   return <div className="subscription-row" data-testid={prefix}>
     <div className="subscription-actions">
@@ -152,16 +163,59 @@ function SignIn({ api, engine, instanceId, signedIn, canStart, onApproved, onRef
       {connected && <Button label="Use subscription" variant="secondary" isDisabled={busy}
         onClick={() => void approvedAction.current().catch(() => setError('Could not save the provider. Please retry.'))}>Use subscription</Button>}
     </div>
-    {connected && <Text as="p">To sign out, use the engine's own account settings, then refresh. Gateway sign-out is unavailable.</Text>}
+    {connected && (canLogout ? <Button label="Sign out" variant="secondary" data-testid={`${prefix}-logout`} isDisabled={busy} onClick={() => void logout()}>Sign out</Button>
+      : <Text as="p">Sign out in {engine === 'hermes' ? 'Hermes' : 'T3'}.</Text>)}
   </div>;
 }
 
-export function SubscriptionOptions({ api, providers, onSaved }: {
-  api: Client; providers: ModelProviderRecord[]; onSaved: (provider: ModelProviderRecord) => void;
+export async function saveSubscription(api: Client, engine: Engine, profile?: string, signedIn = true) {
+  const latest = await api.x.models.providers.list();
+  const records = latest.filter((item): item is Subscription => item.kind === 'subscription' && item.vendor === 'openai');
+  const existing = engine === 'hermes'
+    ? records.find((item) => item.engines.hermes && (item.engines.hermes.profile ?? 'default') === profile)
+      ?? (signedIn ? records.find((item) => !item.engines.hermes) : undefined)
+    : records.find((item) => item.engines.t3) ?? (signedIn ? records[0] : undefined);
+  if (!signedIn && !existing) return undefined;
+  let id = existing?.id ?? 'chatgpt';
+  for (let suffix = 2; !existing && latest.some((item) => item.id === id); suffix++) id = `chatgpt-${suffix}`;
+  const status = signedIn ? 'signed-in' : 'signed-out';
+  const engines: Subscription['engines'] = { ...existing?.engines, [engine]: engine === 'hermes' ? { status, profile } : { status } };
+  return api.x.models.providers.put({ id, name: existing?.name ?? 'ChatGPT / Codex', kind: 'subscription', vendor: 'openai',
+    status: Object.values(engines).some((entry) => ['signed-in', 'approved'].includes(entry.status)) ? 'signed-in' : 'signed-out', engines });
+}
+
+export function HermesProfileSignIn({ api, profile, onApproved, onLogout }: {
+  api: Client; profile: string; onApproved: () => Promise<void>; onLogout?: () => Promise<void>;
+}) {
+  const [status, setStatus] = useState<{ signedIn: boolean | null; canLogout: boolean } | null>(null);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    void api.x['engine-hermes'].subscription.status({ profile }, { signal: controller.signal }).then(setStatus)
+      .catch(() => { if (!controller.signal.aborted) setStatus(null); });
+    return () => controller.abort();
+  }, [api, profile, refresh]);
+  return <SignIn api={api} engine="hermes" instanceId={profile} canStart signedIn={status?.signedIn === true}
+    canLogout={status?.canLogout === true && !!onLogout} onApproved={onApproved} onLogout={onLogout}
+    onRefresh={() => setRefresh((value) => value + 1)} />;
+}
+
+export function SubscriptionOptions({ api, onSaved, deferHermes }: {
+  api: Client; providers: ModelProviderRecord[]; onSaved: (provider: ModelProviderRecord) => void; deferHermes?: React.ReactNode;
 }) {
   const [t3Providers, setT3Providers] = useState<T3Provider[]>([]);
   const [t3Unavailable, setT3Unavailable] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [profiles, setProfiles] = useState(['default']);
+  const [profile, setProfile] = useState('default');
+  useEffect(() => {
+    if (deferHermes) return;
+    const controller = new AbortController();
+    void api.x['engine-hermes'].profiles.list(undefined, { signal: controller.signal }).then(({ profiles }) => {
+      if (!controller.signal.aborted) setProfiles([...new Set(['default', ...profiles.map((item) => item.name)])]);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [api, refresh, !!deferHermes]);
   useEffect(() => {
     const controller = new AbortController();
     void api.x['engine-t3'].subscription.status(undefined, { signal: controller.signal }).then(({ providers }) => {
@@ -169,36 +223,35 @@ export function SubscriptionOptions({ api, providers, onSaved }: {
     }).catch(() => { if (!controller.signal.aborted) { setT3Providers([]); setT3Unavailable(true); } });
     return () => controller.abort();
   }, [api, refresh]);
-  const chatgpt = providers.find((item): item is Subscription => item.kind === 'subscription' && item.vendor === 'openai');
-  async function save(engine: Engine) {
-    // Fetch current metadata so independent engine sign-ins preserve each other.
-    const latest = await api.x.models.providers.list();
-    const existing = latest.find((item): item is Subscription => item.kind === 'subscription' && item.vendor === 'openai');
-    const saved = await api.x.models.providers.put({
-      id: existing?.id ?? 'chatgpt', name: existing?.name ?? 'ChatGPT / Codex', kind: 'subscription', vendor: 'openai',
-      status: 'signed-in', engines: { ...existing?.engines, [engine]: engine === 'hermes'
-        ? { status: 'signed-in', profile: 'default' } : { status: 'signed-in' } },
-    });
-    onSaved(saved);
+  async function save(engine: Engine, signedIn = true) {
+    const saved = await saveSubscription(api, engine, engine === 'hermes' ? profile : undefined, signedIn);
+    if (saved) onSaved(saved);
   }
   const refreshStatus = () => setRefresh((value) => value + 1);
   return <Card padding={4} className="subscription-options">
     <Heading level={2}>Subscription sign-in</Heading>
     <Text as="p">Use an existing ChatGPT subscription for supported engines.</Text>
-    <SignIn api={api} engine="hermes" instanceId="default" canStart
-      signedIn={['signed-in', 'approved'].includes(chatgpt?.engines.hermes?.status ?? '')}
-      onApproved={() => save('hermes')} onRefresh={refreshStatus} />
+    {deferHermes ?? <>
+      <Selector label="Hermes profile" data-testid="subscription-hermes-profile" value={profile} onChange={setProfile}
+        options={profiles.map((name) => ({ value: name, label: name }))} />
+      <HermesProfileSignIn key={`${profile}-${refresh}`} api={api} profile={profile}
+        onApproved={() => save('hermes')} onLogout={() => save('hermes', false)} />
+    </>}
     {t3Providers.filter((provider) => provider.provider === 'codex').map((provider) => <SignIn key={provider.instanceId}
       api={api} engine="t3" instanceId={provider.instanceId} canStart={provider.canStart} signedIn={provider.signedIn}
-      onApproved={() => save('t3')} onRefresh={refreshStatus} />)}
+      canLogout={provider.canLogout} onApproved={() => save('t3')} onRefresh={refreshStatus}
+      onLogout={async () => {
+        const status = await api.x['engine-t3'].subscription.status();
+        await save('t3', status.providers.some((item) => item.provider === 'codex' && item.signedIn));
+      }} />)}
     {!t3Providers.some((provider) => provider.provider === 'codex') && <Text as="p">T3: {t3Unavailable ? 'Status unavailable. Start T3 and refresh.' : 'No Codex provider detected.'}</Text>}
     <Heading level={3}>Claude</Heading>
     {t3Providers.filter((provider) => provider.provider === 'claude').map((provider) => <div key={provider.instanceId} className="subscription-row">
-      <Badge label={provider.signedIn ? 'Claude sign-in detected' : 'Claude sign-in not detected'} variant={provider.signedIn ? 'success' : 'neutral'} />
+      {provider.status !== 'unknown' && <Badge label={provider.signedIn ? 'Claude sign-in detected' : 'Claude sign-in not detected'} variant={provider.signedIn ? 'success' : 'neutral'} />}
       <Text as="p">T3 · {provider.instanceId}: {provider.guidance}</Text>
     </div>)}
     {!t3Providers.some((provider) => provider.provider === 'claude') && <Text as="p">T3: Claude status unavailable. Sign in with <code>claude auth login</code> in T3's isolated environment, then refresh.</Text>}
-    <Text as="p">Hermes: Claude detection is unavailable through the Gateway. Use Hermes' own CLI to configure Claude.</Text>
+    <Text as="p">Hermes: Sign in to Claude using Hermes' own CLI.</Text>
     <Button label="Refresh subscription status" variant="secondary" onClick={refreshStatus}>Refresh status</Button>
   </Card>;
 }

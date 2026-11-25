@@ -7,7 +7,7 @@ import { neoContract, type ModelProviderRecord } from '@neometaharness/contracts
 import { Banner, Button, Card, ChatMessageBubble, Heading, Skeleton, Spinner, StatusDot, Step, Stepper, Text, TextArea, TextInput, Timer } from '@neometaharness/ui';
 import { gatewayToken, gatewayUrl } from '../config';
 import HermesInstall from './EngineInstall';
-import { LocalPresets, SubscriptionOptions } from './SubscriptionOptions';
+import { HermesProfileSignIn, LocalPresets, saveSubscription, SubscriptionOptions } from './SubscriptionOptions';
 import './onboarding.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -24,7 +24,7 @@ const stages: Stage[] = ['owner', 'model', 'bot', 'channel', 'chat'];
 const labels: Record<Stage, string> = {
   owner: 'Workspace & owner', model: 'Model', bot: 'Bot', channel: 'Channel', chat: 'First reply',
 };
-type Checkpoint = { stage: Stage; bot: string };
+type Checkpoint = { stage: Stage; bot: string; subscriptionModel?: string };
 const replies = new Map<string, { message: string; reply: string; modelKey: string; bot: string }>();
 const HERMES_CHECK_TIMEOUT = 60_000;
 
@@ -90,6 +90,8 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
   const [providers, setProviders] = useState<ModelProviderRecord[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('');
   const [model, setModel] = useState('gpt-4.1-mini');
+  const [subscriptionModel, setSubscriptionModel] = useState('');
+  const [codexModel, setCodexModel] = useState('gpt-5');
   const [configuredModel, setConfiguredModel] = useState(false);
   const [addProvider, setAddProvider] = useState(false);
   const [providerId, setProviderId] = useState('my-provider');
@@ -142,14 +144,16 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
       const checkpoint = status.completed ? undefined : readCheckpoint(key);
       let next = checkpoint?.stage ?? 'owner';
       let bot = checkpoint?.bot ?? '';
+      const deferred = typeof checkpoint?.subscriptionModel === 'string' ? checkpoint.subscriptionModel : '';
+      let effectiveModel = roles.default;
       let readiness: typeof hermes = 'checking';
       let readinessError = '';
       // Validate saved steps against the current Gateway evidence.
-      if (stages.indexOf(next) >= stages.indexOf('bot') && !roles.default) {
+      if (stages.indexOf(next) >= stages.indexOf('bot') && !roles.default && !deferred) {
         next = 'model';
         bot = '';
       }
-      if (next === 'channel' || next === 'chat') {
+      if (next === 'channel' || next === 'chat' || (next === 'bot' && deferred && bot)) {
         const deadline = AbortSignal.timeout(HERMES_CHECK_TIMEOUT);
         const validationSignal = AbortSignal.any([signal, deadline]);
         try {
@@ -163,6 +167,13 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
             if (!existing.profiles.some((profile) => profile.name === bot)) {
               next = 'bot';
               bot = '';
+            } else if (deferred && next !== 'bot') {
+              const { selection } = await api.x.models.override.get({ profile: bot }, { signal: validationSignal });
+              const provider = available.find((item) => item.id === selection?.providerId);
+              const native = await api.x['engine-hermes'].subscription.status({ profile: bot }, { signal: validationSignal });
+              if (!selection || selection.model !== deferred || provider?.kind !== 'subscription' || provider.engines.hermes?.profile !== bot
+                || !['signed-in', 'approved'].includes(provider.engines.hermes.status) || native.signedIn !== true) next = 'bot';
+              else effectiveModel = selection;
             }
           }
         } catch (reason) {
@@ -183,20 +194,22 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
       setAddProvider(available.length === 0);
       setStage(next);
       setCreatedBot(bot);
+      setSubscriptionModel(deferred);
+      if (deferred) setCodexModel(deferred);
       if (checkpoint?.bot) setBotName(checkpoint.bot);
       setHermes(readiness);
       setHermesError(readinessError);
       const previousReply = next === 'chat' ? replies.get(key) : undefined;
       setReply('');
       setChatReady(false);
-      if (previousReply && previousReply.modelKey === modelKey(roles.default) && previousReply.bot === bot) {
+      if (previousReply && previousReply.modelKey === modelKey(effectiveModel) && previousReply.bot === bot) {
         setMessage(previousReply.message);
         setReply(previousReply.reply);
         setChatReady(true);
       } else {
         replies.delete(key);
       }
-      writeCheckpoint(key, { stage: next, bot });
+      writeCheckpoint(key, { stage: next, bot, subscriptionModel: deferred });
     })().catch((reason) => {
       if (mounted) setLoadError(String(reason));
     }).finally(() => { if (mounted) setLoading(false); });
@@ -210,7 +223,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
     }
   }, [stage, loading, loadError]);
 
-  function advance(next: Stage, bot = createdBot) {
+  function advance(next: Stage, bot = createdBot, deferred = subscriptionModel) {
     setStepStartedAt(Date.now());
     setError('');
     if (next === 'bot' || next === 'model' || next === 'owner') {
@@ -219,7 +232,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
       setReply('');
     }
     if (next === 'bot') setHermes('checking');
-    writeCheckpoint(checkpointKey.current, { stage: next, bot });
+    writeCheckpoint(checkpointKey.current, { stage: next, bot, subscriptionModel: deferred });
     setStage(next);
   }
 
@@ -249,7 +262,9 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
       await api.x.models.roles.set({ role: 'default', providerId: selectedProvider, model: model.trim() }, { signal });
       if (signal.aborted) return;
       setConfiguredModel(true);
-      advance('bot');
+      setSubscriptionModel('');
+      setCreatedBot('');
+      advance('bot', '', '');
     } catch (reason) { if (!signal.aborted) setError(`Cannot save model: ${String(reason)}`); }
     finally { if (!signal.aborted) setBusy(false); }
   }
@@ -291,9 +306,18 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         ?? await api.x['engine-hermes'].profiles.create({ name: botName.trim() }, { signal });
       if (signal.aborted) return;
       setCreatedBot(created.name);
-      advance('channel', created.name);
+      if (subscriptionModel) writeCheckpoint(checkpointKey.current, { stage: 'bot', bot: created.name, subscriptionModel });
+      else advance('channel', created.name);
     } catch (reason) { if (!signal.aborted) { setError(`Cannot create bot: ${String(reason)}`); setHermes('checking'); } }
     finally { if (!signal.aborted) setBusy(false); }
+  }
+
+  async function completeSubscription() {
+    const saved = await saveSubscription(api, 'hermes', createdBot);
+    if (!saved) throw new Error('Could not save subscription');
+    await api.x.models.override.set({ profile: createdBot, providerId: saved.id, model: subscriptionModel });
+    setProviders((previous) => [...previous.filter((item) => item.id !== saved.id), saved]);
+    advance('channel', createdBot);
   }
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
@@ -308,7 +332,9 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
     let text = '';
     let socket: WebSocket | undefined;
     try {
-      const selection = modelKey((await api.x.models.roles.get(undefined, { signal })).default);
+      const selection = modelKey(subscriptionModel
+        ? (await api.x.models.override.get({ profile: createdBot }, { signal })).selection
+        : (await api.x.models.roles.get(undefined, { signal })).default);
       if (signal.aborted) return;
       const started = await api.x['engine-hermes'].runs.start({ profile: createdBot, input: message.trim() }, { signal });
       if (signal.aborted) return;
@@ -385,9 +411,13 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         <Heading level={2} tabIndex={-1}>Choose your model</Heading>
         <SubscriptionOptions api={api} providers={providers} onSaved={(saved) => {
           setProviders((previous) => [...previous.filter((item) => item.id !== saved.id), saved]);
-          setSelectedProvider(saved.id);
-          setAddProvider(false);
-        }} />
+        }} deferHermes={<div className="subscription-row">
+          <Heading level={3}>Hermes ? ChatGPT / Codex</Heading>
+          <Text as="p">Sign in after creating your first bot to authorize its profile.</Text>
+          <TextInput label="Codex model ID" value={codexModel} onChange={setCodexModel} isRequired width="100%" />
+          <Button label="Use ChatGPT / Codex for Hermes" data-testid="onboarding-subscription-next" isDisabled={!codexModel.trim() || busy}
+            onClick={() => { const chosen = codexModel.trim(); setSubscriptionModel(chosen); setCreatedBot(''); advance('bot', '', chosen); }}>Use ChatGPT / Codex</Button>
+        </div>} />
         <Heading level={3}>OpenAI-compatible API</Heading>
         <Text as="p">Connect a hosted or local API. API keys are saved in the model vault.</Text>
         <LocalPresets disabled={busy} onSelect={(preset) => {
@@ -407,14 +437,14 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
           <label>Provider
             <select data-testid="onboarding-provider" value={selectedProvider} onChange={(event) => setSelectedProvider(event.target.value)}>
               <option value="">Choose provider</option>
-              {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name || provider.id}</option>)}
+              {providers.filter((provider) => provider.kind === 'openai-compatible').map((provider) => <option key={provider.id} value={provider.id}>{provider.name || provider.id}</option>)}
             </select>
           </label>
           <label>Model ID<input data-testid="onboarding-model" value={model} onChange={(event) => setModel(event.target.value)} placeholder="Model ID" required /></label>
           <div className="neo-onboarding-actions">
             <Button label="Save model and continue" data-testid="onboarding-model-next" type="submit" isDisabled={!selectedProvider || !model.trim() || busy}>Save and continue</Button>
             <Button label="Add a provider" data-testid="onboarding-provider-add" onClick={() => setAddProvider(true)}>Add provider</Button>
-            {configuredModel && <Button label="Keep configured model" onClick={() => advance('bot')}>Keep current model</Button>}
+            {configuredModel && <Button label="Keep configured model" onClick={() => { setSubscriptionModel(''); setCreatedBot(''); advance('bot', '', ''); }}>Keep current model</Button>}
           </div>
         </form>}
       </>}
@@ -435,13 +465,14 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
           <StatusDot variant="success" label="Ready" /><Text>Hermes is ready.</Text>
         </div>}
         <form className="neo-onboarding-form" onSubmit={(event) => void createBot(event)}>
-          <TextInput label="Bot name" data-testid="onboarding-bot-name" value={botName} onChange={setBotName} isRequired isDisabled={busy} width="100%" />
+          <TextInput label="Bot name" data-testid="onboarding-bot-name" value={botName} onChange={setBotName} isRequired isDisabled={busy || !!(subscriptionModel && createdBot)} width="100%" />
           {error && <Banner role="alert" status="error" title="Could not create your bot" description={error} />}
           <div className="neo-onboarding-actions">
-            <Button label="Create first bot" data-testid="onboarding-bot-create" type="submit" isDisabled={!botName.trim() || busy || hermes !== 'ready'}>{busy ? 'Creating bot...' : 'Create bot'}</Button>
+            <Button label="Create first bot" data-testid="onboarding-bot-create" type="submit" isDisabled={!botName.trim() || busy || hermes !== 'ready' || !!(subscriptionModel && createdBot)}>{busy ? 'Creating bot...' : 'Create bot'}</Button>
             {busy && <div role="status" className="neo-onboarding-status"><Spinner label="Creating bot" /><Timer /></div>}
           </div>
         </form>
+        {subscriptionModel && createdBot && hermes === 'ready' && <HermesProfileSignIn key={createdBot} api={api} profile={createdBot} onApproved={completeSubscription} />}
       </>}
       {stage === 'channel' && <>
         <Heading level={2} tabIndex={-1}>Connect a channel (optional)</Heading>
