@@ -458,9 +458,9 @@ export default function Coding() {
       <span className="connection" data-testid="coding-status">{status}</span>
     </header>
     {error && <p className="page-error" role="alert">{error}</p>}
-    {availability === 'disabled' ? <Banner status="warning" title="engine-t3 disabled" data-testid="coding-disabled">Enable T3 from Extensions to use Coding.</Banner>
-      : availability === 'not_installed' ? <Banner status="info" title="Install T3 from Extensions to use Coding." data-testid="coding-install-required" />
-      : availability !== 'ready' ? <Banner status="info" title={availabilityReason} data-testid="coding-connection-required">Open Extensions to install, start or connect T3.</Banner>
+    {availability === 'disabled' ? <Banner role="status" status="warning" title="engine-t3 disabled" data-testid="coding-disabled">Enable T3 from Extensions to use Coding.</Banner>
+      : availability === 'not_installed' ? <Banner role="status" status="info" title="Install T3 from Extensions to use Coding." data-testid="coding-install-required" />
+      : availability !== 'ready' ? <Banner role="status" status="info" title={availabilityReason} data-testid="coding-connection-required">Open Extensions to install, start or connect T3.</Banner>
       : <div className="coding-workspace">
         <aside className="coding-sidebar" aria-label="Coding projects">
           <h2>Projects</h2>

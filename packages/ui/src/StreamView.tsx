@@ -29,8 +29,6 @@ function completedBlocks(text: string, boundary: Boundary): [string[], string] {
       if (fence && fence[1][0] === boundary.fence.marker &&
         fence[1].length >= boundary.fence.length && !fence[2].trim()) {
         boundary.fence = null;
-        blocks.push(text.slice(from, end + 1));
-        from = end + 1;
       }
     } else {
       const continuation = /^\s|^>|^(?:[-+*]|\d+[.)])\s/.test(line);
@@ -45,6 +43,18 @@ function completedBlocks(text: string, boundary: Boundary): [string[], string] {
   }
   boundary.offset -= from;
   return [blocks, text.slice(from)];
+}
+
+// Reference links and their definitions can occur in either order, in different
+// blocks. Keep the suffix starting at the first possible reference together.
+function appendSections(previous: string[], blocks: string[]): string[] {
+  const sections = [...previous];
+  for (const block of blocks) {
+    const last = sections.length - 1;
+    if (last >= 0 && sections[last].includes('[')) sections[last] += block;
+    else sections.push(block);
+  }
+  return sections;
 }
 
 /** Hot-path deltas update one DOM Text node every ~33ms. Only complete Markdown sections enter React. */
@@ -78,7 +88,7 @@ export const StreamView = forwardRef<StreamViewHandle, { className?: string }>(f
     pending.current = '';
     open.current = tail;
     if (done.length) {
-      setSections((previous) => [...previous, ...done]);
+      setSections((previous) => appendSections(previous, done));
       if (tailNode.current) tailNode.current.data = tail;
     } else tailNode.current?.appendData(delta);
   };
@@ -95,7 +105,7 @@ export const StreamView = forwardRef<StreamViewHandle, { className?: string }>(f
     finish() {
       flush();
       const final = open.current;
-      if (final) setSections((previous) => [...previous, final]);
+      if (final) setSections((previous) => appendSections(previous, [final]));
       open.current = '';
       boundary.current = freshBoundary();
       if (status.current && status.current.textContent !== 'Response complete') status.current.textContent = 'Response complete';
@@ -113,7 +123,7 @@ export const StreamView = forwardRef<StreamViewHandle, { className?: string }>(f
     },
   }));
 
-  return <div className={className}>
+  return <div className={className} aria-live="polite">
     <div role="status" className="neo-stream-status"><AstryxText><span ref={status} /></AstryxText></div>
     {sections.map((markdown, index) => <Section key={index} markdown={markdown} />)}
     <div ref={tailElement} className="neo-stream-tail" />
