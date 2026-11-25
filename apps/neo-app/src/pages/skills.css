@@ -29,6 +29,8 @@
 .skills-management-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: var(--neo-space-4); margin: var(--neo-space-5) 0; }
 .skills-management-card { min-width: 0; }
 .skills-management-card > * + * { margin-top: var(--neo-space-3); }
+.skills-graph-list { list-style: none; padding: 0; margin-bottom: 0; overflow-wrap: anywhere; }
+.skills-graph-list li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--neo-space-2); padding: var(--neo-space-2) 0; border-top: 1px solid var(--neo-color-border); }
 .skills-learning-result h3 { margin: 0; }
 .hub-scan-details, .skills-dialog-form { display: grid; gap: var(--neo-space-3); }
 .skills-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--neo-space-2); }

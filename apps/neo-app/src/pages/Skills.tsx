@@ -4,7 +4,7 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
-import { Banner, Badge, Button, Card, Collapsible, Dialog, DialogHeader, EmptyState, Section, Selector, Skeleton, StreamView, Tab, TabList, Table, TextArea, TextInput, Timestamp, type StreamViewHandle } from '@neometaharness/ui';
+import { Banner, Badge, Button, Card, Collapsible, Dialog, DialogHeader, EmptyState, Section, Selector, Skeleton, StreamView, Tab, TabList, TextArea, TextInput, type StreamViewHandle } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './skills.css';
 import RegistryPanel from './RegistryPanel';
@@ -276,17 +276,21 @@ export default function Skills() {
             <Button label="Run now" data-testid="curator-run" variant="secondary" isDisabled={!curator || busy || learning}
               onClick={() => void runCurator()}>Run now</Button>
           </div>
-          {curator?.last_run_at && <p>Last review <Timestamp value={curator.last_run_at} format="date_time" /></p>}
+          {curator?.last_run_at && <p>Last review <time dateTime={curator.last_run_at}>{new Date(curator.last_run_at).toLocaleString()}</time></p>}
         </Card>
         <Card className="skills-management-card" data-testid="skills-graph">
           <h2>Learning graph</h2>
           <p data-testid="graph-count">{graph.nodes.length} nodes · {graph.edges.length} connections</p>
           {loading ? <Skeleton height={64} /> : !graph.nodes.length && !graph.edges.length ?
             <EmptyState title="No learning relationships yet" description="Connections appear as the agent learns." /> : <>
-            {graph.nodes.length > 0 && <Table aria-label="Learning graph nodes" data={graph.nodes} idKey="id"
-              columns={[{ key: 'label', header: 'Node' }, { key: 'kind', header: 'Kind' }]} density="compact" />}
-            {graph.edges.length > 0 && <Table aria-label="Learning graph connections" data={graph.edges}
-              columns={[{ key: 'source', header: 'Source' }, { key: 'target', header: 'Target' }]} density="compact" />}
+            {graph.nodes.length > 0 && <ul className="skills-graph-list" aria-label="Learning graph nodes">
+              {graph.nodes.map(node => <li key={node.id}><strong>{node.label}</strong><Badge label={node.kind} /></li>)}
+            </ul>}
+            {graph.edges.length > 0 && <ul className="skills-graph-list" aria-label="Learning graph connections">
+              {graph.edges.map((edge, index) => <li key={`${edge.source}-${edge.target}-${index}`}>
+                <span>{edge.source} → {edge.target}</span>
+              </li>)}
+            </ul>}
           </>}
         </Card>
       </div>

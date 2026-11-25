@@ -3,7 +3,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
-import { Badge, Banner, Button, Card, Dialog, DialogHeader, EmptyState, MoreMenu, Selector, Skeleton, TextArea, TextInput, Timestamp } from '@neometaharness/ui';
+import { Badge, Banner, Button, Card, Dialog, DialogHeader, EmptyState, MoreMenu, Selector, Skeleton, TextArea, TextInput } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './memory.css';
 
@@ -154,7 +154,7 @@ export default function Memory() {
             <div className="memory-meta">
               <Badge label={entry.subject + ' / ' + entry.subject_id} />
               <Badge label={entry.source} /><Badge label={entry.trust} />
-              <Timestamp value={entry.updated_at} format="date_time" />
+              <time dateTime={new Date(entry.updated_at).toISOString()}>{new Date(entry.updated_at).toLocaleString()}</time>
             </div>
             <div className="memory-meta">Provenance: {entry.provenance}</div>
           </Card>

@@ -53,10 +53,23 @@ async function startGateway(dbFile, hermesHome, modelUrl) {
   child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
   let token;
   const port = await new Promise((done, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Gateway startup timed out: ${errors}`)), 20000);
     const lines = createInterface({ input: child.stdout });
-    const success = (portNumber) => { clearTimeout(timer); lines.close(); done(portNumber); };
-    const fail = (error) => { clearTimeout(timer); lines.close(); reject(error); };
+    const success = (portNumber) => {
+      clearTimeout(timer);
+      lines.close();
+      child.stdout.resume();
+      done(portNumber);
+    };
+    const fail = (error) => {
+      clearTimeout(timer);
+      lines.close();
+      if (child.pid && child.exitCode === null && child.signalCode === null) {
+        if (process.platform === 'win32') spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+        else child.kill();
+      }
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(new Error(`Gateway startup timed out: ${errors}`)), 20000);
     lines.on('line', (line) => {
       if (line.startsWith('NEO_DESKTOP_TOKEN ')) token = line.slice('NEO_DESKTOP_TOKEN '.length).trim();
       if (line.startsWith('GATEWAY_READY ')) {

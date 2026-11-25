@@ -3,7 +3,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type MetricsSummary } from '@neometaharness/contracts';
-import { Badge, Banner, Button, Card, Heading, InfoTip, Skeleton, Text } from '@neometaharness/ui';
+import { Badge, Banner, Button, Card, Heading, Skeleton, Text } from '@neometaharness/ui';
 import { gatewayToken, gatewayUrl } from '../config';
 import './metrics.css';
 
@@ -50,7 +50,7 @@ export default function Metrics() {
             {summary.attention.share === null && <Badge label="Unavailable" variant="warning" />}
             <Text>{summary.finishedTickets ?? 'Unavailable'} finished Tickets, {summary.attention.withRecordedApproval ?? 'Unavailable'} with a recorded final approval.</Text>
             <div className="metric-proxy"><Badge label="Proxy" /><Text>Finished with no recorded approval</Text><Heading level={3}>{percent(summary.attention.observedWithoutFinalApprovalShare)}</Heading></div>
-            {summary.attention.reason && <div className="metric-reason"><InfoTip content={summary.attention.reason} label="Attention methodology" /><Text>{summary.attention.reason}</Text></div>}
+            {summary.attention.reason && <div className="metric-reason"><Text>{summary.attention.reason}</Text></div>}
           </section>
         </Card>
         <Card>
@@ -62,7 +62,7 @@ export default function Metrics() {
             <Text>Promoted-skill rollback rate</Text>
             <Heading level={3}>{percent(summary.learning.rollbackRate)}</Heading>
             <Text>{summary.completedTickets ?? 'Unavailable'} completed Tickets. Qualified current skills: {summary.learning.qualifiedSkills ?? 'Unavailable'}.</Text>
-            {summary.learning.reason && <div className="metric-reason"><InfoTip content={summary.learning.reason} label="Learning methodology" /><Text>{summary.learning.reason}</Text></div>}
+            {summary.learning.reason && <div className="metric-reason"><Text>{summary.learning.reason}</Text></div>}
           </section>
         </Card>
         <Card>
@@ -72,7 +72,7 @@ export default function Metrics() {
             <Heading level={1} accessibilityLevel={3}>{summary.firstValue.minutes === null ? 'Unavailable' : summary.firstValue.minutes.toFixed(1) + ' minutes'}</Heading>
             {summary.firstValue.minutes === null && <Badge label="Unavailable" variant="warning" />}
             <div className="metric-proxy"><Badge label="Proxy" /><Text>Onboarding to first channel delivery</Text><Heading level={3}>{summary.firstValue.onboardingToFirstReplyMinutes === null ? 'Unavailable' : summary.firstValue.onboardingToFirstReplyMinutes.toFixed(1) + ' minutes'}</Heading></div>
-            {summary.firstValue.reason && <div className="metric-reason"><InfoTip content={summary.firstValue.reason} label="Time to first value methodology" /><Text>{summary.firstValue.reason}</Text></div>}
+            {summary.firstValue.reason && <div className="metric-reason"><Text>{summary.firstValue.reason}</Text></div>}
           </section>
         </Card>
       </div>}
