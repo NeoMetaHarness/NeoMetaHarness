@@ -377,6 +377,9 @@ export class ModelHub {
     if (!selection) return undefined;
     const provider = deployment.providers.find((item) => item.id === selection.providerId);
     const subscription = provider?.kind === 'subscription';
+    if (subscription && (provider.vendor !== 'openai' || !provider.engines.hermes)) {
+      throw new Error('This subscription is not available in Hermes.');
+    }
     const binding = subscription ? undefined : await this.resolve('default', canonical, undefined, DEPLOYMENT);
     await mkdir(home, { recursive: true });
     const configFile = join(home, 'config.yaml');

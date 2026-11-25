@@ -72,6 +72,30 @@ test('API role binding and resolution refuse subscriptions', async () => {
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
+test('Hermes rejects subscriptions without a supported Hermes sign-in before projection', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'neo-subscription-unsupported-'));
+  try {
+    const hub = new ModelHub({ get: async () => undefined } as unknown as VaultService, temp);
+    hub.setActive(true);
+    await hub.saveProvider({ id: 'local', kind: 'openai-compatible', baseUrl: 'http://localhost:1234/v1' });
+    await hub.setRole({ role: 'default', providerId: 'local', model: 'local-model' });
+    const home = join(temp, 'profile');
+    await hub.projectHermes('default', home);
+    const original = await readFile(join(home, 'config.yaml'), 'utf8');
+    const env = await readFile(join(home, '.env'), 'utf8');
+    for (const unsupported of [
+      { ...subscription, id: 'claude', vendor: 'anthropic' as const },
+      { ...subscription, id: 't3-only', engines: { t3: { status: 'signed-in' } } },
+    ]) {
+      await hub.saveProvider(unsupported);
+      await hub.setRole({ role: 'default', providerId: unsupported.id, model: 'test-model' });
+      await assert.rejects(hub.projectHermes('default', home), /not available in Hermes/);
+      assert.equal(await readFile(join(home, 'config.yaml'), 'utf8'), original);
+      assert.equal(await readFile(join(home, '.env'), 'utf8'), env);
+    }
+  } finally { await rm(temp, { recursive: true, force: true }); }
+});
+
 test('disabling the extension deactivates subscription projection and resolution', async () => {
   const temp = await mkdtemp(join(tmpdir(), 'neo-subscription-disable-'));
   try {
