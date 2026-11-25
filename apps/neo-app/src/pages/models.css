@@ -1,8 +1,8 @@
-.models-page { padding: 4px 0 40px; }
+.models-page { display: grid; gap: var(--neo-space-4); min-width: 0; padding: var(--neo-space-1) 0 var(--neo-space-6); }
 .models-heading h1 { margin: 0; }
 .models-heading p { margin: 0 0 8px; color: var(--neo-color-text-muted); }
-.models-panel { border: 1px solid var(--neo-color-border); padding: 20px; margin-top: 24px; }
-.models-panel h2 { margin: 0 0 18px; }
+.models-panel { display: grid; gap: var(--neo-space-4); min-width: 0; }
+.models-panel h2 { margin: 0; }
 .models-form { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
 .models-form label, .models-role label { display: grid; gap: 7px; min-width: 190px; flex: 1 1 210px; }
 .models-page input, .models-page select { min-width: 0; width: 100%; box-sizing: border-box; background: transparent; color: inherit; border: 1px solid var(--neo-color-control-border); padding: 10px; font: inherit; }

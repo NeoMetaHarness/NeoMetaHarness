@@ -7,6 +7,7 @@ import { neoContract, type ModelProviderRecord } from '@neometaharness/contracts
 import { Banner, Button, Card, ChatMessageBubble, Heading, Skeleton, Spinner, StatusDot, Step, Stepper, Text, TextArea, TextInput, Timer } from '@neometaharness/ui';
 import { gatewayToken, gatewayUrl } from '../config';
 import HermesInstall from './EngineInstall';
+import { LocalPresets, SubscriptionOptions } from './SubscriptionOptions';
 import './onboarding.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -381,8 +382,18 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
         <Button label="Continue to model" data-testid="onboarding-owner-next" onClick={() => advance('model')}>Continue</Button>
       </>}
       {stage === 'model' && <>
-        <h2>Choose your model</h2>
-        <p>Use an OpenAI-compatible model provider. Credentials are saved securely in the model vault.</p>
+        <Heading level={2} tabIndex={-1}>Choose your model</Heading>
+        <SubscriptionOptions api={api} providers={providers} onSaved={(saved) => {
+          setProviders((previous) => [...previous.filter((item) => item.id !== saved.id), saved]);
+          setSelectedProvider(saved.id);
+          setAddProvider(false);
+        }} />
+        <Heading level={3}>OpenAI-compatible API</Heading>
+        <Text as="p">Connect a hosted or local API. API keys are saved in the model vault.</Text>
+        <LocalPresets disabled={busy} onSelect={(preset) => {
+          setProviderId(preset.id); setProviderName(preset.name); setProviderUrl(preset.url);
+          setProviderKey(''); setAddProvider(true);
+        }} />
         {addProvider ? <form onSubmit={(event) => void saveProvider(event)} className="neo-onboarding-form">
           <label>Provider ID<input data-testid="onboarding-provider-id" pattern="[a-z][a-z0-9-]{0,47}" required value={providerId} onChange={(event) => setProviderId(event.target.value)} /></label>
           <label>Provider name<input value={providerName} onChange={(event) => setProviderName(event.target.value)} /></label>

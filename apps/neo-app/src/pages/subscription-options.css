@@ -1,0 +1,4 @@
+.subscription-options, .subscription-row, .subscription-flow { display: grid; gap: var(--neo-space-3); min-width: 0; overflow-wrap: anywhere; }
+.subscription-row { padding-block: var(--neo-space-3); border-top: 1px solid var(--neo-color-border); }
+.subscription-actions { display: flex; flex-wrap: wrap; gap: var(--neo-space-2); align-items: center; }
+.subscription-flow a { color: inherit; text-decoration: underline; }

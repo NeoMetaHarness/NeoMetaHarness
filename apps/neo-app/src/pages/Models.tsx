@@ -4,8 +4,9 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract, type ModelProviderRecord, type ModelRoleName,
   type ModelRolesRecord, type ModelSelectionRecord } from '@neometaharness/contracts';
-import { Button } from '@neometaharness/ui';
+import { Banner, Button, Card, Heading, Text } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
+import { LocalPresets, SubscriptionOptions } from './SubscriptionOptions';
 import './models.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
@@ -111,14 +112,20 @@ export default function Models() {
   }
 
   return <main className="models-page" data-testid="settings-models">
-    <header className="models-heading"><div><p>Settings / Models</p><h1>Models</h1></div></header>
-    <p>Configure OpenAI-compatible providers and assign models to agent roles. Credentials are stored in the vault.</p>
-    {error && <p role="alert">{error} <Button label="Enable Model Hub" isDisabled={!!busy}
-      onClick={() => void enable()}>Enable Model Hub</Button></p>}
-    {notice && <p role="status">{notice}</p>}
+    <header className="models-heading"><Text>Settings / Models</Text><Heading level={1}>Models</Heading></header>
+    <Text as="p">Connect model providers and assign models to agent roles. API keys are stored in the vault.</Text>
+    {error && <Banner role="alert" status="error" title={error} endContent={<Button label="Enable Model Hub" isDisabled={!!busy}
+      onClick={() => void enable()}>Enable Model Hub</Button>} />}
+    {notice && <Banner role="status" status="success" title={notice} />}
+    <SubscriptionOptions api={rpc} providers={providers} onSaved={(saved) => {
+      setProviders((previous) => [...previous.filter((item) => item.id !== saved.id), saved]);
+    }} />
 
-    <section className="models-panel" aria-labelledby="models-providers">
-      <h2 id="models-providers">Providers</h2>
+    <Card className="models-panel" padding={4}>
+      <Heading level={2} id="models-providers">Providers</Heading>
+      <LocalPresets disabled={!!busy} onSelect={(preset) => {
+        setId(preset.id); setName(preset.name); setBaseUrl(preset.url); setApiKey('');
+      }} />
       <form onSubmit={saveProvider} className="models-form">
         <label>Provider ID<input data-testid="models-provider-id" required value={id} placeholder="my-provider"
           pattern="[a-z][a-z0-9-]{0,47}" onChange={(event) => setId(event.target.value)} /></label>
@@ -150,10 +157,10 @@ export default function Models() {
             })}>Delete</Button>
         </div>
       </li>)}</ul>
-    </section>
+    </Card>
 
-    <section className="models-panel" aria-labelledby="models-roles">
-      <h2 id="models-roles">Role mapping</h2>
+    <Card className="models-panel" padding={4}>
+      <Heading level={2} id="models-roles">Role mapping</Heading>
       {roleNames.map((role) => <div key={role} className="models-role">
         <strong>{role}</strong>
         <label>Provider<select aria-label={`${role} provider`} data-testid={`models-role-${role}-provider`}
@@ -171,10 +178,10 @@ export default function Models() {
           onClick={() => saveRole(role)}>Save</Button>
         {roles[role] && <small>Saved {roles[role]!.providerId} / {roles[role]!.model}</small>}
       </div>)}
-    </section>
+    </Card>
 
-    <section className="models-panel" aria-labelledby="models-override">
-      <h2 id="models-override">Per-bot override</h2>
+    <Card className="models-panel" padding={4}>
+      <Heading level={2} id="models-override">Per-bot override</Heading>
       <div className="models-form">
         <label>Bot profile<input data-testid="models-bot-profile" value={profile} placeholder="bot1"
           onChange={(event) => { setProfile(event.target.value); setOverride({}); }} /></label>
@@ -194,6 +201,6 @@ export default function Models() {
             onClick={() => saveOverride(true)}>Clear override</Button>
         </div>
       </div>
-    </section>
+    </Card>
   </main>;
 }
