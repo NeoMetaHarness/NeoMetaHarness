@@ -110,7 +110,7 @@ export default defineExtension({
     ctx.route('diff', connected((body) => service.diff(body as Parameters<typeof service.diff>[0])));
     ctx.route('rollback', connected((body) => service.rollback(body as Parameters<typeof service.rollback>[0])));
     ctx.route('providers/list', connected(() => service.listProviders()));
-    ctx.route('subscription/status', connected(() => service.subscription.status()));
+    ctx.route('subscription/status', connected(() => service.subscription.status(!externalUrl)));
     ctx.route('subscription/start', connected((body) => {
       if (externalUrl) throw new Error('ChatGPT sign-in requires the isolated local T3 server.');
       return service.subscription.start((body as { instanceId: string }).instanceId);

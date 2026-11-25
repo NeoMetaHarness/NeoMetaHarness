@@ -18,6 +18,10 @@ test('signed-in subscriptions use only T3-reported authentication metadata', asy
   assert.deepEqual(result.providers.map((provider) => provider.signedIn), [true, true, false]);
   assert.equal(result.providers[1]?.canStart, false);
   assert.ok(!JSON.stringify(result).includes('fake-token'));
+  const external = await service.status(false);
+  assert.equal(external.providers[0]?.signedIn, true);
+  assert.equal(external.providers[0]?.canStart, false);
+  assert.match(external.providers[0]!.guidance, /isolated local T3 server/);
 });
 
 test('signed-out and unknown providers report guidance without calling login', async () => {

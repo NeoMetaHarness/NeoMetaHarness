@@ -55,7 +55,13 @@ export class T3Subscription {
       validId(provider?.instanceId) && (provider.driver === 'codex' || provider.driver === 'claudeAgent'));
   }
 
-  async status() { return { providers: (await this.providers()).map(metadata) }; }
+  async status(local = true) {
+    return { providers: (await this.providers()).map((provider) => {
+      const result = metadata(provider);
+      if (local || result.provider !== 'codex') return result;
+      return { ...result, canStart: false, guidance: 'ChatGPT sign-in requires the isolated local T3 server.' };
+    }) };
+  }
 
   private async codex(instanceId: string) {
     const provider = (await this.providers()).find((item) => item.instanceId === instanceId);
