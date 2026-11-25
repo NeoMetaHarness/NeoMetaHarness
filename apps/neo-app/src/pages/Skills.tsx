@@ -350,7 +350,7 @@ export default function Skills() {
         <ul className="skills-findings">{hubReports[reviewing].findings.map((finding, index) =>
           <li key={index}><strong>{finding.file}:{finding.line}</strong><Badge label={finding.category} variant="warning" /><p>{finding.description}</p></li>
         )}</ul>
-        {error && <Banner status="error" title={error} />}
+        {error && <Banner status="error" title={error} role="alert" />}
         <TextInput label="Admin approval reason" value={hubApprovalReason} onChange={setHubApprovalReason} isRequired isDisabled={busy} />
         <div className="skills-dialog-actions">
           <Button label="Cancel" variant="secondary" isDisabled={busy} onClick={() => setReviewing(null)}>Cancel</Button>

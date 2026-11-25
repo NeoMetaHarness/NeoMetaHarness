@@ -162,7 +162,7 @@ export default function Memory() {
     <Dialog isOpen={editorOpen} purpose="form" width={560} onOpenChange={open => { if (!busy) setEditorOpen(open); }}>
       <DialogHeader title={editing ? 'Edit memory' : 'Add memory'} />
       <form className="memory-editor" onSubmit={event => void save(event)}>
-        {error && <Banner status="error" title={error} />}
+        {error && <Banner status="error" title={error} role="alert" />}
         <TextArea label="Memory text" data-testid="memory-text" value={text} onChange={setText} htmlMaxLength={16000} rows={5} isRequired />
         {!editing && <>
           <Selector label="Subject" value={subject} options={[{value: 'user', label: 'User'}, {value: 'bot', label: 'Bot'}]} onChange={value => setSubject(value as 'user' | 'bot')} />
