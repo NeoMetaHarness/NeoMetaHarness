@@ -642,10 +642,10 @@
     },
     "P7-19": {
       "title": "Interactive agent UI with A2UI for Hermes and T3",
-      "status": "in_progress",
-      "owner": "helper (codex 056773ac)",
-      "evidence": "Owner request 2026-11-25: add ubermensch-site/a2ui-intrective-UI-for-chatbots (fork of a2ui-project/a2ui, Apache-2.0) as an extension for the T3 and Hermes engines.",
-      "remaining": "Step 1: design note (how A2UI reaches Neo from unmodified engines, Astryx catalog, action round-trip, pinning); then build."
+      "status": "done",
+      "owner": "helpers (codex 056773ac build; sol-web eca02da1 markdown renderer); PM rebase and fixes",
+      "evidence": "Owner request 2026-11-25: add ubermensch-site/a2ui-intrective-UI-for-chatbots (fork of a2ui-project/a2ui, Apache-2.0) as an extension for the T3 and Hermes engines. Built as extensions/a2ui: fork pinned at 5ff1b05f (archive sha256 checked by scripts/build-a2ui.mjs, @a2ui/web_core only); fenced a2ui JSON from Hermes (run instructions) and T3 (message text), engines unmodified; Astryx widget catalog; actions round-trip via the x.a2ui.action Gateway contract with workspace/role checks and dedupe; plain-text fallback when disabled. Bundle budget kept by replacing @a2ui/markdown-it with a bounded React-only markdown subset (708 KiB total gzip vs 750 KiB).",
+      "verified_by_pm": "2026-11-25 in pm4 on main+branch (a01e626): pnpm test:p7-19 exit x2 (Hermes, T3, policy, prod pack), extensions/a2ui test, p2-3, p5-2, p7-18, gateway, toggle, check incl. perf budgets, secret scan OK; full regression 72 ok / 0 fail."
     }
   },
   "p6_tasks": {
