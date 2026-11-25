@@ -32,6 +32,7 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [approved, setApproved] = useState(false);
+  useEffect(() => { if (signedIn) setApproved(false); }, [signedIn]);
   const generation = useRef(0);
   const current = useRef<Flow | null>(null);
   const mounted = useRef(false);
@@ -83,7 +84,7 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
     setBusy(true);
     setError('');
     try {
-      if (approved) { await approvedAction.current(); return; }
+      if (approved || signedIn) { await approvedAction.current(); return; }
       if (current.current) await cancelRemote(current.current);
       update(null);
       if (engine === 'hermes') {
@@ -191,7 +192,7 @@ export function HermesProfileSignIn({ api, profile, onApproved, onLogout }: {
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    void api.x['engine-hermes'].subscription.status({ profile }, { signal: controller.signal }).then(setStatus)
+    void api.x['engine-hermes'].subscription.status({ profile }, { signal: controller.signal }).then((next) => { if (!controller.signal.aborted) setStatus(next); })
       .catch(() => { if (!controller.signal.aborted) setStatus(null); });
     return () => controller.abort();
   }, [api, profile, refresh]);

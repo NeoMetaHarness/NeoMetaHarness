@@ -188,10 +188,12 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
       setOwner(status.ownerName);
       setWorkspace(status.workspaceName);
       setProviders(available);
-      setSelectedProvider(roles.default?.providerId ?? available[0]?.id ?? '');
+      const apiProviders = available.filter((provider) => provider.kind === 'openai-compatible');
+      const apiDefault = apiProviders.some((provider) => provider.id === roles.default?.providerId) ? roles.default : undefined;
+      setSelectedProvider(apiDefault?.providerId ?? apiProviders[0]?.id ?? '');
       setModel(roles.default?.model ?? 'gpt-4.1-mini');
-      setConfiguredModel(!!roles.default);
-      setAddProvider(available.length === 0);
+      setConfiguredModel(!!apiDefault);
+      setAddProvider(apiProviders.length === 0);
       setStage(next);
       setCreatedBot(bot);
       setSubscriptionModel(deferred);
@@ -254,7 +256,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
 
   async function saveModel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedProvider || !model.trim() || busy) return;
+    if (!providers.some((provider) => provider.id === selectedProvider && provider.kind === 'openai-compatible') || !model.trim() || busy) return;
     const signal = lifetime.current.signal;
     setBusy(true);
     setError('');
@@ -431,7 +433,7 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
           <label>API key<input data-testid="onboarding-provider-key" type="password" autoComplete="new-password" value={providerKey} onChange={(event) => setProviderKey(event.target.value)} placeholder="Optional for local providers" /></label>
           <div className="neo-onboarding-actions">
             <Button label="Save provider" data-testid="onboarding-provider-save" type="submit" isDisabled={busy}>Save provider</Button>
-            {providers.length > 0 && <Button label="Choose existing provider" onClick={() => setAddProvider(false)}>Choose existing</Button>}
+            {providers.some((provider) => provider.kind === 'openai-compatible') && <Button label="Choose existing provider" onClick={() => setAddProvider(false)}>Choose existing</Button>}
           </div>
         </form> : <form onSubmit={(event) => void saveModel(event)} className="neo-onboarding-form">
           <label>Provider

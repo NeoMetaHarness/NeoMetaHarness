@@ -6,7 +6,7 @@ type ProviderSnapshot = {
   driver: 'codex' | 'claudeAgent';
   enabled?: boolean;
   setup?: { canAuthenticate?: boolean };
-  auth?: { status?: string; type?: string; label?: string; subscriptionSharing?: boolean };
+  auth?: { status?: string; type?: string; label?: string; subscriptionSharing?: boolean; canLogout?: boolean };
 };
 
 const phases = ['idle', 'starting', 'waiting', 'verifying', 'succeeded', 'failed', 'cancelled'] as const;
@@ -25,7 +25,7 @@ function metadata(provider: ProviderSnapshot) {
     ? (canStart ? 'Sign in with ChatGPT through T3.' : 'Configure a managed Codex provider in T3 to sign in with ChatGPT.')
     : (signedIn ? 'Claude sign-in detected by T3.' : 'Sign in to Claude Code in the isolated T3 environment using claude auth login, then refresh.');
   return { instanceId: provider.instanceId, provider: isCodex ? 'codex' as const : 'claude' as const,
-    status, signedIn, canStart, canLogout: canStart && signedIn, accountLabel: signedIn ? (isCodex ? 'ChatGPT / Codex' : 'Claude') : null, guidance };
+    status, signedIn, canStart, canLogout: canStart && signedIn && auth?.canLogout !== false, accountLabel: signedIn ? (isCodex ? 'ChatGPT / Codex' : 'Claude') : null, guidance };
 }
 
 function projectFlow(raw: unknown, instanceId: string) {
