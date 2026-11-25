@@ -521,14 +521,19 @@ const apiModelProvider = z.object({
   id: modelProviderId, kind: z.literal('openai-compatible'), name: z.string(),
   baseUrl: z.string().url(), hasKey: z.boolean(),
 });
+export const subscriptionStatusSchema = z.enum([
+  'signed-in', 'signed-out', 'not_signed_in', 'pending', 'approved', 'expired', 'cancelled', 'denied', 'error',
+  'authenticated', 'unauthenticated', 'unknown', 'idle', 'starting', 'waiting', 'verifying', 'succeeded', 'failed',
+]);
+export type SubscriptionModelStatus = z.infer<typeof subscriptionStatusSchema>;
 const subscriptionModelProvider = z.object({
   id: modelProviderId, kind: z.literal('subscription'), name: z.string(),
   vendor: z.enum(['openai', 'anthropic']),
   engines: z.object({
-    hermes: z.object({ status: z.string(), profile: modelProfile.optional() }).optional(),
-    t3: z.object({ status: z.string() }).optional(),
+    hermes: z.object({ status: subscriptionStatusSchema, profile: modelProfile.optional() }).optional(),
+    t3: z.object({ status: subscriptionStatusSchema }).optional(),
   }),
-  accountEmail: z.string().optional(), status: z.string(),
+  accountEmail: z.string().optional(), status: subscriptionStatusSchema,
 });
 const modelProvider = z.discriminatedUnion('kind', [apiModelProvider, subscriptionModelProvider]);
 const modelRoles = z.object({

@@ -59,6 +59,13 @@ test('P1-13 server: model provider keys, roles and router settings are each work
     assert.deepEqual(created.body, { ...subscription, name: 'chatgpt' });
     assert.deepEqual((await rpc(financeAdmin, 'x/models/providers/list')).body, [created.body]);
     assert.equal((await rpc(financeAdmin, 'x/models/providers/put', { ...subscription, apiKey: 'fake-key' })).status, 400);
+    for (const invalid of [
+      { ...subscription, status: 'invented-status' },
+      { ...subscription, engines: { hermes: { status: 'invented-status' } } },
+      { ...subscription, engines: { t3: { status: 'invented-status' } } },
+    ]) {
+      assert.equal((await rpc(financeAdmin, 'x/models/providers/put', invalid)).status, 400);
+    }
     assert.equal((await rpc(financeAdmin, 'x/models/providers/delete', { id: subscription.id })).status, 200);
 
     // Each workspace configures the same provider id with its own key and model.

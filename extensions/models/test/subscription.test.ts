@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -13,7 +13,7 @@ const subscription = {
   id: 'chatgpt', kind: 'subscription' as const, vendor: 'openai' as const,
   engines: { hermes: { status: 'signed-in', profile: 'default' }, t3: { status: 'signed-in' } },
   accountEmail: 'example@example.invalid', status: 'signed-in',
-};
+} as const;
 const apiError = /DeepSeek Harness and the super agent need an API key or a local model/;
 
 test('subscription storage is workspace-scoped and keeps only metadata', async () => {
@@ -52,6 +52,8 @@ test('Hermes uses openai-codex and removes the previous API projection', async (
     assert.equal(config.providers.neo_model, undefined);
     assert.doesNotMatch(await readFile(join(home, '.env'), 'utf8'), /NEO_MODEL_API_KEY/);
     await hub.setOverride({ profile: 'custom', providerId: subscription.id, model: 'gpt-5-custom' });
+    await assert.rejects(hub.projectHermes('custom', join(temp, 'custom')), /not available in Hermes/);
+    await hub.saveProvider({ ...subscription, engines: { ...subscription.engines, hermes: { status: 'approved', profile: 'custom' } } });
     await hub.projectHermes('custom', join(temp, 'custom'));
     assert.equal(parse(await readFile(join(temp, 'custom', 'config.yaml'), 'utf8')).model.default, 'gpt-5-custom');
   } finally { await rm(temp, { recursive: true, force: true }); }
@@ -85,13 +87,44 @@ test('Hermes rejects subscriptions without a supported Hermes sign-in before pro
     const env = await readFile(join(home, '.env'), 'utf8');
     for (const unsupported of [
       { ...subscription, id: 'claude', vendor: 'anthropic' as const },
-      { ...subscription, id: 't3-only', engines: { t3: { status: 'signed-in' } } },
+      { ...subscription, id: 't3-only', engines: { t3: { status: 'signed-in' as const } } },
+      ...(['pending', 'failed', 'error', 'signed-out'] as const).map((status) => ({
+        ...subscription, engines: { ...subscription.engines, hermes: { status, profile: 'default' } },
+      })),
     ]) {
       await hub.saveProvider(unsupported);
       await hub.setRole({ role: 'default', providerId: unsupported.id, model: 'test-model' });
       await assert.rejects(hub.projectHermes('default', home), /not available in Hermes/);
       assert.equal(await readFile(join(home, 'config.yaml'), 'utf8'), original);
       assert.equal(await readFile(join(home, '.env'), 'utf8'), env);
+    }
+  } finally { await rm(temp, { recursive: true, force: true }); }
+});
+
+test('invalid subscription statuses are rejected on write and on deployment and workspace load', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'neo-subscription-status-'));
+  try {
+    const vault = {} as VaultService;
+    const hub = new ModelHub(vault, temp);
+    const invalid = 'invented-status' as never;
+    for (const provider of [
+      { ...subscription, status: invalid },
+      { ...subscription, engines: { ...subscription.engines, hermes: { status: invalid } } },
+      { ...subscription, engines: { ...subscription.engines, t3: { status: invalid } } },
+    ]) {
+      await assert.rejects(hub.saveProvider(provider), /Invalid subscription status/);
+      await hub.saveProvider(subscription);
+      await hub.saveProvider(subscription, 'team');
+      for (const path of [join(temp, 'models', 'workspaces', 'team', 'settings.json'), join(temp, 'models', 'settings.json')]) {
+        const settings = JSON.parse(await readFile(path, 'utf8'));
+        settings.providers = [{ ...provider, name: 'chatgpt' }];
+        await writeFile(path, JSON.stringify(settings));
+      }
+      // Deployment is loaded eagerly; a workspace is loaded on demand.
+      assert.throws(() => new ModelHub(vault, temp), /Invalid subscription status/);
+      await hub.saveProvider(subscription);
+      const restored = new ModelHub(vault, temp);
+      await assert.rejects(restored.state('team'), /Invalid subscription status/);
     }
   } finally { await rm(temp, { recursive: true, force: true }); }
 });

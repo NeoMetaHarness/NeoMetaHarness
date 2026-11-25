@@ -241,7 +241,9 @@ async function killTree(child: ChildProcess): Promise<void> {
 }
 
 export class HermesRuntime {
-  readonly subscription = new HermesSubscription((path, method) => this.request('dashboard', path, { method }));
+  readonly subscription = new HermesSubscription((path, method) => this.request('dashboard', path, {
+    method, allowNotFound: path.startsWith('/api/providers/oauth/openai-codex/poll/'),
+  }));
   private readonly home: string;
   private readonly credentials: CredentialSource;
   private readonly dashboardToken = secret();
@@ -379,7 +381,7 @@ export class HermesRuntime {
   }
 
   private async request(surface: 'dashboard' | 'api', path: string, options: {
-    method?: string; body?: object; profile?: string; signal?: AbortSignal;
+    method?: string; body?: object; profile?: string; signal?: AbortSignal; allowNotFound?: boolean;
   } = {}): Promise<Response> {
     if (this.stopped) throw new Error('Hermes extension disabled');
     const hosted = surface === 'dashboard' ? this.dashboard : await this.server(options.profile ?? 'default');
@@ -390,7 +392,7 @@ export class HermesRuntime {
       method: options.method ?? 'GET', headers: { ...headers, 'content-type': 'application/json' },
       ...(options.body ? { body: JSON.stringify(options.body) } : {}), signal: options.signal ?? AbortSignal.timeout(15000),
     });
-    if (!response.ok) throw new Error(`Hermes ${surface} ${path} returned ${response.status}: ${(await response.text()).slice(0, 400)}`);
+    if (!response.ok && !(options.allowNotFound && response.status === 404)) throw new Error(`Hermes ${surface} ${path} returned ${response.status}: ${(await response.text()).slice(0, 400)}`);
     return response;
   }
 

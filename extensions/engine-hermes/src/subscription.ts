@@ -1,5 +1,6 @@
 type DashboardRequest = (path: string, method?: string) => Promise<Response>;
 const providerPath = '/api/providers/oauth/openai-codex';
+class SessionNotFound extends Error {}
 
 export interface SubscriptionStatus {
   sessionId: string;
@@ -16,8 +17,12 @@ export class HermesSubscription {
 
   private async call(path: string, method?: string): Promise<Record<string, unknown>> {
     try {
-      return await (await this.request(path, method)).json() as Record<string, unknown>;
-    } catch {
+      const response = await this.request(path, method);
+      if (response.status === 404 && path.startsWith(providerPath + '/poll/')) throw new SessionNotFound('Hermes sign-in session not found');
+      if (!response.ok) throw new Error('Invalid response');
+      return await response.json() as Record<string, unknown>;
+    } catch (error) {
+      if (error instanceof SessionNotFound) throw error;
       throw new Error('Hermes subscription sign-in request failed');
     }
   }
@@ -64,7 +69,23 @@ export class HermesSubscription {
     const current = await this.poll(profile, sessionId);
     if (current.status !== 'pending') return current;
     const reply = await this.call('/api/providers/oauth/sessions/' + this.session(sessionId) + this.query(profile), 'DELETE');
-    if (reply.ok !== true || reply.session_id !== sessionId) throw new Error('Hermes sign-in cancellation failed');
-    return { sessionId, status: 'cancelled', signedIn: false };
+    const cancelled = reply.ok === true && reply.session_id === sessionId;
+    try {
+      const final = await this.poll(profile, sessionId);
+      if (final.status !== 'pending') return final;
+    } catch (error) {
+      if (!(error instanceof SessionNotFound)) throw error;
+      // The pinned dashboard removes the session on DELETE, even after approval.
+      // In that case the profile's native provider status is the remaining evidence.
+      if (cancelled || (reply.ok === false && reply.message === 'session not found')) {
+        const { providers } = await this.call('/api/providers/oauth' + this.query(profile));
+        const provider = Array.isArray(providers) ? providers.find((item) => item?.id === 'openai-codex') : undefined;
+        if (provider?.status?.logged_in === true) {
+          return { sessionId, status: 'approved', signedIn: true, accountLabel: 'ChatGPT / Codex' };
+        }
+        if (cancelled && provider?.status?.logged_in === false) return { sessionId, status: 'cancelled', signedIn: false };
+      }
+    }
+    throw new Error('Hermes sign-in cancellation failed');
   }
 }

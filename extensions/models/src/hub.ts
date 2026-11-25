@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { HermesProjector, type VaultService } from '@neometaharness/vault';
+import { subscriptionStatusSchema, type SubscriptionModelStatus } from '@neometaharness/contracts';
 
 export const MODEL_ROLES = ['default', 'fast', 'reasoning', 'coding', 'eval'] as const;
 export type ModelRole = typeof MODEL_ROLES[number];
@@ -20,9 +21,9 @@ export interface SubscriptionModelProvider {
   kind: 'subscription';
   name: string;
   vendor: 'openai' | 'anthropic';
-  engines: { hermes?: { status: string; profile?: string }; t3?: { status: string } };
+  engines: { hermes?: { status: SubscriptionModelStatus; profile?: string }; t3?: { status: SubscriptionModelStatus } };
   accountEmail?: string;
-  status: string;
+  status: SubscriptionModelStatus;
 }
 export type ModelProvider = ApiModelProvider | SubscriptionModelProvider;
 type ProviderInput = (Omit<ApiModelProvider, 'name' | 'hasKey'> & { apiKey?: string; name?: string })
@@ -58,6 +59,21 @@ type HubSettings = {
 };
 
 const emptySettings = (): HubSettings => ({ providers: [], roles: {}, overrides: {}, revision: 0 });
+function validateSubscriptionStatus(provider: SubscriptionModelProvider): void {
+  const { hermes, t3 } = provider.engines;
+  if (!subscriptionStatusSchema.safeParse(provider.status).success
+    || (hermes && !subscriptionStatusSchema.safeParse(hermes.status).success)
+    || (t3 && !subscriptionStatusSchema.safeParse(t3.status).success)) {
+    throw new Error('Invalid subscription status');
+  }
+}
+function readSettings(raw: string): HubSettings {
+  const settings = JSON.parse(raw) as HubSettings;
+  for (const provider of settings.providers) {
+    if (provider.kind === 'subscription') validateSubscriptionStatus(provider);
+  }
+  return settings;
+}
 const providerId = /^[a-z][a-z0-9-]{0,47}$/;
 const subscriptionApiError = 'DeepSeek Harness and the super agent need an API key or a local model';
 const requiresApi = (role: ModelRole) => role === 'coding' || role === 'eval';
@@ -111,7 +127,7 @@ export class ModelHub {
     this.filename = join(dataDir, 'models', 'settings.json');
     this.storage = new WorkspaceStorage(directory);
     this.workspaces.set(DEPLOYMENT, existsSync(this.filename)
-      ? JSON.parse(readFileSync(this.filename, 'utf8')) as HubSettings : emptySettings());
+      ? readSettings(readFileSync(this.filename, 'utf8')) : emptySettings());
   }
 
   private file(key: string): string {
@@ -130,7 +146,7 @@ export class ModelHub {
           if (error.code === 'ENOENT') return undefined;
           throw error;
         });
-        if (raw !== undefined) return JSON.parse(raw) as HubSettings;
+        if (raw !== undefined) return readSettings(raw);
         if (!(await this.storage.inheritsDeployment(key))) return emptySettings();
         const inherited = structuredClone(this.workspaces.get(DEPLOYMENT)!);
         for (const provider of inherited.providers) {
@@ -217,9 +233,7 @@ export class ModelHub {
       }
       if (input.vendor !== 'openai' && input.vendor !== 'anthropic') throw new Error('Unsupported subscription vendor');
       const { hermes, t3 } = input.engines;
-      if (typeof input.status !== 'string' || (hermes && typeof hermes.status !== 'string') || (t3 && typeof t3.status !== 'string')) {
-        throw new Error('Invalid subscription status');
-      }
+      validateSubscriptionStatus({ ...input, name });
       if (input.accountEmail !== undefined && typeof input.accountEmail !== 'string') throw new Error('Invalid account email');
       record = { id: input.id, kind: input.kind, name, vendor: input.vendor, status: input.status,
         engines: {
@@ -377,7 +391,9 @@ export class ModelHub {
     if (!selection) return undefined;
     const provider = deployment.providers.find((item) => item.id === selection.providerId);
     const subscription = provider?.kind === 'subscription';
-    if (subscription && (provider.vendor !== 'openai' || !provider.engines.hermes)) {
+    if (subscription && (provider.vendor !== 'openai' || !provider.engines.hermes
+      || !['signed-in', 'approved'].includes(provider.engines.hermes.status)
+      || (provider.engines.hermes.profile !== undefined && provider.engines.hermes.profile !== canonical))) {
       throw new Error('This subscription is not available in Hermes.');
     }
     const binding = subscription ? undefined : await this.resolve('default', canonical, undefined, DEPLOYMENT);

@@ -9,12 +9,12 @@ const start = {
   access_token: 'fake-ignored',
 };
 
-function scripted(steps: Array<[string, string, object]>) {
+function scripted(steps: Array<[string, string, object, number?]>) {
   const subscription = new HermesSubscription(async (url, method = 'GET') => {
     const step = steps.shift();
     assert.ok(step, 'unexpected dashboard call');
     assert.deepEqual([method, url], step.slice(0, 2));
-    return Response.json(step[2]);
+    return Response.json(step[2], { status: step[3] ?? 200 });
   });
   return { subscription, done: () => assert.equal(steps.length, 0) };
 }
@@ -55,10 +55,39 @@ test('cancel delegates to the Hermes worker cancellation endpoint', async () => 
     ['POST', path + '/start', start],
     ['GET', path + '/poll/fake-session', { session_id: 'fake-session', status: 'pending' }],
     ['DELETE', '/api/providers/oauth/sessions/fake-session', { ok: true, session_id: 'fake-session' }],
+    ['GET', path + '/poll/fake-session', { detail: 'Session not found or expired' }, 404],
+    ['GET', '/api/providers/oauth', { providers: [{ id: 'openai-codex', status: { logged_in: false } }] }],
   ]);
   await subscription.start('default');
   assert.deepEqual(await subscription.cancel('default', 'fake-session'), {
     sessionId: 'fake-session', status: 'cancelled', signedIn: false,
+  });
+  done();
+});
+
+test('approval between poll and DELETE wins over cancellation', async () => {
+  for (const reply of [{ ok: true, session_id: 'fake-session' }, { ok: false, message: 'session not found' }]) {
+    const { subscription, done } = scripted([
+      ['GET', path + '/poll/fake-session', { session_id: 'fake-session', status: 'pending' }],
+      ['DELETE', '/api/providers/oauth/sessions/fake-session', reply],
+      ['GET', path + '/poll/fake-session', { session_id: 'fake-session', status: 'approved' }],
+    ]);
+    assert.deepEqual(await subscription.cancel('default', 'fake-session'), {
+      sessionId: 'fake-session', status: 'approved', signedIn: true, accountLabel: 'ChatGPT / Codex',
+    });
+    done();
+  }
+});
+
+test('approval survives the pinned dashboard removing the session on DELETE', async () => {
+  const { subscription, done } = scripted([
+    ['GET', path + '/poll/fake-session?profile=bot', { session_id: 'fake-session', status: 'pending' }],
+    ['DELETE', '/api/providers/oauth/sessions/fake-session?profile=bot', { ok: true, session_id: 'fake-session' }],
+    ['GET', path + '/poll/fake-session?profile=bot', { detail: 'Session not found or expired' }, 404],
+    ['GET', '/api/providers/oauth?profile=bot', { providers: [{ id: 'openai-codex', status: { logged_in: true } }] }],
+  ]);
+  assert.deepEqual(await subscription.cancel('bot', 'fake-session'), {
+    sessionId: 'fake-session', status: 'approved', signedIn: true, accountLabel: 'ChatGPT / Codex',
   });
   done();
 });
