@@ -91,7 +91,7 @@ flowchart TB
 - **Neo API:** one typed RPC + streaming surface for the App (contracts in `packages/contracts`, schema-first). Extensions add routes under `/x/<extension>/…`. No client ever talks to an engine directly, so engines can change behind the API.
 - **Auth and teams:** workspace → members → roles (owner, admin, member, viewer) → scoped resources (bots, projects, computers, channels, skills). Members' channel identities (Telegram id, GitHub login…) map to the super agent's Policy allow-list. Local accounts in v1; OIDC is planned.
 - **Deployment ownership:** the first server account becomes the persisted deployment owner. The current owner can transfer ownership to another registered account through `system.transferDeploymentOwner` with its user ID. The transfer takes effect for existing sessions and streams. A session for the deployment owner can create workspaces, see deployment-level Inbox items, and manage kernel upgrades and uninstalls. Desktop uses its bootstrapped account.
-- **Vault:** one credential store (API keys, OAuth tokens, subscription sign-ins) encrypted at rest. It is **projected** to engines in their native format (Hermes `.env` / credential pools, DSH credentials, T3 provider settings), so a key is entered once.
+- **Vault:** one credential store (API keys and Neo-managed OAuth tokens) encrypted at rest. Credentials are projected to engines that need them in their native format (Hermes `.env` / credential pools, DSH credentials, T3 provider settings), so a key is entered once. Each engine owns its subscription sign-in and credential persistence. Neo stores subscription provider records, bounded overall and per-engine statuses, profile references and optional account metadata in Model Hub settings; subscription access and refresh tokens never enter the Neo vault. The Gateway exposes engine sign-in flows through extensions, and Hermes model projection selects `openai-codex` only for an OpenAI subscription with a signed-in or approved status for the exact target profile.
 - **MCP projection:** the Tools registry syncs MCP servers into every engine and agent CLI (Hermes, DSH, Claude Code/Codex through T3). Add a tool once and every agent can use it.
 - **Event bus:** a normalised event stream (turns, tool calls, approvals, screen leases, ticket changes) feeding the App, the super agent's Sources and telemetry.
 
@@ -109,7 +109,7 @@ What changes, filling the bot-hq gaps:
 | Own `send_to_bot` and tasks | Bridges to Hermes `message_agent`, hosted rooms and kanban; one source of truth |
 | Memory = reads and deletes two files | Memory UI over the **memory-provider** chosen per bot (L1 / Honcho / others) |
 | No skills view | **Skills** pages: library, `/learn`, curator status, provenance, versions, Hub install |
-| No channel or model setup | **Channels** and **Models** pages over the Hermes platform and provider plugins, projected from the vault |
+| No channel or model setup | **Channels** and **Models** pages over the Hermes platform and provider plugins, with vault-projected credentials and engine-managed subscription sign-in |
 | Composio and xAI hard-wired | Become optional extensions (`apps-composio`, `voice-xai`, `x-search`); voice and apps have provider interfaces |
 | No subagent, goal, loop, insight or usage views | Exposed in bot detail (delegation settings, goals, loops, `/insights`, usage) |
 
@@ -201,7 +201,7 @@ As in v0.1, now model-agnostic and per-bot configurable:
 
 - **Channels:** every Hermes platform is available as a Neo channel: Telegram, WhatsApp (+ Cloud API), Signal, Discord, Slack, Teams, Google Chat, iMessage (BlueBubbles), Matrix, Mattermost, Email, SMS, LINE, WeChat/Weixin, WeCom, Feishu, DingTalk, QQ, IRC, ntfy, SimpleX, A2A and more. Onboarding asks which ones you want; Telegram is only the suggested default. A new channel = a Hermes platform plugin packaged as a Neo extension.
 - **Execution loop (all executors):** route (Panda Router) → run → verify (turn checks / tests, report contract, human review) → `record_outcome` → escalate along the ladder on failure. Outcomes feed the router, the skills fabric and the episode log.
-- **Models:** **Panda Router** (local ONNX model picker, MIT) as the default per-turn model selector; Hermes' 40+ provider plugins (Anthropic, OpenAI/Codex, Gemini, DeepSeek, xAI, OpenRouter, Ollama, LM Studio, Bedrock, Vertex, Nous…), credential pools and subscription proxy, plus DSH's `llm-pi-ai`, plus T3's subscription-driven coding agents. Neo **Model Hub**: credentials in the vault, **routes per role** (router, orchestrator, coder, bot, auxiliary, embedding), fallbacks, and budgets.
+- **Models:** **Panda Router** (local ONNX model picker, MIT) as the default per-turn model selector; Hermes' 40+ provider plugins (Anthropic, OpenAI/Codex, Gemini, DeepSeek, xAI, OpenRouter, Ollama, LM Studio, Bedrock, Vertex, Nous…), credential pools and subscription proxy, plus DSH's `llm-pi-ai`, plus T3's subscription-driven coding agents. Neo **Model Hub**: API keys in the vault, engine-managed subscription sign-in, **routes per role** (router, orchestrator, coder, bot, auxiliary, embedding), fallbacks, and budgets.
 
 ## 10. Coding (inside the Neo App)
 

@@ -40,7 +40,7 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 | APP-7 | Performance budget: streaming-chat bench (PandaCode W1 method): script time ≤ 2× PandaCode; desktop installer ≤ 40 MB without sidecar | P0 |
 | APP-2 | Sections: **Inbox** (what needs you), **Agents**, **Coding**, **Routines**, **Tasks**, **Computers**, **Skills**, **Memory**, **Extensions**, **Settings** (with sub-pages for Channels and Models) | P0 |
 | APP-3 | "Ask Neo" bar everywhere → super agent | P0 |
-| APP-4 | Onboarding wizard: role/topology, models and subscriptions, channels (choose any), computers, first bots | P0 |
+| APP-4 | Onboarding wizard: role/topology, per-engine ChatGPT/Codex subscription sign-in (Hermes device code, managed local T3 native authentication), Claude detect-and-guide, OpenAI-compatible API and Local AI presets (Ollama `http://127.0.0.1:11434/v1`, LM Studio `http://127.0.0.1:1234/v1`), channels (choose any), computers, first bots | P0 |
 | APP-5 | Light/dark + Neo theme on Astryx; extension themes | P1 |
 | APP-6 | Command palette; keyboard-first | P1 |
 
@@ -115,7 +115,7 @@ Built on giants: the **backends** of DeepSeek Harness and Hermes, and the **usab
 |---|---|---|
 | CM-1 | Any Hermes platform as a channel; user picks in onboarding (Telegram suggested; WhatsApp, Slack, Discord, Signal, Teams, iMessage, Email… available) | P0 |
 | CM-3 | Panda Router as the default per-turn model picker; route → verify → escalate → record outcome | P0 |
-| CM-2 | Model Hub: vault credentials (API keys + subscription sign-ins), route roles, fallbacks, budgets, projected to all engines | P0 |
+| CM-2 | Model Hub: vault-backed API keys, engine-managed ChatGPT/Codex subscription sign-in per Hermes profile and managed local T3 provider instance, Claude detect-and-guide, bounded provider statuses, OpenAI-compatible API and Local AI presets (Ollama and LM Studio), route roles, fallbacks and budgets. DeepSeek Harness and the super agent require an API key or local model. Subscription tokens remain with their engine. | P0 |
 
 ### 5.9 Platform, extensions, teams
 | ID | Requirement | P |
