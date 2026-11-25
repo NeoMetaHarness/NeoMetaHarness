@@ -53,7 +53,7 @@ upstreams:
     channel: main
     bump: weekly
     role: [agent-ui-protocol]
-    seams: [v1-json-protocol, catalog, web-core, markdown-sanitizer]
+    seams: [v1-json-protocol, catalog, web-core]
   panda-router:
     upstream: aicodeking/PandaOrchestrator
     lang: py

@@ -54,12 +54,11 @@ try {
     'typescript/renderers/angular/v0_9',
   ].map((path) => `--exclude=*/${path}`);
   run('tar', ['-xf', archive, '--strip-components', '1', ...exclude], source);
-  run('corepack', ['yarn', 'workspaces', 'focus', '@a2ui/web_core', '@a2ui/markdown-it'], source,
+  run('corepack', ['yarn', 'workspaces', 'focus', '@a2ui/web_core'], source,
     { YARN_ENABLE_SCRIPTS: '0', YARN_ENABLE_IMMUTABLE_INSTALLS: 'true' });
-  run('corepack', ['yarn', 'workspace', '@a2ui/markdown-it', 'build'], source);
 
   mkdirSync(destination, { recursive: true });
-  for (const directory of ['typescript/core/web_core', 'typescript/renderers/markdown-it']) {
+  for (const directory of ['typescript/core/web_core']) {
     const pkg = join(source, directory);
     const dist = join(pkg, 'dist');
     const { name, version } = JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8'));

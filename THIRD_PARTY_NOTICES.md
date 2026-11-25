@@ -12,7 +12,7 @@ Neo Meta Harness builds on these projects. Engines are used unmodified as separa
 | [Honcho](https://github.com/plastic-labs/honcho) | see upstream | Memory service (unmodified) |
 | [Panda Router](https://github.com/aicodeking/PandaOrchestrator) | MIT | Model router process (unmodified) |
 | [Astryx](https://github.com/meta/astryx) | MIT | Design system (npm dependency) |
-| [A2UI fork](https://github.com/ubermensch-site/a2ui-intrective-UI-for-chatbots) of [a2ui-project/a2ui](https://github.com/a2ui-project/a2ui) | Apache-2.0 | Unmodified Web Core and Markdown sanitizer built locally from the locked fork commit. Both package archives carry upstream's LICENSE. |
+| [A2UI fork](https://github.com/ubermensch-site/a2ui-intrective-UI-for-chatbots) of [a2ui-project/a2ui](https://github.com/a2ui-project/a2ui) | Apache-2.0 | Unmodified Web Core built locally from the locked fork commit. The package archive carries upstream's LICENSE. |
 | [uv](https://github.com/astral-sh/uv) | MIT OR Apache-2.0 | Unmodified release binary bundled with the desktop installers (version and checksums in `scripts/installer-tools.json`); builds the Hermes Python environment when Hermes is installed from the app |
 | [Compose Specification](https://github.com/compose-spec/compose-spec) | MIT | Unmodified offline JSON Schema at commit `6b3a2a93e77c30ded1aa8264307e74d1208a6eae`; [license](deploy/schema/LICENSE) and [provenance](deploy/schema/README.md) |
 

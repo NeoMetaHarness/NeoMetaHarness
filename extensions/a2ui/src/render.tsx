@@ -1,40 +1,13 @@
-import { createElement, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { renderMarkdown } from '@a2ui/markdown-it';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { renderMarkdown } from './markdown.js';
 import { Banner, Button, CheckboxInput, Heading, Text, TextInput, VStack } from '@neometaharness/ui';
 import type { A2uiActionInput } from '@neometaharness/contracts';
 import { maxInputLength, type FieldValue, type SurfaceMessage, type Widget } from './catalog.js';
 import { openSurface } from './render-model.js';
 import './render.css';
 
-const markdownTags = new Set(['p', 'strong', 'em', 's', 'blockquote', 'ul', 'ol', 'li', 'pre', 'code', 'br']);
-const droppedTags = new Set(['img', 'video', 'audio', 'source', 'iframe', 'script', 'style', 'svg', 'math']);
-
-function safeMarkdown(html: string): ReactNode {
-  // Template contents stay inert. Recreate the allowed elements without any source attributes.
-  const template = document.createElement('template');
-  template.innerHTML = html;
-  function children(parent: ParentNode): ReactNode {
-    return Array.from(parent.childNodes, (node, key) => {
-      if (node.nodeType === Node.TEXT_NODE) return node.textContent;
-      if (!(node instanceof HTMLElement)) return null;
-      const tag = node.localName;
-      if (droppedTags.has(tag)) return null;
-      return markdownTags.has(tag) ? createElement(tag, { key }, children(node)) : children(node);
-    });
-  }
-  return children(template.content);
-}
-
 function MarkdownText({ text }: { text: string }) {
-  const [content, setContent] = useState<{ text: string; nodes: ReactNode }>();
-  useEffect(() => {
-    let active = true;
-    void renderMarkdown(text).then((html) => {
-      if (active) setContent({ text, nodes: safeMarkdown(html) });
-    }).catch(() => {});
-    return () => { active = false; };
-  }, [text]);
-  return <Text as="div">{content?.text === text ? content.nodes : text}</Text>;
+  return <Text as="div">{renderMarkdown(text)}</Text>;
 }
 
 type SurfaceView = ReturnType<typeof openSurface>['surface'];
