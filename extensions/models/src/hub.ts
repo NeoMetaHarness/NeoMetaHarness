@@ -393,7 +393,7 @@ export class ModelHub {
     const subscription = provider?.kind === 'subscription';
     if (subscription && (provider.vendor !== 'openai' || !provider.engines.hermes
       || !['signed-in', 'approved'].includes(provider.engines.hermes.status)
-      || (provider.engines.hermes.profile !== undefined && provider.engines.hermes.profile !== canonical))) {
+      || (provider.engines.hermes.profile ?? hermesProfile('default')) !== canonical)) {
       throw new Error('This subscription is not available in Hermes.');
     }
     const binding = subscription ? undefined : await this.resolve('default', canonical, undefined, DEPLOYMENT);

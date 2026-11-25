@@ -53,6 +53,9 @@ test('Hermes uses openai-codex and removes the previous API projection', async (
     assert.doesNotMatch(await readFile(join(home, '.env'), 'utf8'), /NEO_MODEL_API_KEY/);
     await hub.setOverride({ profile: 'custom', providerId: subscription.id, model: 'gpt-5-custom' });
     await assert.rejects(hub.projectHermes('custom', join(temp, 'custom')), /not available in Hermes/);
+    await hub.saveProvider({ ...subscription, engines: { ...subscription.engines, hermes: { status: 'approved' } } });
+    await assert.rejects(hub.projectHermes('custom', join(temp, 'custom')), /not available in Hermes/);
+    assert.ok(await hub.projectHermes('default', home));
     await hub.saveProvider({ ...subscription, engines: { ...subscription.engines, hermes: { status: 'approved', profile: 'custom' } } });
     await hub.projectHermes('custom', join(temp, 'custom'));
     assert.equal(parse(await readFile(join(temp, 'custom', 'config.yaml'), 'utf8')).model.default, 'gpt-5-custom');
