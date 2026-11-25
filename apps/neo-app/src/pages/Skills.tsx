@@ -4,7 +4,7 @@ import { RPCLink as HttpLink } from '@orpc/client/fetch';
 import { RPCLink as WebSocketLink } from '@orpc/client/websocket';
 import type { ContractRouterClient } from '@orpc/contract';
 import { neoContract } from '@neometaharness/contracts';
-import { Banner, Badge, Button, Card, Collapsible, Dialog, DialogHeader, EmptyState, Section, Selector, Skeleton, StreamView, Tab, TabList, TextArea, TextInput, type StreamViewHandle } from '@neometaharness/ui';
+import { Banner, Badge, Button, Card, Collapsible, Dialog, DialogHeader, EmptyState, Section, SegmentedControl, SegmentedControlItem, Selector, Skeleton, StreamView, TextArea, TextInput, type StreamViewHandle } from '@neometaharness/ui';
 import { gatewayUrl, gatewayToken } from '../config';
 import './skills.css';
 import RegistryPanel from './RegistryPanel';
@@ -234,15 +234,15 @@ export default function Skills() {
     {error && <Banner status="error" title={error} role="alert" />}
     {notice && <Banner status="success" title={notice} role="status" />}
     <div className="skills-tabbar">
-      <TabList role="tablist" aria-label="Skills views" value={tab} onChange={value => setTab(value as typeof tab)}>
-        <Tab value="library" label="Library" id="skills-library-tab" panelId="skills-library-panel" data-testid="library-tab" />
-        <Tab value="registry" label="Registry" id="skills-registry-tab" panelId="skills-registry-panel" data-testid="registry-tab" />
-      </TabList>
+      <SegmentedControl label="Skills views" value={tab} onChange={value => setTab(value as typeof tab)}>
+        <SegmentedControlItem value="library" label="Library" id="skills-library-tab" aria-controls="skills-library-panel" data-testid="library-tab" />
+        <SegmentedControlItem value="registry" label="Registry" id="skills-registry-tab" aria-controls="skills-registry-panel" data-testid="registry-tab" />
+      </SegmentedControl>
     </div>
-    <div role="tabpanel" id="skills-registry-panel" aria-labelledby="skills-registry-tab" hidden={tab !== 'registry'}>
+    <div role="region" id="skills-registry-panel" aria-labelledby="skills-registry-tab" hidden={tab !== 'registry'}>
       {tab === 'registry' && <RegistryPanel profile={profile} profiles={[...new Set(['default', ...profiles])]} />}
     </div>
-    <div role="tabpanel" id="skills-library-panel" aria-labelledby="skills-library-tab" hidden={tab !== 'library'}>
+    <div role="region" id="skills-library-panel" aria-labelledby="skills-library-tab" hidden={tab !== 'library'}>
       <Section variant="transparent" padding={0} className="skills-library-section" data-testid="skills-library">
         <div className="skills-panel-title">
           <h2>Library</h2>
