@@ -22,6 +22,7 @@ const DEPLOYMENT_PROCEDURE_DESKTOP_POLICY: Readonly<Record<string, PolicyLevel>>
   'x.engine-t3.subscription.status': 'admin',
   'x.engine-t3.subscription.start': 'admin',
   'x.engine-t3.subscription.poll': 'admin',
+  'x.engine-t3.subscription.cancel': 'admin',
   // Hermes runtime, profiles, and dashboard
   'x.engine-hermes.install.status': 'viewer',
   'x.engine-hermes.install.start': 'admin',

@@ -1406,6 +1406,10 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
             authorize('x.engine-t3.subscription.poll', context);
             return invokeT3('subscription/poll', input) as Promise<any>;
           }),
+          cancel: os.x['engine-t3'].subscription.cancel.handler(async ({ input, context }) => {
+            authorize('x.engine-t3.subscription.cancel', context);
+            return invokeT3('subscription/cancel', input) as Promise<any>;
+          }),
         },
         providers: {
           list: os.x['engine-t3'].providers.list.handler(async ({ context }) => {

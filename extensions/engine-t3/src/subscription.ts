@@ -1,4 +1,4 @@
-type AuthRpc = (method: 'server.getConfig' | 'provider.auth.start', input: object) => Promise<unknown>;
+type AuthRpc = (method: 'server.getConfig' | 'provider.auth.start' | 'provider.auth.cancel', input: object) => Promise<unknown>;
 type AuthSnapshot = (instanceId: string) => Promise<unknown>;
 
 type ProviderSnapshot = {
@@ -83,5 +83,12 @@ export class T3Subscription {
     await this.codex(instanceId);
     try { return projectFlow(await this.snapshot(instanceId), instanceId); }
     catch { throw new Error('T3 could not read ChatGPT sign-in status.'); }
+  }
+
+  async cancel(instanceId: string, flowId: string) {
+    await this.codex(instanceId);
+    try {
+      return projectFlow(await this.request('provider.auth.cancel', { instanceId, flowId }), instanceId);
+    } catch { throw new Error('T3 could not cancel ChatGPT sign-in.'); }
   }
 }

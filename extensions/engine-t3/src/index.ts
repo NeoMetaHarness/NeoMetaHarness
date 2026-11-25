@@ -119,6 +119,11 @@ export default defineExtension({
       if (externalUrl) throw new Error('ChatGPT sign-in requires the isolated local T3 server.');
       return service.subscription.poll((body as { instanceId: string }).instanceId);
     }));
+    ctx.route('subscription/cancel', connected((body) => {
+      if (externalUrl) throw new Error('ChatGPT sign-in requires the isolated local T3 server.');
+      const { instanceId, flowId } = body as { instanceId: string; flowId: string };
+      return service.subscription.cancel(instanceId, flowId);
+    }));
     ctx.route('threads/list', connected(() => service.listThreads()));
 
     if (externalUrl) void connectExternal().catch(() => {});

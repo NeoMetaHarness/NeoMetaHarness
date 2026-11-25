@@ -105,6 +105,7 @@ export const t3Contract = {
     })) })),
     start: oc.input(t3SubscriptionInput).output(t3SubscriptionFlowSchema),
     poll: oc.input(t3SubscriptionInput).output(t3SubscriptionFlowSchema),
+    cancel: oc.input(t3SubscriptionInput.extend({ flowId: z.string().trim().min(1).max(256) })).output(t3SubscriptionFlowSchema),
   },
   providers: {
     list: oc.output(z.object({ providers: z.array(z.object({

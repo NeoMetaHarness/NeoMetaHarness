@@ -13,7 +13,7 @@ import { T3Subscription } from './subscription.js';
 // Small wire projection for the pinned public T3 orchestration RPC seams. The actual
 // pinned T3 schemas are checked in test/contracts.entry.ts, not loaded here.
 const rpcGroup = RpcGroup.make(
-  ...['server.updateSettings', 'vcs.createWorktree', 'terminal.open', 'terminal.close', 'terminal.write', 'provider.auth.start'].map((name) =>
+  ...['server.updateSettings', 'vcs.createWorktree', 'terminal.open', 'terminal.close', 'terminal.write', 'provider.auth.start', 'provider.auth.cancel'].map((name) =>
     Rpc.make(name, { payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown })),
   Rpc.make('provider.auth.subscribe', { payload: Schema.Unknown, success: Schema.Unknown, error: Schema.Unknown, stream: true }),
   Rpc.make('terminal.observe', {

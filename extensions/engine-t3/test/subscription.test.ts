@@ -73,3 +73,14 @@ test('authorization URLs redact existing credentials and account hints', async (
     console.warn = originalWarn;
   }
 });
+
+test('cancellation uses the native T3 flow identifier', async () => {
+  const service = new T3Subscription(async (method, input) => {
+    if (method === 'server.getConfig') return { providers: [codex, claude] };
+    assert.equal(method, 'provider.auth.cancel');
+    assert.deepEqual(input, { instanceId: 'codex', flowId: 'fake-flow' });
+    return { instanceId: 'codex', phase: 'cancelled', flowId: 'fake-flow' };
+  }, async () => { throw new Error('unexpected subscription'); });
+  assert.equal((await service.cancel('codex', 'fake-flow')).phase, 'cancelled');
+  await assert.rejects(service.cancel('claudeAgent', 'fake-flow'), /does not support/);
+});
