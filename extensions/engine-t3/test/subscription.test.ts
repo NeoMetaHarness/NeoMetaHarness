@@ -50,3 +50,26 @@ test('ChatGPT starts through the native server callback and polls T3 state', asy
   assert.ok(!JSON.stringify(started).includes('fake-token'));
   assert.equal((await service.poll('codex')).phase, 'succeeded');
 });
+
+test('authorization URLs redact existing credentials and account hints', async () => {
+  const logs: unknown[][] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  console.log = console.error = console.warn = (...args) => { logs.push(args); };
+  try {
+    const state = { instanceId: 'codex', phase: 'waiting', flowId: 'fake-flow',
+      interaction: { type: 'browser', url: 'https://example.invalid/sign-in?state=keep&id_token_hint=fake-private-token&login_hint=fake%40example.invalid&id_token_hint=second-token' } };
+    const service = new T3Subscription(async (method) => method === 'server.getConfig'
+      ? { providers: [codex] } : state, async () => state);
+    for (const result of [await service.start('codex'), await service.poll('codex')]) {
+      assert.equal(result.verificationUrl, 'https://example.invalid/sign-in?state=keep');
+      assert.doesNotMatch(JSON.stringify(result), /id_token_hint|login_hint|fake-private-token|second-token|fake%40example/);
+    }
+    assert.doesNotMatch(JSON.stringify(logs), /id_token_hint|login_hint|fake-private-token|second-token|fake%40example/);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    console.warn = originalWarn;
+  }
+});

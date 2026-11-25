@@ -38,7 +38,11 @@ function projectFlow(raw: unknown, instanceId: string) {
   let verificationUrl: string | null = null;
   if ((interaction?.type === 'browser' || interaction?.type === 'deviceCode') && typeof interaction.url === 'string') {
     const url = new URL(interaction.url);
-    if (url.protocol === 'https:' && !url.username && !url.password) verificationUrl = url.href;
+    if (url.protocol === 'https:' && !url.username && !url.password) {
+      url.searchParams.delete('id_token_hint');
+      url.searchParams.delete('login_hint');
+      verificationUrl = url.href;
+    }
   }
   return { instanceId, phase: state.phase, flowId: typeof state.flowId === 'string' ? state.flowId : null,
     expiresAt: typeof state.expiresAt === 'string' ? state.expiresAt : null, verificationUrl,
