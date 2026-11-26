@@ -151,3 +151,35 @@ test('disabling the extension deactivates subscription projection and resolution
     await assert.rejects(hub.resolve('default'), /Model Hub extension is disabled/);
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
+
+test('native logout failure leaves durable approval revoked for the matching profile', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'neo-subscription-logout-'));
+  try {
+    const vault = { get: async () => undefined } as unknown as VaultService;
+    const hub = new ModelHub(vault, temp);
+    hub.setActive(true);
+    await hub.saveProvider(subscription);
+    await hub.saveProvider({ ...subscription, id: 'other-profile', engines: { hermes: { status: 'approved', profile: 'other' } } });
+    await hub.saveProvider(subscription, 'team');
+    await hub.setRole({ role: 'default', providerId: subscription.id, model: 'gpt-5' });
+    assert.ok(await hub.projectHermes('default', join(temp, 'profile')));
+    const nativeLogout = async () => {
+      await hub.invalidateSubscription({ engine: 'hermes', profile: 'default' });
+      throw new Error('native logout failed');
+    };
+    await assert.rejects(nativeLogout(), /native logout failed/);
+    const restored = new ModelHub(vault, temp);
+    restored.setActive(true);
+    const record = (await restored.state()).providers.find((item) => item.id === subscription.id);
+    assert.deepEqual(record, { ...subscription, name: subscription.id, engines: {
+      ...subscription.engines, hermes: { status: 'signed-out', profile: 'default' },
+    } });
+    await assert.rejects(restored.projectHermes('default', join(temp, 'profile')), /not available in Hermes/);
+    assert.equal((await restored.state()).providers.filter((item) => item.kind === 'subscription').find((item) => item.id === 'other-profile')?.engines.hermes?.status, 'approved');
+    assert.equal((await restored.state('team')).providers.find((item) => item.kind === 'subscription')?.engines.hermes?.status, 'signed-in');
+    await restored.invalidateSubscription({ engine: 't3' });
+    const signedOut = (await restored.state()).providers.filter((item) => item.kind === 'subscription').find((item) => item.id === subscription.id);
+    assert.equal(signedOut?.engines.t3?.status, 'signed-out');
+    assert.equal(signedOut?.status, 'signed-out');
+  } finally { await rm(temp, { recursive: true, force: true }); }
+});

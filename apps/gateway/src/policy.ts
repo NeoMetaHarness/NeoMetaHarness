@@ -292,6 +292,7 @@ export const HTTP_ROUTE_POLICY: Record<string, PolicyLevel> = {
   '/x/a2ui/action': 'internal',
   '/x/a2ui/instructions': 'internal',
   '/x/a2ui/segments': 'internal',
+  '/x/models/providers/invalidate-subscription': 'internal',
   '/x/engine-hermes/runs/status': 'internal',
   '/x/engine-t3/install/start': 'internal',
   '/x/engine-t3/runtime/start': 'internal',

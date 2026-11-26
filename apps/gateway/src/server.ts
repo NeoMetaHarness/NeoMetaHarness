@@ -649,6 +649,14 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     if (!context.workspaceId) throw new ORPCError('FORBIDDEN', { message: 'Workspace membership required' });
     return context.workspaceId;
   };
+  const invalidateSubscription = async (input: { engine: 'hermes'; profile: string } | { engine: 't3' }, context: GatewayAuthContext) => {
+    const workspace = modelsWorkspace(context);
+    // Native engines are deployment-wide. Revoke the deployment projection and the caller's record.
+    await invokeModels('providers/invalidate-subscription', { ...input, workspace: DEPLOYMENT_CONFIG });
+    if (workspace && workspace !== DEPLOYMENT_CONFIG) {
+      await invokeModels('providers/invalidate-subscription', { ...input, workspace });
+    }
+  };
   const invokeVoice = async (route: string, body: unknown, requesterId?: string, workspaceId?: string, signal?: AbortSignal) => {
     const path = `/x/voice-xai/${route}`;
     if (!kernel.hasRoute(path)) throw new ORPCError('NOT_FOUND', { message: 'Voice provider is disabled' });
@@ -1401,6 +1409,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           }),
           logout: os.x['engine-t3'].subscription.logout.handler(async ({ input, context }) => {
             authorize('x.engine-t3.subscription.logout', context);
+            await invalidateSubscription({ engine: 't3' }, context);
             return invokeT3('subscription/logout', input) as Promise<any>;
           }),
           start: os.x['engine-t3'].subscription.start.handler(async ({ input, context }) => {
@@ -1454,6 +1463,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
           }),
           logout: os.x['engine-hermes'].subscription.logout.handler(async ({ input, context }) => {
             authorize('x.engine-hermes.subscription.logout', context);
+            await invalidateSubscription({ engine: 'hermes', profile: input.profile }, context);
             return invokeHermes('subscription/logout', input) as Promise<any>;
           }),
           start: os.x['engine-hermes'].subscription.start.handler(async ({ input, context }) => {

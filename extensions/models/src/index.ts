@@ -22,6 +22,8 @@ export default defineExtension({
     ctx.health(() => ({ ok: hub.active }));
     ctx.route('providers/list', async ({ body }) => (await hub.state(split(body)[1])).providers);
     ctx.route('providers/put', ({ body }) => hub.saveProvider(...split<Parameters<ModelHub['saveProvider']>[0]>(body)));
+    ctx.route('providers/invalidate-subscription', ({ body }) =>
+      hub.invalidateSubscription(...split<Parameters<ModelHub['invalidateSubscription']>[0]>(body)));
     ctx.route('providers/delete', ({ body }) => {
       const [input, workspace] = split<{ id: string }>(body);
       return hub.deleteProvider(input.id, workspace);

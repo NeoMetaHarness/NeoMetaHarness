@@ -251,6 +251,25 @@ export class ModelHub {
     return record;
   }
 
+  /** Revoke local approval before asking the native engine to sign out. */
+  async invalidateSubscription(input: { engine: 'hermes'; profile: string } | { engine: 't3' }, workspace?: string): Promise<void> {
+    const profile = input.engine === 'hermes' ? hermesProfile(input.profile) : undefined;
+    const { key, settings } = await this.settingsOf(workspace);
+    let changed = false;
+    settings.providers = settings.providers.map((provider) => {
+      if (provider.kind !== 'subscription' || provider.vendor !== 'openai') return provider;
+      const entry = provider.engines[input.engine];
+      if (!entry || (input.engine === 'hermes' && (provider.engines.hermes?.profile ?? 'default') !== profile)) return provider;
+      // Persist even after a previous write failure left the in-memory record signed out.
+      changed = true;
+      const engines = { ...provider.engines, [input.engine]: { ...entry, status: 'signed-out' as const } };
+      const status = Object.values(engines).some((item) => item.status === 'signed-in' || item.status === 'approved')
+        ? 'signed-in' as const : 'signed-out' as const;
+      return { ...provider, status, engines };
+    });
+    if (changed) await this.persist(key);
+  }
+
   async deleteProvider(id: string, workspace?: string): Promise<{ deleted: boolean }> {
     const { key, settings } = await this.settingsOf(workspace);
     const provider = settings.providers.find((item) => item.id === id);

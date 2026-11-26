@@ -12,7 +12,7 @@ const json = (body: unknown, headers: Record<string, string> = {}) => ({
   method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
 });
 
-test('P1-13 server: model provider keys, roles and router settings are each workspace\'s own', async () => {
+test('P1-13 server: model provider keys, roles and router settings are each workspace\'s own', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'nmh-p113-models-'));
   const databaseFile = join(root, 'state/gateway.db');
   const gateway = await startGateway({ databaseFile, dataDir: join(root, 'data'), mode: 'server', signup: 'open' });
@@ -134,6 +134,38 @@ test('P1-13 server: model provider keys, roles and router settings are each work
     assert.equal((await rpc(corpOwner, 'x/models-router-panda/deployment/settings/set', deploymentPanda)).status, 200);
     assert.equal((await rpc(corpOwner, 'x/models-router-panda/deployment/settings/get')).body.endpoint, 'http://127.0.0.1:8');
     assert.equal((await rpc(corpOwner, 'x/models-router-panda/settings/get')).body.endpoint, 'http://127.0.0.1:9', 'Corp\'s router is untouched');
+    // Native logout can fail after the account approval is revoked in both relevant scopes.
+    const approved = { ...subscription, id: 'logout-test', status: 'signed-in',
+      engines: { hermes: { status: 'approved', profile: 'logout-bot' }, t3: { status: 'signed-in' } } };
+    await hub.saveProvider(approved);
+    await hub.saveProvider(approved, finance.id);
+    await hub.setOverride({ profile: 'logout-bot', providerId: approved.id, model: 'gpt-5' });
+    const logoutPath = '/x/engine-hermes/subscription/logout';
+    const hasRoute = gateway.kernel.hasRoute.bind(gateway.kernel);
+    const invokeRoute = gateway.kernel.invokeRoute.bind(gateway.kernel);
+    let nativeChecked = false;
+    const hasRouteMock = t.mock.method(gateway.kernel, 'hasRoute', (path: string) => path === logoutPath || hasRoute(path));
+    const invokeRouteMock = t.mock.method(gateway.kernel, 'invokeRoute', async (path: string, method: string, body?: unknown, signal?: AbortSignal) => {
+      if (path !== logoutPath) return invokeRoute(path, method, body, signal);
+      for (const workspace of ['default', finance.id]) {
+        const record = (await hub.state(workspace)).providers.find((item: any) => item.id === approved.id);
+        assert.equal(record.engines.hermes.status, 'signed-out');
+        assert.equal(record.engines.t3.status, 'signed-in');
+      }
+      await assert.rejects(hub.projectHermes('logout-bot', join(root, 'logout-profile')), /not available in Hermes/);
+      nativeChecked = true;
+      throw new Error('scripted native logout failure');
+    });
+    try {
+      assert.equal((await rpc(financeAdmin, 'x/engine-hermes/subscription/logout', { profile: 'current' })).status, 400);
+      assert.equal((await rpc(financeAdmin, 'x/engine-hermes/subscription/logout', { profile: 'logout-bot' })).status, 500);
+      assert.equal(nativeChecked, true, 'native failure happened after approval revocation');
+      assert.equal((await rpc(financeAdmin, 'x/models/providers/list')).body.find((item: any) => item.id === approved.id).engines.hermes.status, 'signed-out');
+    } finally {
+      invokeRouteMock.mock.restore();
+      hasRouteMock.mock.restore();
+    }
+
     // Disabled extension: the deployment routes report 404 like the workspace ones.
     assert.equal((await rpc(corpOwner, 'extensions/disable', { id: 'models-router-panda' })).status, 200);
     assert.equal((await rpc(corpOwner, 'x/models-router-panda/deployment/settings/get')).status, 404);
