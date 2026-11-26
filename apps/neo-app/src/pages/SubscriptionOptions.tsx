@@ -130,7 +130,7 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
       } catch {
         if (!controller.signal.aborted && mounted.current && run === generation.current) {
           update(null);
-          setError('Could not check sign-in status. Retry or cancel.');
+          setError('Could not check sign-in status. Please retry.');
         }
       }
     })(), flow.interval);
