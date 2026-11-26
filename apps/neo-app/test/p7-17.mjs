@@ -324,8 +324,8 @@ try {
   await waitText('Signed in');
 
   const assertReadOnlyRole = async (role) => {
-    await evaluate('history.pushState({}, "", "/onboarding" + location.search); window.dispatchEvent(new PopStateEvent("popstate"));');
-    await visible('onboarding-wizard');
+    await evaluate('history.pushState({}, "", "/settings" + location.search); window.dispatchEvent(new PopStateEvent("popstate"));');
+    await visible('settings-models-open');
     await evaluate('window.__subscriptionFake.role = ' + JSON.stringify(role));
     const callOffset = await evaluate('window.__subscriptionFake.calls.length');
     const roleOffset = await evaluate('window.__subscriptionFake.roleReads.length');
