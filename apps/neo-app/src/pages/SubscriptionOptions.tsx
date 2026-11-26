@@ -35,6 +35,7 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
   useEffect(() => { if (signedIn) setApproved(false); }, [signedIn]);
   const generation = useRef(0);
   const current = useRef<Flow | null>(null);
+  const pollController = useRef<AbortController | null>(null);
   const mounted = useRef(false);
   const approvedAction = useRef(onApproved);
   approvedAction.current = onApproved;
@@ -65,6 +66,8 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
     return () => {
       mounted.current = false;
       generation.current++;
+      pollController.current?.abort();
+      pollController.current = null;
       if (current.current) void cancelRemote(current.current).catch(() => {});
       current.current = null;
     };
@@ -106,30 +109,46 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
   useEffect(() => {
     if (!flow || busy || error) return;
     const run = generation.current;
+    const controller = new AbortController();
+    pollController.current = controller;
     const timer = setTimeout(() => void (async () => {
       try {
         if (Date.now() >= flow.deadline) {
-          await finish(await cancelRemote(flow), run);
-          if (mounted.current && run === generation.current && !approved) setError('Sign-in expired. Please retry.');
+          const result = await cancelRemote(flow);
+          if (!mounted.current || run !== generation.current) return;
+          await finish(result, run);
+          if (result === 'cancelled' || result === 'pending') setError('Sign-in expired. Please retry.');
           return;
         }
         const result = engine === 'hermes'
-          ? await hermes.poll({ profile: instanceId, sessionId: flow.id! })
-          : await t3.poll({ instanceId });
-        if (!mounted.current || run !== generation.current) return;
+          ? await hermes.poll({ profile: instanceId, sessionId: flow.id! }, { signal: controller.signal })
+          : await t3.poll({ instanceId }, { signal: controller.signal });
+        if (controller.signal.aborted || !mounted.current || run !== generation.current) return;
         const state = outcome('status' in result ? result.status : result.phase);
         if (state === 'pending') update('phase' in result ? fromT3(result, flow) : { ...flow });
         else await finish(state, run);
-      } catch { if (mounted.current && run === generation.current) setError('Could not check sign-in status. Retry or cancel.'); }
+      } catch {
+        if (!controller.signal.aborted && mounted.current && run === generation.current) {
+          update(null);
+          setError('Could not check sign-in status. Retry or cancel.');
+        }
+      }
     })(), flow.interval);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+      if (pollController.current === controller) pollController.current = null;
+    };
   }, [flow, busy, error]);
   async function cancel() {
-    if (!current.current) return;
+    const active = current.current;
+    if (!active) return;
+    pollController.current?.abort();
+    pollController.current = null;
     const run = ++generation.current;
     setBusy(true);
     setError('');
-    try { await finish(await cancelRemote(current.current), run); }
+    try { await finish(await cancelRemote(active), run); }
     catch { if (mounted.current && run === generation.current) setError('Could not cancel sign-in. Please retry.'); }
     finally { if (mounted.current && run === generation.current) setBusy(false); }
   }
