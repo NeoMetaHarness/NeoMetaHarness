@@ -650,6 +650,8 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     return context.workspaceId;
   };
   const invalidateSubscription = async (input: { engine: 'hermes'; profile: string } | { engine: 't3' }, context: GatewayAuthContext) => {
+    // Without the Model Hub there is no stored approval to revoke; native logout must still work.
+    if (!kernel.hasRoute('/x/models/providers/invalidate-subscription')) return;
     const workspace = mode === 'desktop' ? undefined : context.workspaceId;
     // Native engines are deployment-wide. Revoke the deployment projection and the caller's record.
     await invokeModels('providers/invalidate-subscription', { ...input, workspace: DEPLOYMENT_CONFIG });
