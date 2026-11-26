@@ -121,17 +121,24 @@ test('disconnected T3 reports failure without returning provider state or diagno
 
 test('native logout is available for managed signed-in Codex and honors an explicit denial', async () => {
   let allowed = true;
+  let authenticated = true;
   const service = new T3Subscription(async (method, input) => {
     if (method === 'server.getConfig') return { providers: [
-      { ...codex, auth: { status: 'authenticated', type: 'chatgpt', canLogout: allowed } },
+      { ...codex, auth: { status: authenticated ? 'authenticated' : 'unauthenticated', type: 'chatgpt', canLogout: allowed } },
     ] };
     assert.equal(method, 'provider.auth.logout');
     assert.deepEqual(input, { instanceId: 'codex' });
+    authenticated = false;
     return { instanceId: 'codex', phase: 'idle' };
   }, async () => { throw new Error('unexpected snapshot'); });
   assert.equal((await service.status()).providers[0]?.canLogout, true);
   assert.equal((await service.status(false)).providers[0]?.canLogout, false);
   assert.equal((await service.logout('codex')).phase, 'idle');
+  const refreshed = (await service.status()).providers[0];
+  assert.equal(refreshed?.status, 'unauthenticated');
+  assert.equal(refreshed?.signedIn, false);
+  assert.equal(refreshed?.canLogout, false);
+  authenticated = true;
   allowed = false;
   assert.equal((await service.status()).providers[0]?.canLogout, false);
   await assert.rejects(service.logout('codex'), /does not support ChatGPT sign-out/);
