@@ -220,8 +220,9 @@ export function HermesProfileSignIn({ api, profile, onApproved, onLogout }: {
     onRefresh={() => setRefresh((value) => value + 1)} />;
 }
 
-export function SubscriptionOptions({ api, onSaved, deferHermes }: {
-  api: Client; providers: ModelProviderRecord[]; onSaved: (provider: ModelProviderRecord) => void; deferHermes?: React.ReactNode;
+export function SubscriptionOptions({ api, providers, onSaved, deferHermes, canManage = true }: {
+  api: Client; providers: ModelProviderRecord[]; onSaved: (provider: ModelProviderRecord) => void;
+  deferHermes?: React.ReactNode; canManage?: boolean;
 }) {
   const [t3Providers, setT3Providers] = useState<T3Provider[]>([]);
   const [t3Unavailable, setT3Unavailable] = useState(false);
@@ -248,26 +249,42 @@ export function SubscriptionOptions({ api, onSaved, deferHermes }: {
     if (saved) onSaved(saved);
   }
   const refreshStatus = () => setRefresh((value) => value + 1);
+  const savedSubscriptions = providers.filter((provider): provider is Subscription =>
+    provider.kind === 'subscription' && provider.vendor === 'openai');
   return <Card padding={4} className="subscription-options">
     <Heading level={2}>Subscription sign-in</Heading>
     <Text as="p">Use an existing ChatGPT subscription for supported engines.</Text>
-    {deferHermes ?? <>
+    <Heading level={3}>Saved subscription status</Heading>
+    {savedSubscriptions.length ? savedSubscriptions.map((provider) => <div key={provider.id} className="subscription-row">
+      <strong>{provider.name}</strong>
+      {provider.engines.hermes && <Badge label={`Hermes · ${provider.engines.hermes.status} · profile ${provider.engines.hermes.profile ?? 'default'}`}
+        variant={['signed-in', 'approved'].includes(provider.engines.hermes.status) ? 'success' : 'neutral'} />}
+      {provider.engines.t3 && <Badge label={`T3 · ${provider.engines.t3.status}`}
+        variant={['signed-in', 'approved'].includes(provider.engines.t3.status) ? 'success' : 'neutral'} />}
+    </div>) : <Text as="p">No saved subscription connections.</Text>}
+    {canManage && (deferHermes ?? <>
       <Selector label="Hermes profile" data-testid="subscription-hermes-profile" value={profile} onChange={setProfile}
         options={profiles.map((name) => ({ value: name, label: name }))} />
       <HermesProfileSignIn key={`${profile}-${refresh}`} api={api} profile={profile}
         onApproved={() => save('hermes')} onLogout={() => save('hermes', false)} />
-    </>}
-    {t3Providers.filter((provider) => provider.provider === 'codex').map((provider) => <SignIn key={provider.instanceId}
+    </>)}
+    {canManage && t3Providers.filter((provider) => provider.provider === 'codex').map((provider) => <SignIn key={provider.instanceId}
       api={api} engine="t3" instanceId={provider.instanceId} canStart={provider.canStart} signedIn={provider.signedIn}
       canLogout={provider.canLogout} onApproved={() => save('t3')} onRefresh={refreshStatus}
       onLogout={async () => {
         const status = await api.x['engine-t3'].subscription.status();
         await save('t3', status.providers.some((item) => item.provider === 'codex' && item.signedIn));
       }} />)}
+    {!canManage && t3Providers.filter((provider) => provider.provider === 'codex').map((provider) => <div key={provider.instanceId} className="subscription-row">
+      <Text as="p">T3 · Codex · {provider.instanceId}</Text>
+      <Badge label={provider.status === 'unknown' ? 'Status unknown' : provider.signedIn ? 'Signed in' : 'Sign-in required'}
+        variant={provider.signedIn ? 'success' : 'neutral'} />
+    </div>)}
     {!t3Providers.some((provider) => provider.provider === 'codex') && <Text as="p">T3: {t3Unavailable ? 'Status unavailable. Start T3 and refresh.' : 'No Codex provider detected.'}</Text>}
     <Heading level={3}>Claude</Heading>
     {t3Providers.filter((provider) => provider.provider === 'claude').map((provider) => <div key={provider.instanceId} className="subscription-row">
       {provider.status !== 'unknown' && <Badge label={provider.signedIn ? 'Claude sign-in detected' : 'Claude sign-in not detected'} variant={provider.signedIn ? 'success' : 'neutral'} />}
+      {provider.status !== 'unknown' && provider.signedIn && <Text as="p">Sign out in T3.</Text>}
       <Text as="p">T3 · {provider.instanceId}: {provider.guidance}</Text>
     </div>)}
     {!t3Providers.some((provider) => provider.provider === 'claude') && <Text as="p">T3: Claude status unavailable. Sign in with <code>claude auth login</code> in T3's isolated environment, then refresh.</Text>}

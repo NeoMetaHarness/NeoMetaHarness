@@ -10,6 +10,7 @@ import { LocalPresets, SubscriptionOptions } from './SubscriptionOptions';
 import './models.css';
 
 type Client = ContractRouterClient<typeof neoContract>;
+type WorkspaceRole = 'owner' | 'admin' | 'member' | 'viewer';
 const rpc = createORPCClient<Client>(new RPCLink({
   url: gatewayUrl(),
   headers: () => {
@@ -34,6 +35,8 @@ export default function Models() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [workspaceRole, setWorkspaceRole] = useState<WorkspaceRole | null>(null);
+  const canManage = workspaceRole === 'owner' || workspaceRole === 'admin';
 
   const refresh = useCallback(async () => {
     const [nextProviders, nextRoles] = await Promise.all([modelApi.providers.list(), modelApi.roles.get()]);
@@ -43,6 +46,24 @@ export default function Models() {
   }, []);
 
   useEffect(() => { void refresh().catch(() => setError('Model Hub is unavailable. Enable it below.')); }, [refresh]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const token = gatewayToken();
+    void fetch(`${gatewayUrl()}/auth/organization/get-active-member-role`, {
+      credentials: 'include',
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok) throw new Error('Workspace role unavailable');
+      const result = await response.json() as { role?: unknown };
+      const role = result.role;
+      if (!controller.signal.aborted) setWorkspaceRole(
+        role === 'owner' || role === 'admin' || role === 'member' || role === 'viewer' ? role : null,
+      );
+    }).catch(() => { if (!controller.signal.aborted) setWorkspaceRole(null); });
+    return () => controller.abort();
+  }, []);
 
   async function perform(label: string, action: () => Promise<void>) {
     if (busy) return;
@@ -114,34 +135,36 @@ export default function Models() {
   return <main className="models-page" data-testid="settings-models">
     <header className="models-heading"><Text>Settings / Models</Text><Heading level={1}>Models</Heading></header>
     <Text as="p">Connect model providers and assign models to agent roles. API keys are stored in the vault.</Text>
-    {error && <Banner role="alert" status="error" title={error} endContent={<Button label="Enable Model Hub" isDisabled={!!busy}
-      onClick={() => void enable()}>Enable Model Hub</Button>} />}
+    {error && <Banner role="alert" status="error" title={error} endContent={canManage ? <Button label="Enable Model Hub" isDisabled={!!busy}
+      onClick={() => void enable()}>Enable Model Hub</Button> : undefined} />}
     {notice && <Banner role="status" status="success" title={notice} />}
-    <SubscriptionOptions api={rpc} providers={providers} onSaved={(saved) => {
+    <SubscriptionOptions api={rpc} providers={providers} canManage={canManage} onSaved={(saved) => {
       setProviders((previous) => [...previous.filter((item) => item.id !== saved.id), saved]);
     }} />
 
     <Card className="models-panel" padding={4}>
       <Heading level={2} id="models-providers">Providers</Heading>
-      <LocalPresets disabled={!!busy} onSelect={(preset) => {
-        setId(preset.id); setName(preset.name); setBaseUrl(preset.url); setApiKey('');
-      }} />
-      <form onSubmit={saveProvider} className="models-form">
-        <label>Provider ID<input data-testid="models-provider-id" required value={id} placeholder="my-provider"
-          pattern="[a-z][a-z0-9-]{0,47}" onChange={(event) => setId(event.target.value)} /></label>
-        <label>Display name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
-        <label>Base URL<input data-testid="models-provider-url" type="url" required value={baseUrl}
-          placeholder="https://example.com/v1" onChange={(event) => setBaseUrl(event.target.value)} /></label>
-        <label>API key (write-only)<input data-testid="models-provider-key" type="password" autoComplete="new-password"
-          value={apiKey} placeholder="Leave blank to keep existing key" onChange={(event) => setApiKey(event.target.value)} /></label>
-        <Button type="submit" label="Save provider" data-testid="models-save-provider"
-          isDisabled={!!busy || !id || !baseUrl}>Save provider</Button>
-      </form>
+      {canManage && <>
+        <LocalPresets disabled={!!busy} onSelect={(preset) => {
+          setId(preset.id); setName(preset.name); setBaseUrl(preset.url); setApiKey('');
+        }} />
+        <form onSubmit={saveProvider} className="models-form">
+          <label>Provider ID<input data-testid="models-provider-id" required value={id} placeholder="my-provider"
+            pattern="[a-z][a-z0-9-]{0,47}" onChange={(event) => setId(event.target.value)} /></label>
+          <label>Display name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label>Base URL<input data-testid="models-provider-url" type="url" required value={baseUrl}
+            placeholder="https://example.com/v1" onChange={(event) => setBaseUrl(event.target.value)} /></label>
+          <label>API key (write-only)<input data-testid="models-provider-key" type="password" autoComplete="new-password"
+            value={apiKey} placeholder="Leave blank to keep existing key" onChange={(event) => setApiKey(event.target.value)} /></label>
+          <Button type="submit" label="Save provider" data-testid="models-save-provider"
+            isDisabled={!!busy || !id || !baseUrl}>Save provider</Button>
+        </form>
+      </>}
       <ul className="models-list">{providers.map((provider) => <li key={provider.id}>
         <div><strong>{provider.name}</strong><small>{provider.id} · {provider.kind === 'openai-compatible'
           ? `${provider.baseUrl} · ${provider.hasKey ? 'Key saved' : 'No key'}`
           : `${provider.vendor} subscription · ${provider.status}`}</small></div>
-        <div className="models-actions">
+        {canManage && <div className="models-actions">
           <Button label={`Edit ${provider.id}`} variant="secondary" isDisabled={!!busy || provider.kind !== 'openai-compatible'}
             onClick={() => editProvider(provider)}>Edit</Button>
           <Button label={`Test ${provider.id}`} variant="secondary" data-testid={`models-test-${provider.id}`}
@@ -155,11 +178,11 @@ export default function Models() {
               await refresh();
               setNotice(`Deleted provider ${provider.id}`);
             })}>Delete</Button>
-        </div>
+        </div>}
       </li>)}</ul>
     </Card>
 
-    <Card className="models-panel" padding={4}>
+    {canManage && <Card className="models-panel" padding={4}>
       <Heading level={2} id="models-roles">Role mapping</Heading>
       {roleNames.map((role) => <div key={role} className="models-role">
         <strong>{role}</strong>
@@ -178,9 +201,9 @@ export default function Models() {
           onClick={() => saveRole(role)}>Save</Button>
         {roles[role] && <small>Saved {roles[role]!.providerId} / {roles[role]!.model}</small>}
       </div>)}
-    </Card>
+    </Card>}
 
-    <Card className="models-panel" padding={4}>
+    {canManage && <Card className="models-panel" padding={4}>
       <Heading level={2} id="models-override">Per-bot override</Heading>
       <div className="models-form">
         <label>Bot profile<input data-testid="models-bot-profile" value={profile} placeholder="bot1"
@@ -201,6 +224,6 @@ export default function Models() {
             onClick={() => saveOverride(true)}>Clear override</Button>
         </div>
       </div>
-    </Card>
+    </Card>}
   </main>;
 }
