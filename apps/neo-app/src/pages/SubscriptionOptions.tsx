@@ -230,20 +230,21 @@ export function SubscriptionOptions({ api, providers, onSaved, deferHermes, canM
   const [profiles, setProfiles] = useState(['default']);
   const [profile, setProfile] = useState('default');
   useEffect(() => {
-    if (deferHermes) return;
+    if (!canManage || deferHermes) return;
     const controller = new AbortController();
     void api.x['engine-hermes'].profiles.list(undefined, { signal: controller.signal }).then(({ profiles }) => {
       if (!controller.signal.aborted) setProfiles([...new Set(['default', ...profiles.map((item) => item.name)])]);
     }).catch(() => {});
     return () => controller.abort();
-  }, [api, refresh, !!deferHermes]);
+  }, [api, refresh, !!deferHermes, canManage]);
   useEffect(() => {
+    if (!canManage) return;
     const controller = new AbortController();
     void api.x['engine-t3'].subscription.status(undefined, { signal: controller.signal }).then(({ providers }) => {
       if (!controller.signal.aborted) { setT3Providers(providers); setT3Unavailable(false); }
     }).catch(() => { if (!controller.signal.aborted) { setT3Providers([]); setT3Unavailable(true); } });
     return () => controller.abort();
-  }, [api, refresh]);
+  }, [api, refresh, canManage]);
   async function save(engine: Engine, signedIn = true) {
     const saved = await saveSubscription(api, engine, engine === 'hermes' ? profile : undefined, signedIn);
     if (saved) onSaved(saved);
@@ -275,11 +276,7 @@ export function SubscriptionOptions({ api, providers, onSaved, deferHermes, canM
         const status = await api.x['engine-t3'].subscription.status();
         await save('t3', status.providers.some((item) => item.provider === 'codex' && item.signedIn));
       }} />)}
-    {!canManage && t3Providers.filter((provider) => provider.provider === 'codex').map((provider) => <div key={provider.instanceId} className="subscription-row">
-      <Text as="p">T3 · Codex · {provider.instanceId}</Text>
-      <Badge label={provider.status === 'unknown' ? 'Status unknown' : provider.signedIn ? 'Signed in' : 'Sign-in required'}
-        variant={provider.signedIn ? 'success' : 'neutral'} />
-    </div>)}
+    {canManage && <>
     {!t3Providers.some((provider) => provider.provider === 'codex') && <Text as="p">T3: {t3Unavailable ? 'Status unavailable. Start T3 and refresh.' : 'No Codex provider detected.'}</Text>}
     <Heading level={3}>Claude</Heading>
     {t3Providers.filter((provider) => provider.provider === 'claude').map((provider) => <div key={provider.instanceId} className="subscription-row">
@@ -290,5 +287,6 @@ export function SubscriptionOptions({ api, providers, onSaved, deferHermes, canM
     {!t3Providers.some((provider) => provider.provider === 'claude') && <Text as="p">T3: Claude status unavailable. Sign in with <code>claude auth login</code> in T3's isolated environment, then refresh.</Text>}
     <Text as="p">Hermes: Sign in to Claude using Hermes' own CLI.</Text>
     <Button label="Refresh subscription status" variant="secondary" onClick={refreshStatus}>Refresh status</Button>
+    </>}
   </Card>;
 }
