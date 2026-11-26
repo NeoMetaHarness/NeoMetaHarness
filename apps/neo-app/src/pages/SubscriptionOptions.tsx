@@ -112,14 +112,25 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
     const controller = new AbortController();
     pollController.current = controller;
     const timer = setTimeout(() => void (async () => {
-      try {
-        if (Date.now() >= flow.deadline) {
+      if (Date.now() >= flow.deadline) {
+        // Hide expired authorization details while retaining the session for cancellation.
+        setBusy(true);
+        setFlow(null);
+        try {
           const result = await cancelRemote(flow);
           if (!mounted.current || run !== generation.current) return;
           await finish(result, run);
-          if (result === 'cancelled' || result === 'pending') setError('Sign-in expired. Please retry.');
-          return;
+          if (mounted.current && run === generation.current && (result === 'cancelled' || result === 'pending')) {
+            setError('Sign-in expired. Please retry.');
+          }
+        } catch {
+          if (mounted.current && run === generation.current) setError('Sign-in expired. Please retry.');
+        } finally {
+          if (mounted.current && run === generation.current) setBusy(false);
         }
+        return;
+      }
+      try {
         const result = engine === 'hermes'
           ? await hermes.poll({ profile: instanceId, sessionId: flow.id! }, { signal: controller.signal })
           : await t3.poll({ instanceId }, { signal: controller.signal });
@@ -129,11 +140,13 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
         else await finish(state, run);
       } catch {
         if (!controller.signal.aborted && mounted.current && run === generation.current) {
+          await cancelRemote(flow).catch(() => {});
+          if (controller.signal.aborted || !mounted.current || run !== generation.current) return;
           update(null);
           setError('Could not check sign-in status. Please retry.');
         }
       }
-    })(), flow.interval);
+    })(), Math.min(flow.interval, Math.max(0, flow.deadline - Date.now())));
     return () => {
       clearTimeout(timer);
       controller.abort();
