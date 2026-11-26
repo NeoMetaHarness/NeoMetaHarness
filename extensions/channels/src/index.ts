@@ -1,3 +1,4 @@
+import { isHermesProfileReference } from '@neometaharness/contracts';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -18,7 +19,6 @@ const telegramKey = 'TELEGRAM_BOT_TOKEN';
 const whatsappTokenKey = 'NEO_CHANNELS_TOKEN';
 const pluginName = 'neo-channels';
 const pluginAssets = fileURLToPath(new URL('./whatsapp-plugin/', import.meta.url));
-const profilePattern = /^(default|[a-z][a-z0-9_-]{0,47})$/;
 const chatPattern = /^[0-9A-Za-z@._-]{3,120}$/;
 
 type SenderRole = 'viewer' | 'member' | 'admin';
@@ -53,7 +53,7 @@ export interface ChannelsOptions {
 
 function canonical(profile: string): string {
   const name = profile.trim().toLowerCase();
-  if (!profilePattern.test(name)) throw new Error('Invalid channel profile');
+  if (!isHermesProfileReference(name)) throw new Error('Invalid channel profile');
   return name;
 }
 
@@ -357,7 +357,7 @@ export class ChannelsRuntime {
   /** Engine callback from the neo-channels plugin, before Hermes' own dispatch. */
   async inbound({ authorization, body }: { authorization?: string; body: unknown }) {
     const payload = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
-    const profile = typeof payload.profile === 'string' && profilePattern.test(payload.profile) ? payload.profile : undefined;
+    const profile = typeof payload.profile === 'string' && isHermesProfileReference(payload.profile) ? payload.profile : undefined;
     if (!profile) return { status: 400 };
     const entry = (await this.whatsappProfiles())[profile];
     const provided = /^Bearer ([0-9a-f]{64})$/.exec(authorization ?? '')?.[1];
@@ -401,7 +401,7 @@ export class ChannelsRuntime {
   /** Inbox report back to the WhatsApp chat, through Hermes' send seam (hermes_cli/send_cmd.py:196-289). */
   async deliver(reply: { channelId: string; inReplyTo: string; text: string }) {
     const match = /^whatsapp:([a-z0-9_-]{1,48}):([0-9A-Za-z@._-]{3,120})$/.exec(reply.channelId);
-    if (!match || !profilePattern.test(match[1]!)) throw new Error('Invalid WhatsApp channel');
+    if (!match || !isHermesProfileReference(match[1]!)) throw new Error('Invalid WhatsApp channel');
     const [, profile, chatId] = match;
     const entry = (await this.whatsappProfiles())[profile!];
     const sender = normalizeSender(chatId!);
@@ -604,7 +604,7 @@ export class ChannelsRuntime {
     const { profiles } = await this.hermes.listProfiles();
     const whatsapp = await this.whatsappProfiles();
     for (const { name } of profiles) {
-      if (!profilePattern.test(name)) continue;
+      if (!isHermesProfileReference(name)) continue;
       await this.project(name);
       const hasTelegram = !!(await this.vault.get(scope(name), telegramKey));
       // Only profiles with stored credentials pay for a platform listing at startup.

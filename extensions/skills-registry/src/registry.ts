@@ -6,6 +6,7 @@ import { appendFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, unlink, rmdir
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { inspectHub, type HubPreview, type HubReport, type UpstreamScan } from './hub.js';
+import { isHermesProfileReference } from '@neometaharness/contracts';
 import type { SkillProjection } from '@neometaharness/kernel';
 
 const exec = promisify(execFile);
@@ -48,6 +49,11 @@ function identity(profile: string, name: string): string {
 
 function safeName(name: string): string {
   if (!validName.test(name)) throw new Error(`Invalid skill or profile name ${name}`);
+  return name;
+}
+
+function safeHermesProfile(name: string): string {
+  if (!isHermesProfileReference(name)) throw new Error('Invalid Hermes profile name');
   return name;
 }
 
@@ -205,7 +211,7 @@ export class SkillRegistry implements SkillProjection {
     // route): it records the caller's provenance but can only lower trust to untrusted.
     origin: { kind: 'manual' | 'sync' | 'hub' | 'agent'; path?: string; reportId?: string } = { kind: 'manual' }): Promise<SkillRecord> {
     return this.serialize(async () => {
-      safeName(input.sourceProfile);
+      safeHermesProfile(input.sourceProfile);
       const name = input.name.includes('/') ? safeIdentity(input.name) : identity(input.sourceProfile, input.name);
       if (name.split('/')[0] !== input.sourceProfile) throw new Error('Skill owner differs from source profile');
       const content = input.content.replace(/\r\n/g, '\n');
@@ -357,7 +363,7 @@ export class SkillRegistry implements SkillProjection {
 
   async scanHub(input: { profile: string; identifier: string; preview: HubPreview; upstream: UpstreamScan }): Promise<HubReport> {
     return this.serialize(async () => {
-      safeName(input.profile);
+      safeHermesProfile(input.profile);
       const report = inspectHub(input.profile, input.identifier, input.preview, input.upstream);
       const previous = this.hubReports[report.id];
       if (previous?.approved && report.scannedAt - (previous.scannedAt ?? 0) < hubReportMaxAgeMs) Object.assign(report, { approved: true,
@@ -396,7 +402,7 @@ export class SkillRegistry implements SkillProjection {
 
   async installHub(input: { reportId: string; profile: string; identifier: string;
     preview: HubPreview; upstream: UpstreamScan }): Promise<SkillRecord> {
-    safeName(input.profile);
+    safeHermesProfile(input.profile);
     const report = inspectHub(input.profile, input.identifier, input.preview, input.upstream);
     const stored = this.hubReports[input.reportId];
     if (!stored || report.id !== input.reportId || Date.now() - (stored.scannedAt ?? 0) >= hubReportMaxAgeMs) {
@@ -471,7 +477,7 @@ export class SkillRegistry implements SkillProjection {
   }
 
   async sync(profile: string, home: string): Promise<SkillRecord[]> {
-    safeName(profile);
+    safeHermesProfile(profile);
     const seen = this.seen.get(profile) ?? new Map<string, string>();
     const imported: SkillRecord[] = [];
     for (const { name, source, content } of await this.candidates(home)) {
@@ -487,7 +493,7 @@ export class SkillRegistry implements SkillProjection {
   private key(engine: Engine, targetId: string): string { return `${engine}:${targetId}`; }
 
   async hermes(profile: string, home: string): Promise<string> {
-    this.homes.set(this.key('hermes', safeName(profile)), home);
+    this.homes.set(this.key('hermes', safeHermesProfile(profile)), home);
     if (!this.seen.has(profile)) {
       const initial = await this.candidates(home);
       this.seen.set(profile, new Map(initial.map(({ source, content }) => [source, this.fingerprint(content)])));
@@ -506,7 +512,8 @@ export class SkillRegistry implements SkillProjection {
     return this.serialize(async () => {
     safeIdentity(input.name);
     if (input.engine !== 'dsh' && input.engine !== 'hermes' && input.engine !== 'superagent') throw new Error('Unknown engine');
-    if (!/^[a-zA-Z0-9_-]{1,100}$/.test(input.targetId)) throw new Error('Invalid target');
+    if (input.engine === 'hermes') safeHermesProfile(input.targetId);
+    else if (!/^[a-zA-Z0-9_-]{1,100}$/.test(input.targetId)) throw new Error('Invalid target');
     if (input.assigned && !this.approved(await this.record(input.name))) throw new Error('Skill evaluation must pass before assignment');
     const next = this.assignments.filter((row) => row.name !== input.name || row.engine !== input.engine || row.targetId !== input.targetId);
     if (input.assigned) {
@@ -525,7 +532,8 @@ export class SkillRegistry implements SkillProjection {
 
   ceiling(engine: Engine, targetId: string): { ceiling: Autonomy } {
     if (engine !== 'dsh' && engine !== 'hermes' && engine !== 'superagent') throw new Error('Unknown engine');
-    if (!/^[a-zA-Z0-9_-]{1,100}$/.test(targetId)) throw new Error('Invalid target');
+    if (engine === 'hermes') safeHermesProfile(targetId);
+    else if (!/^[a-zA-Z0-9_-]{1,100}$/.test(targetId)) throw new Error('Invalid target');
     return { ceiling: this.ceilings[this.key(engine, targetId)] ?? 'suggest' };
   }
 

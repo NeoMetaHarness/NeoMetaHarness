@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { HermesProjector, type VaultService } from '@neometaharness/vault';
-import { subscriptionStatusSchema, type SubscriptionModelStatus } from '@neometaharness/contracts';
+import { isHermesProfileReference, subscriptionStatusSchema, type SubscriptionModelStatus } from '@neometaharness/contracts';
 
 export const MODEL_ROLES = ['default', 'fast', 'reasoning', 'coding', 'eval'] as const;
 export type ModelRole = typeof MODEL_ROLES[number];
@@ -106,9 +106,7 @@ export class WorkspaceStorage {
 const credentialName = (id: string) => `NEO_MODEL_${id.toUpperCase().replace(/-/g, '_')}_KEY`;
 const hermesProfile = (name: string) => {
   const profile = name.trim().toLowerCase();
-  if (profile !== 'default' && !/^[a-z0-9][a-z0-9_-]{0,47}$/.test(profile)) {
-    throw new Error('Invalid Hermes profile name');
-  }
+  if (!isHermesProfileReference(profile)) throw new Error('Invalid Hermes profile name');
   return profile;
 };
 

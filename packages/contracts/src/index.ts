@@ -218,7 +218,15 @@ export const superagentContract = {
   },
 };
 
-const hermesSubscriptionProfile = z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/);
+const hermesReservedProfiles = new Set(['current', 'hermes', 'test', 'tmp', 'root', 'sudo']);
+const hermesProfileId = z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/)
+  .refine((profile) => !hermesReservedProfiles.has(profile), 'Reserved Hermes profile name');
+export const hermesProfileNameSchema = hermesProfileId.refine((profile) => profile !== 'default',
+  'The default Hermes profile already exists');
+export const hermesProfileReferenceSchema = z.union([z.literal('default'), hermesProfileId]);
+export const isHermesProfileReference = (profile: string): boolean => hermesProfileReferenceSchema.safeParse(profile).success;
+
+const hermesSubscriptionProfile = hermesProfileReferenceSchema;
 const hermesSubscriptionSession = z.object({
   profile: hermesSubscriptionProfile,
   sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
@@ -274,10 +282,10 @@ export const hermesContract = {
   },
   profiles: {
     list: oc.output(z.object({ profiles: z.array(z.object({ name: z.string(), path: z.string() }).passthrough()) })),
-    create: oc.input(z.object({ name: z.string().min(1) })).output(z.object({
+    create: oc.input(z.object({ name: hermesProfileNameSchema })).output(z.object({
       ok: z.boolean(), name: z.string(), path: z.string(),
     }).passthrough()),
-    delete: oc.input(z.object({ name: z.string().min(1) })).output(z.unknown()),
+    delete: oc.input(z.object({ name: hermesProfileNameSchema })).output(z.unknown()),
   },
   runs: {
     start: oc.input(z.object({ profile: z.string().min(1), input: z.string().min(1),
@@ -517,7 +525,7 @@ export const voiceXaiContract = {
 };
 
 const modelProviderId = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/);
-const modelProfile = z.string().regex(/^(?:default|[a-z][a-z0-9_-]{0,47})$/);
+const modelProfile = hermesProfileReferenceSchema;
 const modelRole = z.enum(['default', 'fast', 'reasoning', 'coding', 'eval']);
 const modelSelection = z.object({ providerId: modelProviderId, model: z.string().trim().min(1) });
 const apiModelProvider = z.object({

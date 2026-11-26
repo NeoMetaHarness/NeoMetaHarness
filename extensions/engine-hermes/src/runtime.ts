@@ -1,5 +1,6 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { isHermesProfileReference } from '@neometaharness/contracts';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -141,7 +142,7 @@ export async function hermesPython(upstream: string, layout: HermesLayout, optio
 
 function profileName(name: string): string {
   const value = name.trim().toLowerCase();
-  if (value !== 'default' && !/^[a-z][a-z0-9_-]{0,47}$/.test(value)) throw new Error('Invalid Hermes profile name');
+  if (!isHermesProfileReference(value)) throw new Error('Invalid Hermes profile name');
   return value;
 }
 

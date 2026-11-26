@@ -12,6 +12,7 @@ import { RPCHandler as HttpRPCHandler } from '@orpc/server/node';
 import { implement, ORPCError } from '@orpc/server';
 import {
   computerActionSchema,
+  isHermesProfileReference,
   neoContract,
   type T3Event,
   type T3InstallStatus,
@@ -1922,7 +1923,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
         const name = writing ? payload.profile : profile;
         const validProfile = engine === 'dsh'
           ? typeof name === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(name)
-          : engine === 'hermes' && typeof name === 'string' && /^(default|[a-z][a-z0-9_-]{0,47})$/.test(name);
+          : engine === 'hermes' && typeof name === 'string' && isHermesProfileReference(name);
         if (!validProfile || typeof name !== 'string') { res.writeHead(400).end(); return; }
         const consumer = memoryConsumers.get(memoryKey(engine as 'hermes' | 'dsh', name));
         if (!consumer) { res.writeHead(401).end(); return; }

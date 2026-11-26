@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { HermesSubscription } from '../src/subscription.js';
+import { HermesRuntime } from '../src/runtime.js';
 
 const path = '/api/providers/oauth/openai-codex';
 const start = {
@@ -122,5 +123,15 @@ test('native sign-out requires capability and verifies the exact profile', async
   assert.deepEqual(await subscription.status('bot'), { signedIn: true, canLogout: true });
   assert.deepEqual(await subscription.logout('bot'), { signedIn: false, canLogout: false });
   await assert.rejects(subscription.logout('bot'), /does not expose sign-out/);
+  done();
+});
+test('reserved profile names cannot reach native subscription or profile creation', async () => {
+  const { subscription, done } = scripted([]);
+  const runtime = new HermesRuntime();
+  for (const profile of ['current', 'hermes', 'test', 'tmp', 'root', 'sudo']) {
+    await assert.rejects(subscription.start(profile), /Invalid Hermes profile name/);
+    await assert.rejects(subscription.logout(profile), /Invalid Hermes profile name/);
+    await assert.rejects(runtime.createProfile(profile), /Invalid Hermes profile name/);
+  }
   done();
 });

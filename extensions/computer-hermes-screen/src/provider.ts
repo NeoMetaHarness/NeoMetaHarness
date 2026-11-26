@@ -127,7 +127,9 @@ export class HermesScreenProvider implements ComputerProvider {
   async attach(target: string, context?: ComputerAttachContext): Promise<Computer> {
     if (this.disabled) throw new Error('Hermes screen provider disabled');
     const profile = /^hermes-screen:([a-z][a-z0-9_-]{0,47})$/.exec(target)?.[1];
-    if (!profile || !context?.workspaceId) throw new Error('Hermes profile and authenticated workspace required');
+    if (!profile || !isHermesProfileReference(profile) || !context?.workspaceId) {
+      throw new Error('Hermes profile and authenticated workspace required');
+    }
     if (this.sessions.has(target) || this.attaching.has(target)) throw new Error('Hermes screen already attached');
     const bridge = this.bridge();
     if (!bridge) throw new Error('Hermes is disabled');
@@ -169,3 +171,4 @@ export class HermesScreenProvider implements ComputerProvider {
     for (const id of this.sessions.keys()) this.release(id);
   }
 }
+import { isHermesProfileReference } from '@neometaharness/contracts';

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": { "typecheck": "tsc --noEmit", "test": "tsx --test test/provider.test.ts" },
   "dependencies": {
+    "@neometaharness/contracts": "workspace:*",
     "@neometaharness/kernel": "workspace:*",
     "@neometaharness/computers": "workspace:*",
     "@neometaharness/vault": "workspace:*",

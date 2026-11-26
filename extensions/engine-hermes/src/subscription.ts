@@ -1,4 +1,6 @@
 type DashboardRequest = (path: string, method?: string) => Promise<Response>;
+import { isHermesProfileReference } from '@neometaharness/contracts';
+
 const providerPath = '/api/providers/oauth/openai-codex';
 class SessionNotFound extends Error {}
 
@@ -28,7 +30,7 @@ export class HermesSubscription {
   }
 
   private query(profile: string): string {
-    if (!/^[a-z][a-z0-9_-]{0,47}$/.test(profile)) throw new Error('Invalid Hermes profile name');
+    if (!isHermesProfileReference(profile)) throw new Error('Invalid Hermes profile name');
     return profile === 'default' ? '' : '?profile=' + encodeURIComponent(profile);
   }
 
