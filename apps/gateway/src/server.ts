@@ -650,7 +650,7 @@ export async function startGateway(options: GatewayOptions): Promise<GatewayInst
     return context.workspaceId;
   };
   const invalidateSubscription = async (input: { engine: 'hermes'; profile: string } | { engine: 't3' }, context: GatewayAuthContext) => {
-    const workspace = modelsWorkspace(context);
+    const workspace = mode === 'desktop' ? undefined : context.workspaceId;
     // Native engines are deployment-wide. Revoke the deployment projection and the caller's record.
     await invokeModels('providers/invalidate-subscription', { ...input, workspace: DEPLOYMENT_CONFIG });
     if (workspace && workspace !== DEPLOYMENT_CONFIG) {

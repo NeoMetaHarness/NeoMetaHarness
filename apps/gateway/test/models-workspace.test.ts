@@ -139,6 +139,7 @@ test('P1-13 server: model provider keys, roles and router settings are each work
       engines: { hermes: { status: 'approved', profile: 'logout-bot' }, t3: { status: 'signed-in' } } };
     await hub.saveProvider(approved);
     await hub.saveProvider(approved, finance.id);
+    await hub.saveProvider(approved, corp.id);
     await hub.setOverride({ profile: 'logout-bot', providerId: approved.id, model: 'gpt-5' });
     const logoutPath = '/x/engine-hermes/subscription/logout';
     const hasRoute = gateway.kernel.hasRoute.bind(gateway.kernel);
@@ -147,7 +148,7 @@ test('P1-13 server: model provider keys, roles and router settings are each work
     const hasRouteMock = t.mock.method(gateway.kernel, 'hasRoute', (path: string) => path === logoutPath || hasRoute(path));
     const invokeRouteMock = t.mock.method(gateway.kernel, 'invokeRoute', async (path: string, method: string, body?: unknown, signal?: AbortSignal) => {
       if (path !== logoutPath) return invokeRoute(path, method, body, signal);
-      for (const workspace of ['default', finance.id]) {
+      for (const workspace of ['default', corp.id]) {
         const record = (await hub.state(workspace)).providers.find((item: any) => item.id === approved.id);
         assert.equal(record.engines.hermes.status, 'signed-out');
         assert.equal(record.engines.t3.status, 'signed-in');
@@ -157,10 +158,17 @@ test('P1-13 server: model provider keys, roles and router settings are each work
       throw new Error('scripted native logout failure');
     });
     try {
-      assert.equal((await rpc(financeAdmin, 'x/engine-hermes/subscription/logout', { profile: 'current' })).status, 400);
-      assert.equal((await rpc(financeAdmin, 'x/engine-hermes/subscription/logout', { profile: 'logout-bot' })).status, 500);
+      assert.equal((await rpc(financeAdmin, 'x/engine-hermes/subscription/logout', { profile: 'logout-bot' })).status, 403);
+      assert.equal((await rpc(corpOwner, 'x/models/providers/invalidate-subscription', { engine: 'hermes', profile: 'logout-bot' })).status, 404);
+      assert.equal((await rpc(corpOwner, 'x/engine-hermes/subscription/logout', { profile: 'current' })).status, 400);
+      assert.equal(nativeChecked, false);
+      for (const workspace of ['default', corp.id, finance.id]) {
+        assert.equal((await hub.state(workspace)).providers.find((item: any) => item.id === approved.id).engines.hermes.status, 'approved');
+      }
+      assert.equal((await rpc(corpOwner, 'x/engine-hermes/subscription/logout', { profile: 'logout-bot' })).status, 500);
       assert.equal(nativeChecked, true, 'native failure happened after approval revocation');
-      assert.equal((await rpc(financeAdmin, 'x/models/providers/list')).body.find((item: any) => item.id === approved.id).engines.hermes.status, 'signed-out');
+      assert.equal((await rpc(corpOwner, 'x/models/providers/list')).body.find((item: any) => item.id === approved.id).engines.hermes.status, 'signed-out');
+      assert.equal((await hub.state(finance.id)).providers.find((item: any) => item.id === approved.id).engines.hermes.status, 'approved');
     } finally {
       invokeRouteMock.mock.restore();
       hasRouteMock.mock.restore();
