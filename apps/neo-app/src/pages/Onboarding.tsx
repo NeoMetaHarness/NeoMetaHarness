@@ -116,6 +116,8 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
   const startedAt = useRef(Date.now());
   const [stepStartedAt, setStepStartedAt] = useState(Date.now);
   const lifetime = useRef(new AbortController());
+  const subscriptionSave = useRef<AbortController | null>(null);
+  const subscriptionGeneration = useRef(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -226,6 +228,9 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
   }, [stage, loading, loadError]);
 
   function advance(next: Stage, bot = createdBot, deferred = subscriptionModel) {
+    subscriptionGeneration.current++;
+    subscriptionSave.current?.abort();
+    subscriptionSave.current = null;
     setStepStartedAt(Date.now());
     setError('');
     if (next === 'bot' || next === 'model' || next === 'owner') {
@@ -315,11 +320,22 @@ export default function Onboarding({ onOpen, onSkip, onCompleted, onIncomplete }
   }
 
   async function completeSubscription() {
-    const saved = await saveSubscription(api, 'hermes', createdBot);
-    if (!saved) throw new Error('Could not save subscription');
-    await api.x.models.override.set({ profile: createdBot, providerId: saved.id, model: subscriptionModel });
-    setProviders((previous) => [...previous.filter((item) => item.id !== saved.id), saved]);
-    advance('channel', createdBot);
+    subscriptionSave.current?.abort();
+    const controller = new AbortController();
+    subscriptionSave.current = controller;
+    const generation = ++subscriptionGeneration.current;
+    const signal = AbortSignal.any([lifetime.current.signal, controller.signal]);
+    try {
+      const saved = await saveSubscription(api, 'hermes', createdBot, true, signal);
+      if (signal.aborted || generation !== subscriptionGeneration.current) return;
+      if (!saved) throw new Error('Could not save subscription');
+      await api.x.models.override.set({ profile: createdBot, providerId: saved.id, model: subscriptionModel }, { signal });
+      if (signal.aborted || generation !== subscriptionGeneration.current) return;
+      setProviders((previous) => [...previous.filter((item) => item.id !== saved.id), saved]);
+      advance('channel', createdBot);
+    } finally {
+      if (subscriptionSave.current === controller) subscriptionSave.current = null;
+    }
   }
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {

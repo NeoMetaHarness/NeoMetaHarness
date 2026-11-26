@@ -169,8 +169,8 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
   </div>;
 }
 
-export async function saveSubscription(api: Client, engine: Engine, profile?: string, signedIn = true) {
-  const latest = await api.x.models.providers.list();
+export async function saveSubscription(api: Client, engine: Engine, profile?: string, signedIn = true, signal?: AbortSignal) {
+  const latest = await api.x.models.providers.list(undefined, { signal });
   const records = latest.filter((item): item is Subscription => item.kind === 'subscription' && item.vendor === 'openai');
   const existing = engine === 'hermes'
     ? records.find((item) => item.engines.hermes && (item.engines.hermes.profile ?? 'default') === profile)
@@ -182,7 +182,7 @@ export async function saveSubscription(api: Client, engine: Engine, profile?: st
   const status = signedIn ? 'signed-in' : 'signed-out';
   const engines: Subscription['engines'] = { ...existing?.engines, [engine]: engine === 'hermes' ? { status, profile } : { status } };
   return api.x.models.providers.put({ id, name: existing?.name ?? 'ChatGPT / Codex', kind: 'subscription', vendor: 'openai',
-    status: Object.values(engines).some((entry) => ['signed-in', 'approved'].includes(entry.status)) ? 'signed-in' : 'signed-out', engines });
+    status: Object.values(engines).some((entry) => ['signed-in', 'approved'].includes(entry.status)) ? 'signed-in' : 'signed-out', engines }, { signal });
 }
 
 export function HermesProfileSignIn({ api, profile, onApproved, onLogout }: {
