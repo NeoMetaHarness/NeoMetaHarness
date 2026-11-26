@@ -75,8 +75,21 @@ try {
   };
   function installFake() {
     const fake = window.__subscriptionFake = {
-      calls: [], profiles: [], providers: [], selection: null,
-      starts: 0, polls: 0, hermesSignedIn: false, approve: false, t3SignedIn: false,
+      calls: [], profiles: [{ name: 'alternate-bot' }], providers: [], selection: null,
+      starts: 0, polls: 0, runStarts: [], cancelCalls: [], roleReads: [],
+      hermesSignedInProfiles: { default: false, 'first-bot': false, 'alternate-bot': true },
+      approve: false, failNextPoll: false, deferNextPoll: false, pendingPoll: null,
+      lastPollSignal: null, t3SignedIn: false, role: 'admin',
+    };
+    fake.resolvePendingPoll = (status = 'approved') => {
+      const pending = fake.pendingPoll;
+      if (!pending) return false;
+      if (status === 'approved') fake.hermesSignedInProfiles[pending.profile] = true;
+      fake.pendingPoll = null;
+      pending.resolve(Response.json({ json: {
+        sessionId: pending.sessionId, status, signedIn: status === 'approved',
+      } }));
+      return true;
     };
     const nativeFetch = window.fetch.bind(window);
     const flow = (phase) => ({
@@ -86,11 +99,14 @@ try {
     window.fetch = async (input, init) => {
       const request = new Request(input, init);
       const path = new URL(request.url).pathname;
-      if (!/^\/(x|onboarding|extensions)\//.test(path)) return nativeFetch(input, init);
+      if (!/^\/(x|onboarding|extensions|auth)\//.test(path)) return nativeFetch(input, init);
       const data = (await request.json().catch(() => ({}))).json ?? {};
       fake.calls.push({ path, data });
       let result;
       switch (path) {
+        case '/auth/organization/get-active-member-role':
+          fake.roleReads.push(fake.role);
+          return Response.json({ role: fake.role });
         case '/onboarding/get':
           result = { completed: false, completedAt: null, ownerName: 'Fake Owner', workspaceName: 'Fake Workspace', mode: 'desktop' }; break;
         case '/extensions/enable': result = { id: data.id, status: 'running' }; break;
@@ -108,28 +124,45 @@ try {
           result = { ok: true, name: data.name, path: '/fake/' + data.name };
           fake.profiles.push(result); break;
         case '/x/engine-hermes/subscription/status':
-          result = { signedIn: data.profile === 'first-bot' && fake.hermesSignedIn, canLogout: data.profile === 'first-bot' && fake.hermesSignedIn }; break;
+          result = { signedIn: fake.hermesSignedInProfiles[data.profile] === true,
+            canLogout: fake.hermesSignedInProfiles[data.profile] === true }; break;
         case '/x/engine-hermes/subscription/start':
           fake.starts++;
           result = { sessionId: 'fake-' + fake.starts, verificationUrl: 'https://example.invalid/authorize', userCode: 'FAKE-CODE', pollInterval: 0.25, expiresIn: 60 }; break;
         case '/x/engine-hermes/subscription/poll':
           fake.polls++;
-          if (fake.starts === 2) result = { sessionId: data.sessionId, status: 'error', signedIn: false };
-          else {
-            fake.hermesSignedIn = fake.approve;
-            result = { sessionId: data.sessionId, status: fake.approve ? 'approved' : 'pending', signedIn: fake.approve };
+          fake.lastPollSignal = request.signal;
+          if (fake.deferNextPoll) {
+            fake.deferNextPoll = false;
+            return new Promise((resolve) => {
+              fake.pendingPoll = { profile: data.profile, sessionId: data.sessionId, resolve };
+            });
           }
+          if (fake.failNextPoll) {
+            fake.failNextPoll = false;
+            throw new Error('Scripted subscription polling failure');
+          }
+          if (fake.approve) fake.hermesSignedInProfiles[data.profile] = true;
+          result = { sessionId: data.sessionId, status: fake.approve ? 'approved' : 'pending', signedIn: fake.approve };
           break;
         case '/x/engine-hermes/subscription/cancel':
+          fake.cancelCalls.push(data);
           result = { sessionId: data.sessionId, status: 'cancelled', signedIn: false }; break;
+        case '/x/engine-hermes/subscription/logout':
+          fake.hermesSignedInProfiles[data.profile] = false;
+          result = { signedIn: false, canLogout: false }; break;
+        case '/x/engine-hermes/runs/start':
+          fake.runStarts.push(data);
+          result = { run_id: 'fake-run-' + fake.runStarts.length }; break;
         case '/x/engine-t3/subscription/status':
           result = { providers: [
-            { instanceId: 'codex', provider: 'codex', status: fake.t3SignedIn ? 'authenticated' : 'unauthenticated', signedIn: fake.t3SignedIn, canStart: true, canLogout: fake.t3SignedIn, accountLabel: null, guidance: 'Sign in through T3' },
-            { instanceId: 'claudeAgent', provider: 'claude', status: 'authenticated', signedIn: true, canStart: false, canLogout: false, accountLabel: 'Claude', guidance: 'Claude sign-in detected by T3.' },
+            { instanceId: 'codex', provider: 'codex', status: fake.t3SignedIn ? 'authenticated' : 'unauthenticated', signedIn: fake.t3SignedIn, canStart: true, canLogout: fake.t3SignedIn, accountLabel: null, guidance: fake.t3SignedIn ? 'Sign out in T3' : 'Sign in through T3' },
+            { instanceId: 'claudeAgent', provider: 'claude', status: 'authenticated', signedIn: true, canStart: false, canLogout: false, accountLabel: 'Claude', guidance: 'Sign out in T3' },
           ] }; break;
         case '/x/engine-t3/subscription/start': result = flow('waiting'); break;
         case '/x/engine-t3/subscription/poll': fake.t3SignedIn = true; result = flow('succeeded'); break;
         case '/x/engine-t3/subscription/cancel': result = flow('cancelled'); break;
+        case '/x/engine-t3/subscription/logout': fake.t3SignedIn = false; result = flow('cancelled'); break;
         default: throw new Error('Unexpected fake RPC ' + path);
       }
       return Response.json({ json: result });
@@ -146,6 +179,10 @@ try {
     await eventually(() => evaluate(element + ' && !' + element + '.disabled && ' + element + '.getAttribute("aria-disabled") !== "true"'), id + ' enabled');
     await evaluate(element + '.click()');
   };
+  const clickBack = async () => {
+    await eventually(() => evaluate('Array.from(document.querySelectorAll("button")).some(button => button.textContent.trim() === "Back")'), 'Back navigation');
+    await evaluate('Array.from(document.querySelectorAll("button")).find(button => button.textContent.trim() === "Back").click()');
+  };
   const value = (id) => evaluate(selector(id) + '.value');
   const waitText = (text) => eventually(() => evaluate('document.body.innerText.includes(' + JSON.stringify(text) + ')'), text);
   await click('onboarding-owner-next');
@@ -156,14 +193,37 @@ try {
   await click('onboarding-subscription-next');
   await click('onboarding-bot-create');
   const prefix = 'subscription-hermes-first-bot';
+  await evaluate('window.__subscriptionFake.deferNextPoll = true');
   await click(prefix + '-start');
-  await eventually(() => evaluate('window.__subscriptionFake.polls > 0'), 'Hermes pending poll');
+  await eventually(() => evaluate('window.__subscriptionFake.pendingPoll !== null'), 'held Hermes approval poll');
+  await waitText('Waiting for approval');
+  assert.equal(await evaluate('!document.querySelector("[data-testid=onboarding-channel-next]") && !document.querySelector("[data-testid=onboarding-chat-send]")'), true,
+    'the channel and first-chat steps stay unavailable while Hermes approval is pending');
+  assert.equal(await evaluate('window.__subscriptionFake.runStarts.length'), 0, 'no first chat run starts before bot-profile approval');
+  await clickBack();
+  await eventually(() => evaluate('!!document.querySelector("[data-testid=onboarding-wizard] [data-stage=model]")'), 'return to model step');
+  await eventually(() => evaluate('window.__subscriptionFake.cancelCalls.length > 0'), 'pending Hermes approval cancellation');
+  assert.equal(await evaluate('window.__subscriptionFake.lastPollSignal.aborted'), true, 'Back aborts the pending approval poll');
+  assert.equal(await evaluate('window.__subscriptionFake.resolvePendingPoll("approved")'), true, 'release a late approval response after navigation');
+  await delay(350);
+  assert.equal(await evaluate('!!document.querySelector("[data-testid=onboarding-wizard] [data-stage=model]")'), true,
+    'a late approval response cannot advance onboarding to the channel step');
+  assert.equal(await evaluate('!document.querySelector("[data-testid=onboarding-channel-next]") && !document.querySelector("[data-testid=onboarding-chat-send]")'), true);
+  assert.equal(await evaluate('window.__subscriptionFake.runStarts.length'), 0);
+
+  await evaluate('window.__subscriptionFake.hermesSignedInProfiles["first-bot"] = false; window.__subscriptionFake.approve = false');
+  await click('onboarding-subscription-next');
+  await click('onboarding-bot-create');
+  await visible(prefix);
+  await click(prefix + '-start');
+  await eventually(() => evaluate('window.__subscriptionFake.polls > 1'), 'Hermes pending poll after returning to bot step');
   await waitText('Waiting for approval');
   await click(prefix + '-cancel');
+  await evaluate('window.__subscriptionFake.failNextPoll = true');
   await click(prefix + '-start');
-  await waitText('Sign-in did not complete');
+  await waitText('Could not check sign-in status');
   await click(prefix + '-start');
-  await eventually(() => evaluate('window.__subscriptionFake.starts === 3'), 'Hermes retry');
+  await eventually(() => evaluate('window.__subscriptionFake.starts === 4'), 'Hermes retry');
   await waitText('Waiting for approval');
   await evaluate('window.__subscriptionFake.approve = true');
   await visible('onboarding-created-bot');
@@ -176,18 +236,103 @@ try {
   assert.ok(created >= 0);
   assert.ok(state.calls.filter(call => call.path.includes('/engine-hermes/subscription/')).every(call => call.data.profile === 'first-bot'));
   assert.ok(state.calls.findIndex(call => call.path.endsWith('/subscription/start')) > created);
+  assert.equal(state.runStarts.length, 0, 'approval advances onboarding without automatically starting a chat');
 
+  await click('onboarding-channel-next');
+  await visible('onboarding-chat-message');
+  await evaluate(selector('onboarding-chat-message') + '.focus()');
+  await evaluate(selector('onboarding-chat-message') + '.select()');
+  await send('Input.insertText', { text: 'Hello from the first bot' });
+  await click('onboarding-chat-send');
+  await eventually(() => evaluate('window.__subscriptionFake.runStarts.length === 1'), 'first chat run start after approval');
+  const firstChat = await evaluate('window.__subscriptionFake.runStarts[0]');
+  assert.equal(firstChat.profile, 'first-bot');
+  assert.equal(firstChat.input, 'Hello from the first bot');
+
+  await evaluate(`window.__subscriptionFake.providers.push({ id: 'chatgpt-alt', name: 'Alternate profile subscription', kind: 'subscription', vendor: 'openai', status: 'signed-in', engines: { hermes: { status: 'signed-in', profile: 'alternate-bot' } } });`);
   await evaluate('history.pushState({}, "", "/settings/models" + location.search); window.dispatchEvent(new PopStateEvent("popstate"));');
   await visible('settings-models');
-  await waitText('openai subscription');
-  await waitText('signed-in');
+  await waitText('Saved subscription status');
+  await waitText('Hermes · signed-in · profile first-bot');
   await waitText('Claude sign-in detected');
+  await waitText('Sign out in T3');
+  const claudeSignOut = await evaluate(`(() => {
+    const row = Array.from(document.querySelectorAll('.subscription-row')).find(item => item.innerText.includes('Claude sign-in detected'));
+    return row ? { guidance: row.innerText.includes('Sign out in T3'), signOutControl: !!row.querySelector('button') } : null;
+  })()`);
+  assert.deepEqual(claudeSignOut, { guidance: true, signOutControl: false },
+    'authenticated Claude without a logout seam shows Sign out in T3 guidance');
+  await visible('subscription-hermes-profile');
+  await visible('models-provider-id');
+  await visible('subscription-t3-codex-start');
+
+  await evaluate('window.__subscriptionFake.failNextPoll = true');
+  await click('subscription-hermes-default-start');
+  await waitText('FAKE-CODE');
+  await eventually(() => evaluate('!!document.querySelector("[data-testid=subscription-hermes-default] [role=alert]")'), 'Model Hub polling error alert');
+  const pollFailure = await evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; const retry = row.querySelector('[data-testid="subscription-hermes-default-start"]'); return { alert: !!row.querySelector('[role="alert"]'), retry: !!retry && retry.textContent.trim() === 'Retry' && !retry.disabled, code: row.innerText.includes('FAKE-CODE'), url: !!row.querySelector('a[href="https://example.invalid/authorize"]') }; })()`);
+  assert.deepEqual(pollFailure, { alert: true, retry: true, code: false, url: false },
+    'a failed Model Hub poll clears the device code and URL, announces an alert, and exposes Retry');
+
+  await click('subscription-hermes-profile');
+  await eventually(() => evaluate('!!document.querySelector("[role=listbox] [role=option]")'), 'Hermes profile options');
+  await evaluate('Array.from(document.querySelectorAll("[role=listbox] [role=option]")).find(option => option.textContent.trim() === "alternate-bot").click()');
+  await eventually(() => evaluate(selector('subscription-hermes-profile') + '.textContent.trim() === "alternate-bot"'), 'alternate Hermes profile selection');
+  await eventually(() => evaluate('window.__subscriptionFake.calls.some(call => call.path.endsWith("/subscription/status") && call.data.profile === "alternate-bot")'), 'alternate Hermes profile status request');
+  await visible('subscription-hermes-alternate-bot-logout');
+  assert.equal(await evaluate('window.__subscriptionFake.hermesSignedInProfiles["alternate-bot"]'), true,
+    'switching profiles reads the selected Hermes profile sign-in status');
+  await click('subscription-hermes-alternate-bot-logout');
+  await eventually(() => evaluate('window.__subscriptionFake.hermesSignedInProfiles["alternate-bot"] === false && window.__subscriptionFake.providers.some(provider => provider.engines?.hermes?.profile === "alternate-bot" && provider.engines.hermes.status === "signed-out")'), 'Hermes profile sign-out saved');
+  await waitText('Hermes · signed-out · profile alternate-bot');
+  assert.equal(await evaluate('window.__subscriptionFake.calls.some(call => call.path.endsWith("/subscription/logout") && call.data.profile === "alternate-bot")'), true,
+    'sign-out targets the selected Hermes profile');
+
   await click('local-preset-lm-studio');
   assert.equal(await value('models-provider-id'), 'lm-studio');
   assert.equal(await value('models-provider-url'), 'http://127.0.0.1:1234/v1');
   await click('subscription-t3-codex-start');
   await eventually(() => evaluate('window.__subscriptionFake.providers.some(p => p.engines?.t3?.status === "signed-in")'), 'T3 subscription saved');
+  await waitText('T3 · signed-in');
   await waitText('Signed in');
+
+  const assertReadOnlyRole = async (role) => {
+    await evaluate('window.__subscriptionFake.role = ' + JSON.stringify(role));
+    await evaluate('history.pushState({}, "", "/onboarding" + location.search); window.dispatchEvent(new PopStateEvent("popstate"));');
+    await visible('onboarding-wizard');
+    await evaluate('history.pushState({}, "", "/settings/models" + location.search); window.dispatchEvent(new PopStateEvent("popstate"));');
+    await visible('settings-models');
+    await eventually(() => evaluate('window.__subscriptionFake.roleReads.includes(' + JSON.stringify(role) + ')'), role + ' workspace role lookup');
+    await delay(100);
+    const state = await evaluate(`(() => ({
+      providerForm: !!document.querySelector('[data-testid="models-provider-id"]'),
+      providerSave: !!document.querySelector('[data-testid="models-save-provider"]'),
+      providerActions: !!document.querySelector('.models-list .models-actions'),
+      localPreset: !!document.querySelector('[data-testid="local-preset-ollama"]'),
+      roleMapping: !!document.querySelector('[data-testid="models-role-default-provider"]'),
+      roleSave: !!document.querySelector('[data-testid="models-save-role-default"]'),
+      botOverride: !!document.querySelector('[data-testid="models-bot-profile"]'),
+      overrideSave: !!document.querySelector('[data-testid="models-save-override"]'),
+      hermesProfile: !!document.querySelector('[data-testid="subscription-hermes-profile"]'),
+      hermesSignIn: !!document.querySelector('[data-testid="subscription-hermes-first-bot-start"]'),
+      hermesSignOut: !!document.querySelector('[data-testid="subscription-hermes-first-bot-logout"]'),
+      t3SignIn: !!document.querySelector('[data-testid="subscription-t3-codex-start"]'),
+      t3SignOut: !!document.querySelector('[data-testid="subscription-t3-codex-logout"]'),
+      savedStatus: document.body.innerText.includes('Saved subscription status'),
+      hermesStatus: document.body.innerText.includes('Hermes · signed-in · profile first-bot'),
+      t3Status: document.body.innerText.includes('T3 · signed-in'),
+      claudeStatus: document.body.innerText.includes('Claude sign-in detected'),
+      signOutGuidance: document.body.innerText.includes('Sign out in T3'),
+    }))()`);
+    assert.deepEqual(state, {
+      providerForm: false, providerSave: false, providerActions: false, localPreset: false,
+      roleMapping: false, roleSave: false, botOverride: false, overrideSave: false,
+      hermesProfile: false, hermesSignIn: false, hermesSignOut: false, t3SignIn: false, t3SignOut: false,
+      savedStatus: true, hermesStatus: true, t3Status: true, claudeStatus: true, signOutGuidance: true,
+    }, `${role} can read Model Hub status without provider-management or sign-in controls`);
+  };
+  await assertReadOnlyRole('member');
+  await assertReadOnlyRole('viewer');
   console.log('P7-17 scripted subscription UI PASS');
 } finally {
   socket?.close();
