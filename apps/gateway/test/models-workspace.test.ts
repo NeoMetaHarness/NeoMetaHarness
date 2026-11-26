@@ -177,6 +177,43 @@ test('P1-13 server: model provider keys, roles and router settings are each work
     // Disabled extension: the deployment routes report 404 like the workspace ones.
     assert.equal((await rpc(corpOwner, 'extensions/disable', { id: 'models-router-panda' })).status, 200);
     assert.equal((await rpc(corpOwner, 'x/models-router-panda/deployment/settings/get')).status, 404);
+    // Native sign-out must remain available with the Model Hub disabled.
+    assert.equal((await rpc(corpOwner, 'extensions/disable', { id: 'models' })).status, 200);
+    assert.equal(gateway.kernel.hasRoute('/x/models/providers/invalidate-subscription'), false);
+    const t3LogoutPath = '/x/engine-t3/subscription/logout';
+    const nativeLogouts: string[] = [];
+    const hermesSignedOut = { signedIn: false, canLogout: false };
+    const t3SignedOut = { instanceId: 'codex', phase: 'idle', flowId: null, expiresAt: null, verificationUrl: null, userCode: null };
+    const disabledHasRouteMock = t.mock.method(gateway.kernel, 'hasRoute', (path: string) =>
+      path === logoutPath || path === t3LogoutPath || hasRoute(path));
+    const disabledInvokeRouteMock = t.mock.method(gateway.kernel, 'invokeRoute', async (path: string, method: string, body?: unknown, signal?: AbortSignal) => {
+      if (path === logoutPath) {
+        assert.equal(method, 'RPC');
+        assert.deepEqual(body, { profile: 'logout-bot' });
+        nativeLogouts.push(path);
+        return hermesSignedOut;
+      }
+      if (path === t3LogoutPath) {
+        assert.equal(method, 'RPC');
+        assert.deepEqual(body, { instanceId: 'codex' });
+        nativeLogouts.push(path);
+        return t3SignedOut;
+      }
+      return invokeRoute(path, method, body, signal);
+    });
+    try {
+      const hermesLogout = await rpc(corpOwner, 'x/engine-hermes/subscription/logout', { profile: 'logout-bot' });
+      assert.equal(hermesLogout.status, 200);
+      assert.deepEqual(hermesLogout.body, hermesSignedOut);
+      const t3Logout = await rpc(corpOwner, 'x/engine-t3/subscription/logout', { instanceId: 'codex' });
+      assert.equal(t3Logout.status, 200);
+      assert.deepEqual(t3Logout.body, t3SignedOut);
+      assert.deepEqual(nativeLogouts, [logoutPath, t3LogoutPath]);
+    } finally {
+      disabledInvokeRouteMock.mock.restore();
+      disabledHasRouteMock.mock.restore();
+    }
+
     console.log('P1-13_DEPLOYMENT_MODELS PASS deployment model and router configuration: deployment owner only, separate from every workspace');
   } finally {
     await gateway.close();
