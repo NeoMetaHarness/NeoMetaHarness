@@ -1,6 +1,6 @@
 {
   "productName": "Neo Meta Harness",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "identifier": "com.neometaharness.app",
   "build": {
     "frontendDist": "../dist",

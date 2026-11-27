@@ -4,6 +4,23 @@ All notable changes to Neo Meta Harness. Versions follow [Semantic Versioning](h
 Every release is a full GitHub release (never a pre-release or draft); see [docs/release.md](docs/release.md).
 The release notes in each update manifest (`latest.json`) are the section for that version below.
 
+## [1.0.2] - 2026-11-28
+
+Subscription sign-in, a premium light and dark design, and interactive replies (P7-17, P7-18, P7-19).
+
+### Models and sign-in
+- Onboarding and the Model Hub offer subscription sign-in for each engine (P7-17). Hermes signs in to ChatGPT/Codex with a device code for the selected bot profile; local T3 uses its own sign-in. Each engine keeps its own credentials; Neo stores only the provider record and its status.
+- Claude: Neo detects an existing Claude Code sign-in through T3 and explains how to sign in or out there.
+- Local AI presets for Ollama (`http://127.0.0.1:11434/v1`) and LM Studio (`http://127.0.0.1:1234/v1`), next to the OpenAI-compatible API option.
+- Sign-in can be cancelled, expires cleanly, and can be signed out from the Model Hub. Signing out revokes the stored approval first. Only owners and admins can manage sign-ins and providers; members and viewers see the saved status.
+
+### Design
+- One Neo theme on Astryx with light and dark modes: System, Light or Dark in **Settings > Appearance**, applied before the first paint, and followed by the desktop title bar (P7-18).
+- Every page polished to it: shell and navigation, setup screens, Settings, Extensions and engine install, Registry, Agents, Channels, Computers, Memory, Metrics, Skills, onboarding, Coding, Inbox, Routines, Tasks and the Model Hub. Contrast meets WCAG AA in both modes.
+
+### Interactive replies
+- Hermes and T3 conversations can show interactive replies (forms, choices, buttons) rendered with Astryx, and send your answer back to the conversation (P7-19, A2UI). Turning the extension off falls back to plain text.
+
 ## [1.0.1] - 2026-11-24
 
 Engines install inside the app (P7-16). In 1.0.0 only DeepSeek Harness worked in an installed app: Hermes, the super agent and T3 needed a development checkout.
