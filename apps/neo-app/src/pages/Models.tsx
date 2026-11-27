@@ -35,7 +35,7 @@ export default function Models() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [workspaceRole, setWorkspaceRole] = useState<WorkspaceRole | null>(null);
+  const [workspaceRole, setWorkspaceRole] = useState<WorkspaceRole | null | undefined>(undefined);
   const canManage = workspaceRole === 'owner' || workspaceRole === 'admin';
 
   const refresh = useCallback(async () => {
@@ -51,7 +51,6 @@ export default function Models() {
     const controller = new AbortController();
     const token = gatewayToken();
     void fetch(`${gatewayUrl()}/auth/organization/get-active-member-role`, {
-      credentials: 'include',
       headers: token ? { authorization: `Bearer ${token}` } : {},
       signal: controller.signal,
     }).then(async (response) => {
@@ -132,7 +131,9 @@ export default function Models() {
     });
   }
 
-  return <main className="models-page" data-testid="settings-models">
+  // The page is ready once the workspace role is known (undefined = still loading; null = unknown, read-only).
+  return <main className="models-page" data-testid={workspaceRole === undefined ? undefined : 'settings-models'}
+    aria-busy={workspaceRole === undefined}>
     <header className="models-heading"><Text>Settings / Models</Text><Heading level={1}>Models</Heading></header>
     <Text as="p">Connect model providers and assign models to agent roles. API keys are stored in the vault.</Text>
     {error && <Banner role="alert" status="error" title={error} endContent={canManage ? <Button label="Enable Model Hub" isDisabled={!!busy}
