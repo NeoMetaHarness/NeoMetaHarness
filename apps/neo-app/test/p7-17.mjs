@@ -313,12 +313,13 @@ try {
   await eventually(() => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; return row.innerText.includes('FAKE-CODE') && !!row.querySelector('a[href="https://example.invalid/authorize"]'); })()`), 'device code and authorization URL before expiry');
   await eventually(() => evaluate(`(() => { const fake = window.__subscriptionFake; return !!fake.pendingCancel && fake.cancelCalls.some(call => call.profile === 'default' && call.sessionId === 'fake-' + fake.starts); })()`), 'expired remote session cancellation');
   await eventually(() => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; return !row.innerText.includes('FAKE-CODE') && !row.querySelector('a[href="https://example.invalid/authorize"]'); })()`), 'expired authorization details cleared before cancellation resolves');
-  await evaluate('window.__subscriptionFake.pendingCancel()');
-  await eventually(() => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; const retry = row.querySelector('[data-testid="subscription-hermes-default-start"]'); return row.querySelector('[role="alert"]')?.innerText.includes('Sign-in expired') && retry?.textContent.trim() === 'Retry' && !retry.disabled && retry.getAttribute('aria-disabled') !== 'true' && !row.innerText.includes('FAKE-CODE') && !row.querySelector('a[href="https://example.invalid/authorize"]'); })()`), 'expiry alert and enabled Retry with authorization details cleared');
+  await eventually(() => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; const retry = row.querySelector('[data-testid="subscription-hermes-default-start"]'); return row.querySelector('[role="alert"]')?.innerText.includes('Sign-in expired') && retry?.textContent.trim() === 'Retry' && !retry.disabled && retry.getAttribute('aria-disabled') !== 'true' && !row.innerText.includes('FAKE-CODE') && !row.querySelector('a[href="https://example.invalid/authorize"]'); })()`), 'expiry alert and enabled Retry while remote cancellation remains unresolved');
+  assert.equal(await evaluate('!!window.__subscriptionFake.pendingCancel'), true, 'expiry UI does not wait for remote cancellation');
 
   await evaluate('window.__subscriptionFake.nextExpiresIn = 2; window.__subscriptionFake.deferNextPoll = true');
   await click('subscription-hermes-default-start');
   await eventually(() => evaluate('window.__subscriptionFake.pendingPoll !== null'), 'held Model Hub poll before expiry');
+  await evaluate('window.__subscriptionFake.pendingCancel()');
   await eventually(() => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; return row.innerText.includes('FAKE-CODE') && !!row.querySelector('a[href="https://example.invalid/authorize"]'); })()`), 'authorization details while poll is held');
   await eventually(() => evaluate(`(() => { const fake = window.__subscriptionFake; return !!fake.pendingPoll && fake.lastPollSignal.aborted && fake.cancelCalls.some(call => call.profile === 'default' && call.sessionId === fake.pendingPoll.sessionId); })()`), 'deadline aborts the unresolved poll and cancels its remote session');
   const expiredPoll = () => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; const retry = ${selector('subscription-hermes-default-start')}; return row.querySelector('[role="alert"]')?.innerText.includes('Sign-in expired. Please retry.') && retry?.textContent.trim() === 'Retry' && !retry.disabled && retry.getAttribute('aria-disabled') !== 'true' && !row.innerText.includes('FAKE-CODE') && !row.querySelector('a[href="https://example.invalid/authorize"]'); })()`);
@@ -326,6 +327,16 @@ try {
   assert.equal(await evaluate('window.__subscriptionFake.resolvePendingPoll("pending")'), true, 'release the poll response after expiry');
   await delay(350);
   assert.equal(await expiredPoll(), true, 'late polling response cannot restore expired authorization details or replace the expiry alert');
+
+  await evaluate('window.__subscriptionFake.nextExpiresIn = 2; window.__subscriptionFake.deferNextPoll = true; window.__subscriptionFake.deferNextCancel = true');
+  await click('subscription-hermes-default-start');
+  await eventually(() => evaluate('window.__subscriptionFake.pendingPoll !== null'), 'held approval response at deadline');
+  await eventually(() => evaluate('window.__subscriptionFake.lastPollSignal.aborted && !!window.__subscriptionFake.pendingCancel'), 'deadline reached with approval and cancellation in flight');
+  assert.equal(await evaluate('window.__subscriptionFake.resolvePendingPoll("approved")'), true, 'deliver current-generation approval at expiry');
+  await eventually(() => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; return row.innerText.includes('Signed in') && !row.querySelector('[role="alert"]') && window.__subscriptionFake.providers.some(p => p.engines?.hermes?.profile === 'default' && p.engines.hermes.status === 'signed-in'); })()`), 'deadline approval clears the expiry alert and saves the subscription');
+  await evaluate('window.__subscriptionFake.pendingCancel()');
+  await delay(350);
+  assert.equal(await evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; return row.innerText.includes('Signed in') && !row.querySelector('[role="alert"]'); })()`), true, 'late cancellation cannot overwrite the approval');
 
   await click('subscription-hermes-profile');
   await eventually(() => evaluate('!!document.querySelector("[role=listbox] [role=option]")'), 'Hermes profile options');
