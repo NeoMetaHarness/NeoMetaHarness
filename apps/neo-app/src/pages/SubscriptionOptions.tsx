@@ -113,8 +113,11 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
     pollController.current = controller;
     let cancellation: ReturnType<typeof cancelRemote> | undefined;
     const cancelFlow = () => cancellation ??= cancelRemote(flow);
+    const ownsFlow = () => mounted.current && run === generation.current && current.current === flow;
+    let expiring = false;
     async function expire() {
-      if (controller.signal.aborted || !mounted.current || run !== generation.current || current.current !== flow) return;
+      if (expiring || !ownsFlow()) return;
+      expiring = true;
       controller.abort();
       // Hide expired authorization details while retaining the session for cancellation.
       setBusy(true);
@@ -133,6 +136,14 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
         if (mounted.current && run === generation.current) setBusy(false);
       }
     }
+    async function failPoll(message: string) {
+      // Cancellation belongs to the current session, even if its poll controller was cleaned up.
+      if (!ownsFlow() || expiring) return;
+      await cancelFlow().catch(() => {});
+      if (!ownsFlow() || expiring) return;
+      update(null);
+      setError(message);
+    }
     const expiryTimer = setTimeout(() => void expire(), Math.max(0, flow.deadline - Date.now()));
     const timer = setTimeout(() => void (async () => {
       if (controller.signal.aborted || !mounted.current || run !== generation.current) return;
@@ -145,17 +156,13 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
         if (Date.now() >= flow.deadline) { await expire(); return; }
         const state = outcome('status' in result ? result.status : result.phase);
         if (state === 'pending') update('phase' in result ? fromT3(result, flow) : { ...flow });
+        else if (state === 'error') await failPoll('Sign-in did not complete. Please retry.');
         else {
           clearTimeout(expiryTimer);
           await finish(state, run);
         }
       } catch {
-        if (!controller.signal.aborted && mounted.current && run === generation.current) {
-          await cancelFlow().catch(() => {});
-          if (controller.signal.aborted || !mounted.current || run !== generation.current) return;
-          update(null);
-          setError('Could not check sign-in status. Please retry.');
-        }
+        await failPoll('Could not check sign-in status. Please retry.');
       }
     })(), flow.interval);
     return () => {
