@@ -111,44 +111,56 @@ export function SignIn({ api, engine, instanceId, signedIn, canStart, canLogout 
     const run = generation.current;
     const controller = new AbortController();
     pollController.current = controller;
-    const timer = setTimeout(() => void (async () => {
-      if (Date.now() >= flow.deadline) {
-        // Hide expired authorization details while retaining the session for cancellation.
-        setBusy(true);
-        setFlow(null);
-        try {
-          const result = await cancelRemote(flow);
-          if (!mounted.current || run !== generation.current) return;
-          await finish(result, run);
-          if (mounted.current && run === generation.current && (result === 'cancelled' || result === 'pending')) {
-            setError('Sign-in expired. Please retry.');
-          }
-        } catch {
-          if (mounted.current && run === generation.current) setError('Sign-in expired. Please retry.');
-        } finally {
-          if (mounted.current && run === generation.current) setBusy(false);
+    let cancellation: ReturnType<typeof cancelRemote> | undefined;
+    const cancelFlow = () => cancellation ??= cancelRemote(flow);
+    async function expire() {
+      if (controller.signal.aborted || !mounted.current || run !== generation.current || current.current !== flow) return;
+      controller.abort();
+      // Hide expired authorization details while retaining the session for cancellation.
+      setBusy(true);
+      setFlow(null);
+      try {
+        const result = await cancelFlow();
+        if (!mounted.current || run !== generation.current) return;
+        if (result === 'approved') await finish(result, run);
+        else {
+          update(null);
+          setError('Sign-in expired. Please retry.');
         }
-        return;
+      } catch {
+        if (mounted.current && run === generation.current) setError('Sign-in expired. Please retry.');
+      } finally {
+        if (mounted.current && run === generation.current) setBusy(false);
       }
+    }
+    const expiryTimer = setTimeout(() => void expire(), Math.max(0, flow.deadline - Date.now()));
+    const timer = setTimeout(() => void (async () => {
+      if (controller.signal.aborted || !mounted.current || run !== generation.current) return;
+      if (Date.now() >= flow.deadline) { await expire(); return; }
       try {
         const result = engine === 'hermes'
           ? await hermes.poll({ profile: instanceId, sessionId: flow.id! }, { signal: controller.signal })
           : await t3.poll({ instanceId }, { signal: controller.signal });
         if (controller.signal.aborted || !mounted.current || run !== generation.current) return;
+        if (Date.now() >= flow.deadline) { await expire(); return; }
         const state = outcome('status' in result ? result.status : result.phase);
         if (state === 'pending') update('phase' in result ? fromT3(result, flow) : { ...flow });
-        else await finish(state, run);
+        else {
+          clearTimeout(expiryTimer);
+          await finish(state, run);
+        }
       } catch {
         if (!controller.signal.aborted && mounted.current && run === generation.current) {
-          await cancelRemote(flow).catch(() => {});
+          await cancelFlow().catch(() => {});
           if (controller.signal.aborted || !mounted.current || run !== generation.current) return;
           update(null);
           setError('Could not check sign-in status. Please retry.');
         }
       }
-    })(), Math.min(flow.interval, Math.max(0, flow.deadline - Date.now())));
+    })(), flow.interval);
     return () => {
       clearTimeout(timer);
+      clearTimeout(expiryTimer);
       controller.abort();
       if (pollController.current === controller) pollController.current = null;
     };
