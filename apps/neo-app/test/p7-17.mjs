@@ -78,7 +78,7 @@ try {
       calls: [], profiles: [{ name: 'alternate-bot' }], providers: [], selection: null,
       starts: 0, polls: 0, runStarts: [], cancelCalls: [], roleReads: [],
       hermesSignedInProfiles: { default: false, 'first-bot': false, 'alternate-bot': true },
-      approve: false, failNextPoll: false, deferNextPoll: false, pendingPoll: null,
+      approve: false, errorNextPoll: false, failNextPoll: false, deferNextPoll: false, pendingPoll: null,
       nextExpiresIn: 60, deferNextCancel: false, pendingCancel: null,
       lastPollSignal: null, t3SignedIn: false, role: 'admin',
     };
@@ -148,6 +148,11 @@ try {
           if (fake.failNextPoll) {
             fake.failNextPoll = false;
             throw new Error('Scripted subscription polling failure');
+          }
+          if (fake.errorNextPoll) {
+            fake.errorNextPoll = false;
+            result = { sessionId: data.sessionId, status: 'error', signedIn: false };
+            break;
           }
           if (fake.approve) fake.hermesSignedInProfiles[data.profile] = true;
           result = { sessionId: data.sessionId, status: fake.approve ? 'approved' : 'pending', signedIn: fake.approve };
@@ -236,11 +241,18 @@ try {
   await eventually(() => evaluate('window.__subscriptionFake.polls > 1'), 'Hermes pending poll after returning to bot step');
   await waitText('Waiting for approval');
   await click(prefix + '-cancel');
+  const assertOnboardingRetry = async (message) => {
+    await eventually(() => evaluate(`(() => { const row = ${selector(prefix)}; const retry = ${selector(prefix + '-start')}; return row.querySelector('[role="alert"]')?.innerText.includes(${JSON.stringify(message)}) && retry?.textContent.trim() === 'Retry' && !retry.disabled && retry.getAttribute('aria-disabled') !== 'true' && !row.innerText.includes('FAKE-CODE') && !row.querySelector('a[href="https://example.invalid/authorize"]'); })()`), message + ' with enabled Retry and cleared authorization details');
+    assert.equal(await evaluate('window.__subscriptionFake.runStarts.length'), 0, 'a failed sign-in cannot start the first chat');
+  };
+  await evaluate('window.__subscriptionFake.errorNextPoll = true');
+  await click(prefix + '-start');
+  await assertOnboardingRetry('Sign-in did not complete. Please retry.');
   await evaluate('window.__subscriptionFake.failNextPoll = true');
   await click(prefix + '-start');
-  await waitText('Could not check sign-in status');
+  await assertOnboardingRetry('Could not check sign-in status. Please retry.');
   await click(prefix + '-start');
-  await eventually(() => evaluate('window.__subscriptionFake.starts === 4'), 'Hermes retry');
+  await eventually(() => evaluate('window.__subscriptionFake.starts === 5'), 'Hermes retry');
   await waitText('Waiting for approval');
   await evaluate('window.__subscriptionFake.approve = true');
   await visible('onboarding-created-bot');
@@ -300,6 +312,17 @@ try {
   await eventually(() => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; return !row.innerText.includes('FAKE-CODE') && !row.querySelector('a[href="https://example.invalid/authorize"]'); })()`), 'expired authorization details cleared before cancellation resolves');
   await evaluate('window.__subscriptionFake.pendingCancel()');
   await eventually(() => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; const retry = row.querySelector('[data-testid="subscription-hermes-default-start"]'); return row.querySelector('[role="alert"]')?.innerText.includes('Sign-in expired') && retry?.textContent.trim() === 'Retry' && !retry.disabled && retry.getAttribute('aria-disabled') !== 'true' && !row.innerText.includes('FAKE-CODE') && !row.querySelector('a[href="https://example.invalid/authorize"]'); })()`), 'expiry alert and enabled Retry with authorization details cleared');
+
+  await evaluate('window.__subscriptionFake.nextExpiresIn = 2; window.__subscriptionFake.deferNextPoll = true');
+  await click('subscription-hermes-default-start');
+  await eventually(() => evaluate('window.__subscriptionFake.pendingPoll !== null'), 'held Model Hub poll before expiry');
+  await eventually(() => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; return row.innerText.includes('FAKE-CODE') && !!row.querySelector('a[href="https://example.invalid/authorize"]'); })()`), 'authorization details while poll is held');
+  await eventually(() => evaluate(`(() => { const fake = window.__subscriptionFake; return !!fake.pendingPoll && fake.lastPollSignal.aborted && fake.cancelCalls.some(call => call.profile === 'default' && call.sessionId === fake.pendingPoll.sessionId); })()`), 'deadline aborts the unresolved poll and cancels its remote session');
+  const expiredPoll = () => evaluate(`(() => { const row = ${selector('subscription-hermes-default')}; const retry = ${selector('subscription-hermes-default-start')}; return row.querySelector('[role="alert"]')?.innerText.includes('Sign-in expired. Please retry.') && retry?.textContent.trim() === 'Retry' && !retry.disabled && retry.getAttribute('aria-disabled') !== 'true' && !row.innerText.includes('FAKE-CODE') && !row.querySelector('a[href="https://example.invalid/authorize"]'); })()`);
+  await eventually(expiredPoll, 'unresolved poll expiry alert and enabled Retry with authorization details cleared');
+  assert.equal(await evaluate('window.__subscriptionFake.resolvePendingPoll("pending")'), true, 'release the poll response after expiry');
+  await delay(350);
+  assert.equal(await expiredPoll(), true, 'late polling response cannot restore expired authorization details or replace the expiry alert');
 
   await click('subscription-hermes-profile');
   await eventually(() => evaluate('!!document.querySelector("[role=listbox] [role=option]")'), 'Hermes profile options');
