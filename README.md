@@ -1,5 +1,7 @@
 # Neo Meta Harness
 
+> **Legacy.** This codebase (v1.0.x, tag `legacy-v1`) is retired and no longer developed. Neo Meta Harness is being redesigned on a new architecture with a new plan. The v1.0.2 release stays available as is.
+
 **One open-source product. An always-on super agent knows you, runs a team of agents on any computer, through any channel, with any model, and learns new skills over time. Everything is an extension.**
 
 Built on giants:
